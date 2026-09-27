@@ -217,8 +217,9 @@ input[type="range"]:disabled { cursor: default; opacity: .56; }
 <body>
 <div id="app"></div>
 <script>
-const INITIAL_DATA = __INITIAL_STATE__;
-let state = INITIAL_DATA || { mode: 0, busy: false, error: '', rows: [] };
+let lcncInitialState = {};
+/*__LCNC_INITIAL_STATE__*/
+let state = lcncInitialState || { mode: 0, busy: false, error: '', rows: [] };
 let localBusy = false;
 
 function parseState(data) {
