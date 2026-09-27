@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+- Kachelkopf korrigiert: Der von Symcon selbst gezeichnete Instanzname bleibt allein im oberen Kachelbereich.
+- Die eigene Zeile „Betriebsart / Heizen / Kühlen“ beginnt jetzt mit festem Sicherheitsabstand darunter.
+- Desktop und schmale/mobile Darstellung erhalten jeweils einen eigenen oberen Abstand.
+- Keine Änderung an Heiz-/Kühllogik, A7/A8, S1Target oder Endlagenerkennung.
+
 ## 0.2.1
 - Fix: HTML-SDK-Kachel auf den stabilen Visualisierungstyp 1 umgestellt.
 - Fix: Betriebsart-, Soll-, Kühl- und Ist-Link-Objekte werden wieder unter der Instanz angelegt.
