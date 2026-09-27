@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+- Normaler laufender LCN-Auftrag verwendet keinen 2xx-Instanzstatus mehr.
+- Dadurch erscheint während Sollwertfahrten kein rotes Ausrufezeichen mehr.
+- Fehlerstatus 201/202 bleiben ausschließlich echten Konfigurations-/Laufzeitfehlern vorbehalten.
+
 ## 0.1.0
 - Erstversion.
 - globale Betriebsart Heizen/Kühlen

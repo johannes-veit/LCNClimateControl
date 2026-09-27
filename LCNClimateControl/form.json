@@ -190,11 +190,6 @@
       "code": 202,
       "icon": "error",
       "caption": "Letzter LCN-Auftrag fehlgeschlagen"
-    },
-    {
-      "code": 203,
-      "icon": "active",
-      "caption": "LCN-Auftrag läuft"
     }
   ]
 }

@@ -1,6 +1,6 @@
 # LCN Climate Control für IP-Symcon 9
 
-Version **0.1.0**
+Version **0.1.1**
 
 GitHub-fertige Modulbibliothek für eine bestehende LCN-Fußbodenheizung mit GT8/GUS-Regelung.
 
@@ -84,4 +84,4 @@ Je Raum:
 ## Version
 - Library GUID: `{1623F760-7CBB-4DDE-B08F-7625BCFC0278}`
 - Modul GUID: `{209F110B-3209-4726-BEC9-12E9223F667B}`
-- Version: 0.1.0
+- Version: 0.1.1

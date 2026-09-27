@@ -20,7 +20,6 @@ class LCNClimateControl extends IPSModuleStrict
     private const STATUS_INACTIVE = 104;
     private const STATUS_CONFIG_ERROR = 201;
     private const STATUS_RUNTIME_ERROR = 202;
-    private const STATUS_BUSY = 203;
 
     private const MSG_VARIABLE_UPDATE = 10603; // VM_UPDATE
 
@@ -258,9 +257,7 @@ class LCNClimateControl extends IPSModuleStrict
     public function ClearError(): void
     {
         $this->WriteAttributeString('LastError', '');
-        if ($this->IsBusy()) {
-            $this->SetStatus(self::STATUS_BUSY);
-        } elseif ($this->CountEnabledValidRooms($this->GetRooms()) > 0) {
+        if ($this->CountEnabledValidRooms($this->GetRooms()) > 0) {
             $this->SetStatus(self::STATUS_ACTIVE);
         } else {
             $this->SetStatus(self::STATUS_INACTIVE);
@@ -533,7 +530,7 @@ class LCNClimateControl extends IPSModuleStrict
         $job['NoChange'] = 0;
         $job['WaitStage'] = 0;
         $this->SetCurrentJob($job);
-        $this->SetStatus(self::STATUS_BUSY);
+        $this->SetStatus(self::STATUS_ACTIVE);
         return $job;
     }
 
@@ -585,7 +582,7 @@ class LCNClimateControl extends IPSModuleStrict
             $this->StartNextJob();
         }
         if ($this->GetCurrentJob() !== null || $this->GetQueue() !== []) {
-            $this->SetStatus(self::STATUS_BUSY);
+            $this->SetStatus(self::STATUS_ACTIVE);
             $this->SetTimerInterval('Worker', 250);
         }
     }
