@@ -83,6 +83,9 @@ body { overflow: auto; }
     color: #fff;
     background: var(--accent);
 }
+.segmented button.pending {
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.55);
+}
 .segmented button:disabled {
     cursor: default;
     opacity: 0.58;
@@ -115,7 +118,6 @@ body { overflow: auto; }
 .room-row {
     min-height: 43px;
     border-bottom: 1px solid var(--line);
-    transition: background .12s ease;
 }
 .room-row:last-child { border-bottom: 0; }
 .room-row:hover { background: var(--row-hover); }
@@ -197,6 +199,12 @@ input[type="range"]:disabled { cursor: default; opacity: .56; }
     font-size: 11px;
     line-height: 1.35;
 }
+.warning {
+    margin-top: 8px;
+    color: #b87400;
+    font-size: 11px;
+    line-height: 1.35;
+}
 .busy-dot {
     display: inline-block;
     width: 6px;
@@ -238,7 +246,7 @@ input[type="range"]:disabled { cursor: default; opacity: .56; }
 let lcncInitialState = {};
 /*__LCNC_INITIAL_STATE__*/
 
-let state = lcncInitialState || { mode: 0, busy: false, error: '', rows: [] };
+let state = normalizeState(lcncInitialState);
 let renderedMode = null;
 let renderedSignature = '';
 let ui = {
@@ -249,17 +257,42 @@ let ui = {
     table: null,
     note: null,
     error: null,
+    warning: null,
     rows: new Map()
 };
-const draggingTargets = new Set();
-const lastAction = new Map();
-const ACTION_GUARD_MS = 110;
 
-function parseState(data) {
+const draggingTargets = new Set();
+
+let actionInFlight = null;
+let queuedAction = null;
+let actionTimeout = 0;
+let actionGeneration = 0;
+let queueTimer = 0;
+let lastActionKey = '';
+let lastActionTime = 0;
+
+const ACTION_GUARD_MS = 180;
+const ACTION_TIMEOUT_MS = 6000;
+const QUEUE_DELAY_MS = 45;
+
+function normalizeState(input) {
+    const base = {
+        type: 'state',
+        mode: 0,
+        pendingMode: null,
+        busy: false,
+        error: '',
+        rows: []
+    };
+    if (!input || typeof input !== 'object') return base;
+    return {...base, ...input, rows: Array.isArray(input.rows) ? input.rows : []};
+}
+
+function parseMessage(data) {
     if (typeof data === 'string') {
-        try { return JSON.parse(data); } catch (_) { return state; }
+        try { return JSON.parse(data); } catch (_) { return null; }
     }
-    return data && typeof data === 'object' ? data : state;
+    return data && typeof data === 'object' ? data : null;
 }
 
 function clamp(value, min, max) {
@@ -290,22 +323,144 @@ function structureSignature(nextState) {
 }
 
 function getRow(targetId) {
-    const rows = Array.isArray(state.rows) ? state.rows : [];
-    return rows.find(row => String(row.targetId) === String(targetId)) || null;
+    return state.rows.find(row => String(row.targetId) === String(targetId)) || null;
 }
 
-function sendActionFast(ident, value) {
+function upsertRow(nextRow) {
+    if (!nextRow || nextRow.targetId === undefined || nextRow.targetId === null) return;
+    const key = String(nextRow.targetId);
+    const index = state.rows.findIndex(row => String(row.targetId) === key);
+    if (index >= 0) {
+        state.rows[index] = {...state.rows[index], ...nextRow};
+    } else {
+        state.rows.push(nextRow);
+    }
+}
+
+function actionKey(ident, value) {
+    return `${ident}:${JSON.stringify(value)}`;
+}
+
+function isActionAcknowledged(message, action) {
+    if (!action || !message) return false;
+
+    if (action.ident === 'Mode') {
+        const requested = Number(action.value);
+        if (message.type === 'state' || message.type === 'meta') {
+            return Number(message.mode) === requested || Number(message.pendingMode) === requested;
+        }
+        return false;
+    }
+
+    const targetId = String(action.targetId ?? '');
+    const row = message.type === 'row' ? message.row : null;
+
+    if (row && String(row.targetId) === targetId) {
+        if (action.kind === 'heat') {
+            return Math.abs(Number(row.displayTarget) - Number(action.value)) < 0.25;
+        }
+        if (action.kind === 'cool') {
+            return Boolean(row.cooling) === Boolean(action.value);
+        }
+    }
+
+    if (message.type === 'state') {
+        const stateRow = (message.rows || []).find(item => String(item.targetId) === targetId);
+        if (!stateRow) return false;
+        if (action.kind === 'heat') {
+            return Math.abs(Number(stateRow.displayTarget) - Number(action.value)) < 0.25;
+        }
+        if (action.kind === 'cool') {
+            return Boolean(stateRow.cooling) === Boolean(action.value);
+        }
+    }
+
+    return false;
+}
+
+function clearActionInFlight(dispatchQueued = true) {
+    actionGeneration += 1;
+    actionInFlight = null;
+
+    if (actionTimeout) {
+        window.clearTimeout(actionTimeout);
+        actionTimeout = 0;
+    }
+
+    if (dispatchQueued) {
+        scheduleQueuedAction();
+    }
+}
+
+function scheduleQueuedAction() {
+    if (actionInFlight || !queuedAction || queueTimer) return;
+
+    queueTimer = window.setTimeout(() => {
+        queueTimer = 0;
+        if (actionInFlight || !queuedAction) return;
+        const next = queuedAction;
+        queuedAction = null;
+        dispatchAction(next);
+    }, QUEUE_DELAY_MS);
+}
+
+function showWarning(message) {
+    if (!ui.warning) return;
+    ui.warning.textContent = message;
+    ui.warning.hidden = false;
+
+    window.clearTimeout(showWarning.timer);
+    showWarning.timer = window.setTimeout(() => {
+        if (ui.warning) ui.warning.hidden = true;
+    }, 5000);
+}
+
+function dispatchAction(action) {
     const now = Date.now();
-    const key = `${ident}:${String(value)}`;
-    const previous = lastAction.get(key) || 0;
-    if (now - previous < ACTION_GUARD_MS) return;
-    lastAction.set(key, now);
+    const key = actionKey(action.ident, action.value);
+    if (key === lastActionKey && now - lastActionTime < ACTION_GUARD_MS) return;
+
+    lastActionKey = key;
+    lastActionTime = now;
+    actionInFlight = {...action, time: now};
+    actionGeneration += 1;
+    const generation = actionGeneration;
+
+    if (actionTimeout) window.clearTimeout(actionTimeout);
+    actionTimeout = window.setTimeout(() => {
+        if (!actionInFlight || generation !== actionGeneration) return;
+        clearActionInFlight(true);
+        showWarning('Keine Rückmeldung von Symcon. Die tatsächliche LCN-Stellung wurde nicht automatisch erneut verändert.');
+    }, ACTION_TIMEOUT_MS);
 
     try {
-        requestAction(ident, value);
-    } catch (_) {
-        // Der nächste echte Serverzustand synchronisiert die Anzeige wieder.
+        const result = requestAction(action.ident, action.value);
+        if (result && typeof result.then === 'function') {
+            result.catch(error => {
+                clearActionInFlight(true);
+                showWarning('Symcon-Kommunikation fehlgeschlagen: ' + String(error?.message || error));
+            });
+        }
+    } catch (error) {
+        clearActionInFlight(true);
+        showWarning('Symcon-Kommunikation fehlgeschlagen: ' + String(error?.message || error));
     }
+}
+
+function sendAction(action) {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        showWarning('Keine Netzwerkverbindung. Es wurde kein Befehl an Symcon gesendet.');
+        return;
+    }
+
+    if (actionInFlight || queueTimer) {
+        // Keine parallelen /api/-Aufrufe. Nur der jeweils neueste Folgewunsch
+        // bleibt erhalten und wird direkt nach der Serverbestätigung gesendet.
+        queuedAction = action;
+        return;
+    }
+
+    dispatchAction(action);
 }
 
 function makeButton(text, className = '') {
@@ -335,13 +490,21 @@ function buildMode(root) {
     const cool = makeButton('Kühlen');
 
     heat.addEventListener('click', () => {
-        if (state.busy || Number(state.mode) === 0) return;
-        sendActionFast('Mode', 0);
+        const selected = state.pendingMode === null ? Number(state.mode) : Number(state.pendingMode);
+        if (selected === 0 && state.pendingMode === null) return;
+
+        state.pendingMode = Number(state.mode) === 0 ? null : 0;
+        patchMode();
+        sendAction({ident: 'Mode', value: 0, kind: 'mode'});
     });
 
     cool.addEventListener('click', () => {
-        if (state.busy || Number(state.mode) === 1) return;
-        sendActionFast('Mode', 1);
+        const selected = state.pendingMode === null ? Number(state.mode) : Number(state.pendingMode);
+        if (selected === 1 && state.pendingMode === null) return;
+
+        state.pendingMode = Number(state.mode) === 1 ? null : 1;
+        patchMode();
+        sendAction({ident: 'Mode', value: 1, kind: 'mode'});
     });
 
     switcher.appendChild(heat);
@@ -378,8 +541,6 @@ function createHeatRow(row) {
 
     const name = document.createElement('div');
     name.className = 'room-name';
-    name.textContent = row.name || 'Raum';
-    name.title = row.name || '';
 
     const sliderWrap = document.createElement('div');
     sliderWrap.className = 'slider-wrap';
@@ -412,7 +573,12 @@ function createHeatRow(row) {
         const desired = clamp(raw - 1, 18, 24);
         current.displayTarget = desired;
         patchHeatRow(current);
-        sendActionFast(current.heatIdent, desired);
+        sendAction({
+            ident: current.heatIdent,
+            value: desired,
+            kind: 'heat',
+            targetId: current.targetId
+        });
     });
 
     plus.addEventListener('click', () => {
@@ -424,7 +590,12 @@ function createHeatRow(row) {
         const desired = raw < 18 ? 18 : clamp(raw + 1, 18, 24);
         current.displayTarget = desired;
         patchHeatRow(current);
-        sendActionFast(current.heatIdent, desired);
+        sendAction({
+            ident: current.heatIdent,
+            value: desired,
+            kind: 'heat',
+            targetId: current.targetId
+        });
     });
 
     slider.addEventListener('pointerdown', () => draggingTargets.add(targetId));
@@ -444,7 +615,12 @@ function createHeatRow(row) {
         current.displayTarget = desired;
         draggingTargets.delete(targetId);
         patchHeatRow(current);
-        sendActionFast(current.heatIdent, desired);
+        sendAction({
+            ident: current.heatIdent,
+            value: desired,
+            kind: 'heat',
+            targetId: current.targetId
+        });
     });
     slider.addEventListener('pointerup', () => draggingTargets.delete(targetId));
     slider.addEventListener('pointercancel', () => draggingTargets.delete(targetId));
@@ -459,14 +635,7 @@ function createHeatRow(row) {
     grid.appendChild(actual);
 
     ui.rows.set(targetId, {
-        type: 'heat',
-        grid,
-        name,
-        minus,
-        slider,
-        plus,
-        targetValue,
-        actual
+        type: 'heat', grid, name, minus, slider, plus, targetValue, actual
     });
 
     patchHeatRow(row);
@@ -480,8 +649,6 @@ function createCoolRow(row) {
 
     const name = document.createElement('div');
     name.className = 'room-name';
-    name.textContent = row.name || 'Raum';
-    name.title = row.name || '';
 
     const switcher = document.createElement('div');
     switcher.className = 'segmented cool-switch';
@@ -494,7 +661,12 @@ function createCoolRow(row) {
         if (!current || current.cooling === false) return;
         current.cooling = false;
         patchCoolRow(current);
-        sendActionFast(current.coolIdent, false);
+        sendAction({
+            ident: current.coolIdent,
+            value: false,
+            kind: 'cool',
+            targetId: current.targetId
+        });
     });
 
     on.addEventListener('click', () => {
@@ -502,7 +674,12 @@ function createCoolRow(row) {
         if (!current || current.cooling === true) return;
         current.cooling = true;
         patchCoolRow(current);
-        sendActionFast(current.coolIdent, true);
+        sendAction({
+            ident: current.coolIdent,
+            value: true,
+            kind: 'cool',
+            targetId: current.targetId
+        });
     });
 
     switcher.appendChild(off);
@@ -515,15 +692,7 @@ function createCoolRow(row) {
     grid.appendChild(switcher);
     grid.appendChild(actual);
 
-    ui.rows.set(targetId, {
-        type: 'cool',
-        grid,
-        name,
-        off,
-        on,
-        actual
-    });
-
+    ui.rows.set(targetId, {type: 'cool', grid, name, off, on, actual});
     patchCoolRow(row);
     return grid;
 }
@@ -541,18 +710,12 @@ function patchHeatRow(row) {
     ref.name.textContent = row.name || 'Raum';
     ref.name.title = row.name || '';
 
-    // Während der Benutzer den Regler aktiv bewegt, darf eine parallel
-    // eintreffende Busmeldung den Schieber nicht unter dem Finger versetzen.
     if (!draggingTargets.has(rowKey(row))) {
         ref.slider.value = String(sliderValue);
     }
 
     ref.targetValue.textContent = formatTarget(row.displayTarget);
     ref.actual.textContent = formatTemp(row.temperature, 1);
-
-    // Heizsollwert darf auch während einer laufenden Fahrt sofort neu gewählt
-    // werden. Das Backend retargetet den aktuellen Auftrag nach der bestätigten
-    // laufenden LCN-Stufe.
     ref.slider.disabled = false;
     ref.minus.disabled = raw <= 18;
     ref.plus.disabled = raw >= 24;
@@ -566,29 +729,33 @@ function patchCoolRow(row) {
     ref.name.textContent = row.name || 'Raum';
     ref.name.title = row.name || '';
     ref.actual.textContent = formatTemp(row.temperature, 1);
-
     ref.off.classList.toggle('active', !Boolean(row.cooling));
     ref.on.classList.toggle('active', Boolean(row.cooling));
-
-    // Kühlaufträge dürfen seriell in die Queue gelegt bzw. für denselben Raum
-    // durch den jeweils neuesten noch wartenden Wunsch ersetzt werden.
     ref.off.disabled = false;
     ref.on.disabled = false;
 }
 
 function patchMode() {
-    const cooling = Number(state.mode) === 1;
+    const selectedMode = state.pendingMode === null || state.pendingMode === undefined
+        ? Number(state.mode)
+        : Number(state.pendingMode);
+
     if (ui.modeHeat) {
-        ui.modeHeat.classList.toggle('active', !cooling);
-        ui.modeHeat.disabled = Boolean(state.busy);
+        ui.modeHeat.classList.toggle('active', selectedMode === 0);
+        ui.modeHeat.classList.toggle('pending', state.pendingMode !== null && Number(state.pendingMode) === 0);
+        ui.modeHeat.disabled = false;
     }
     if (ui.modeCool) {
-        ui.modeCool.classList.toggle('active', cooling);
-        ui.modeCool.disabled = Boolean(state.busy);
+        ui.modeCool.classList.toggle('active', selectedMode === 1);
+        ui.modeCool.classList.toggle('pending', state.pendingMode !== null && Number(state.pendingMode) === 1);
+        ui.modeCool.disabled = false;
     }
     if (ui.busyDot) {
-        ui.busyDot.classList.toggle('on', Boolean(state.busy));
-        ui.busyDot.title = state.busy ? 'Einstellung läuft' : '';
+        const active = Boolean(state.busy) || state.pendingMode !== null;
+        ui.busyDot.classList.toggle('on', active);
+        ui.busyDot.title = state.pendingMode !== null
+            ? 'Betriebsartwechsel vorgemerkt'
+            : (state.busy ? 'Einstellung läuft' : '');
     }
 }
 
@@ -596,7 +763,6 @@ function patchMeta() {
     if (ui.note) {
         ui.note.hidden = Number(state.mode) !== 1;
     }
-
     if (ui.error) {
         const hasError = Boolean(state.error);
         ui.error.hidden = !hasError;
@@ -606,16 +772,10 @@ function patchMeta() {
 
 function patchUI() {
     patchMode();
-
-    const rows = Array.isArray(state.rows) ? state.rows : [];
-    rows.forEach(row => {
-        if (Number(state.mode) === 0) {
-            patchHeatRow(row);
-        } else {
-            patchCoolRow(row);
-        }
+    state.rows.forEach(row => {
+        if (Number(state.mode) === 0) patchHeatRow(row);
+        else patchCoolRow(row);
     });
-
     patchMeta();
 }
 
@@ -627,41 +787,24 @@ function renderStructure() {
 
     buildMode(root);
 
-    const rows = Array.isArray(state.rows) ? state.rows : [];
-    if (rows.length === 0) {
+    if (state.rows.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'empty';
         empty.textContent = 'Keine aktiven Räume konfiguriert.';
         root.appendChild(empty);
-
-        const error = document.createElement('div');
-        error.className = 'error';
-        error.hidden = true;
-        root.appendChild(error);
-        ui.error = error;
-
-        renderedMode = Number(state.mode) === 1 ? 1 : 0;
-        renderedSignature = structureSignature(state);
-        patchUI();
-        return;
+    } else {
+        const mode = Number(state.mode) === 1 ? 1 : 0;
+        const table = document.createElement('div');
+        table.className = 'table';
+        table.appendChild(makeHeader(mode));
+        state.rows.forEach(row => table.appendChild(mode === 0 ? createHeatRow(row) : createCoolRow(row)));
+        root.appendChild(table);
+        ui.table = table;
     }
-
-    const mode = Number(state.mode) === 1 ? 1 : 0;
-    const table = document.createElement('div');
-    table.className = 'table';
-    table.appendChild(makeHeader(mode));
-
-    rows.forEach(row => {
-        table.appendChild(mode === 0 ? createHeatRow(row) : createCoolRow(row));
-    });
-
-    root.appendChild(table);
-    ui.table = table;
 
     const note = document.createElement('div');
     note.className = 'note';
     note.textContent = 'Kühlen = FHB-Ventil geöffnet · Nicht kühlen = FHB-Ventil geschlossen';
-    note.hidden = mode !== 1;
     root.appendChild(note);
     ui.note = note;
 
@@ -671,25 +814,78 @@ function renderStructure() {
     root.appendChild(error);
     ui.error = error;
 
-    renderedMode = mode;
+    const warning = document.createElement('div');
+    warning.className = 'warning';
+    warning.hidden = true;
+    root.appendChild(warning);
+    ui.warning = warning;
+
+    renderedMode = Number(state.mode) === 1 ? 1 : 0;
     renderedSignature = structureSignature(state);
     patchUI();
 }
 
+function applyMessage(message) {
+    if (!message) return;
+
+    if (message.type === 'state' || !message.type) {
+        state = normalizeState(message);
+        const nextMode = Number(state.mode) === 1 ? 1 : 0;
+        const nextSignature = structureSignature(state);
+        if (renderedMode !== nextMode || renderedSignature !== nextSignature) {
+            renderStructure();
+        } else {
+            patchUI();
+        }
+        return;
+    }
+
+    if (message.type === 'meta') {
+        state.mode = Number(message.mode) === 1 ? 1 : 0;
+        state.pendingMode = message.pendingMode === null || message.pendingMode === undefined
+            ? null
+            : Number(message.pendingMode);
+        state.busy = Boolean(message.busy);
+        state.error = message.error || '';
+
+        const nextMode = Number(state.mode) === 1 ? 1 : 0;
+        if (renderedMode !== nextMode) renderStructure();
+        else {
+            patchMode();
+            patchMeta();
+        }
+        return;
+    }
+
+    if (message.type === 'row' && message.row) {
+        upsertRow(message.row);
+        const row = getRow(message.row.targetId);
+        if (!row) return;
+        if (Number(state.mode) === 0) patchHeatRow(row);
+        else patchCoolRow(row);
+        return;
+    }
+
+    if (message.type === 'temperature') {
+        const row = getRow(message.targetId);
+        if (!row) return;
+        row.temperature = message.temperature;
+        if (Number(state.mode) === 0) patchHeatRow(row);
+        else patchCoolRow(row);
+    }
+}
+
 function handleMessage(data) {
-    const next = parseState(data);
-    const nextMode = Number(next.mode) === 1 ? 1 : 0;
-    const nextSignature = structureSignature(next);
+    const message = parseMessage(data);
+    if (!message) {
+        showWarning('Ungültige Visualisierungsdaten von Symcon.');
+        return;
+    }
 
-    state = next;
+    applyMessage(message);
 
-    // Bei normalen S1Target-/Temperaturmeldungen bleibt der DOM vollständig
-    // bestehen; nur Werte/Klassen werden gepatcht. Ein kompletter Neuaufbau
-    // erfolgt ausschließlich bei Modus- oder Raumstrukturwechsel.
-    if (renderedMode !== nextMode || renderedSignature !== nextSignature) {
-        renderStructure();
-    } else {
-        patchUI();
+    if (actionInFlight && isActionAcknowledged(message, actionInFlight)) {
+        clearActionInFlight(true);
     }
 }
 

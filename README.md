@@ -1,6 +1,6 @@
 # LCN Climate Control für IP-Symcon 9
 
-Version **0.2.3**
+Version **0.2.4**
 
 GitHub-fertige Modulbibliothek für eine bestehende LCN-Fußbodenheizung mit GT8/GUS-Regelung.
 
@@ -84,7 +84,7 @@ Je Raum:
 ## Version
 - Library GUID: `{1623F760-7CBB-4DDE-B08F-7625BCFC0278}`
 - Modul GUID: `{209F110B-3209-4726-BEC9-12E9223F667B}`
-- Version: 0.2.3
+- Version: 0.2.4
 
 
 ## Kompakte Kachel ab 0.2.1
@@ -126,3 +126,10 @@ mit Abstand darunter und überlagert den Kacheltitel nicht.
 Die HTML-SDK-Kachel arbeitet inkrementell: Bus- und Temperaturmeldungen aktualisieren nur
 die betroffenen Texte, Slider und Buttonzustände. Der DOM wird nicht mehr bei jedem
 LCN-Schritt vollständig neu erzeugt. Die LCN-Befehle selbst bleiben bewusst langsam und bestätigt.
+
+## Bedientransport 0.2.4
+
+Die HTML-Kachel serialisiert Bedienbefehle, puffert schnelle Folgewünsche und bestätigt
+Aktionen über die vom Modul zurückgesendeten Zustands-Patches. Ein Betriebsartwechsel
+kann auch während einer laufenden LCN-Fahrt angefordert werden; er wird an der nächsten
+sicheren Zustandsgrenze ausgeführt.

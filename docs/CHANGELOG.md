@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.4
+- Visualisierungsaktionen vollständig überarbeitet und an den bewährten HTML-SDK-Transport der LCN-Jalousie angelehnt.
+- Kein stilles Verschlucken von `requestAction()`-Fehlern mehr; Transportfehler werden in der Kachel angezeigt.
+- Keine parallelen API-Aufrufe: schnelle Folgebefehle werden lokal gepuffert, nur der jeweils neueste Wunsch bleibt erhalten.
+- Heizen/Kühlen-Schalter werden nicht mehr durch einen laufenden Raumauftrag deaktiviert.
+- Betriebsartwechsel während einer laufenden A7/A8-Fahrt wird sicher vorgemerkt und nach dem bereits gesendeten/bestätigten Schritt ausgeführt.
+- Alte Warteschlangenaufträge des vorherigen Modus werden beim vorgemerkten Betriebsartwechsel verworfen.
+- Laufzeitmeldungen verwenden kleine `meta`-, `row`- und `temperature`-Patches statt jedes Mal den kompletten Zustand aller Räume zu übertragen.
+- Kachel reagiert lokal sofort auf Slider, Plus/Minus, Kühlung und Betriebsart; Serverrückmeldung bestätigt anschließend den Zustand.
+- LCN-Schrittzeit und Prozesssicherheitslogik bleiben unverändert.
+
 ## 0.2.3
 - Visualisierung auf inkrementelle DOM-Aktualisierung umgestellt: normale LCN-/Temperaturmeldungen bauen die Kachel nicht mehr vollständig neu auf.
 - Slider, Soll-/Istwerte und Kühlbuttons werden direkt gepatcht; dadurch deutlich weniger Flackern und spürbar flüssigere Bedienung.

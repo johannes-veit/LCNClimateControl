@@ -11,10 +11,12 @@ if ($html === false || $php === false) {
 }
 
 $requiredHtml = [
-    'function patchUI()',
+    'function applyMessage(message)',
+    "message.type === 'row'",
+    "message.type === 'temperature'",
+    "message.type === 'meta'",
     'function patchHeatRow(row)',
-    'function patchCoolRow(row)',
-    'if (renderedMode !== nextMode || renderedSignature !== nextSignature)',
+    'function patchCoolRow(row)'
 ];
 
 foreach ($requiredHtml as $needle) {
@@ -25,15 +27,15 @@ foreach ($requiredHtml as $needle) {
 }
 
 if (substr_count($html, 'root.replaceChildren();') !== 1) {
-    fwrite(STDERR, "DOM darf nur beim Struktur-Neuaufbau ersetzt werden.\n");
+    fwrite(STDERR, "DOM darf nur beim echten Struktur-Neuaufbau ersetzt werden.\n");
     exit(1);
 }
 
 $requiredPhp = [
-    "SetBuffer('RuntimeRooms'",
-    "GetRuntimeRooms()",
-    "LastVisualizationPayload",
-    "RetargetOrEnqueueHeatingJob"
+    'GetRuntimeRooms()',
+    'PushVisualizationMeta',
+    'PushVisualizationRow',
+    'PushVisualizationTemperature'
 ];
 
 foreach ($requiredPhp as $needle) {

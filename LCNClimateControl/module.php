@@ -82,6 +82,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->SetBuffer('CurrentJob', '');
         $this->SetBuffer('RuntimeRooms', '[]');
         $this->SetBuffer('LastVisualizationPayload', '');
+        $this->SetBuffer('PendingMode', '');
 
         // 0.2.0 hatte die Bedienobjekte entfernt. Hier werden sie absichtlich
         // wieder als Diagnose-/Fallbackobjekte angelegt. Die kompakte HTML-Kachel
@@ -203,13 +204,14 @@ class LCNClimateControl extends IPSModuleStrict
                 }
             }
 
-            $this->PushVisualizationState();
+            $this->PushVisualizationRow($room);
             return;
         }
 
-        // Isttemperaturänderungen aktualisieren ausschließlich die Darstellung.
-        if ($this->FindRoomByTemperature($SenderID) !== null) {
-            $this->PushVisualizationState();
+        // Isttemperaturänderungen übertragen nur noch genau diesen einen Wert.
+        $temperatureRoom = $this->FindRoomByTemperature($SenderID);
+        if ($temperatureRoom !== null) {
+            $this->PushVisualizationTemperature($temperatureRoom);
         }
     }
 
@@ -256,7 +258,7 @@ class LCNClimateControl extends IPSModuleStrict
                     } else {
                         $this->SetStatus(self::STATUS_ACTIVE);
                     }
-                    $this->PushVisualizationState();
+                    $this->PushVisualizationMeta();
                     return;
                 }
             }
@@ -282,6 +284,7 @@ class LCNClimateControl extends IPSModuleStrict
             try {
                 $this->SetBuffer('Queue', '[]');
                 $this->SetBuffer('CurrentJob', '');
+                $this->ClearPendingMode();
                 $this->SetTimerInterval('Worker', 0);
                 $this->SyncAllHeatingDisplayFromLCN();
                 $this->SetStatus($this->ReadAttributeString('LastError') === '' ? self::STATUS_ACTIVE : self::STATUS_RUNTIME_ERROR);
@@ -310,23 +313,58 @@ class LCNClimateControl extends IPSModuleStrict
             throw new InvalidArgumentException('Ungültige Betriebsart.');
         }
 
-        if ($Mode === $this->GetMode()) {
+        $currentMode = $this->GetMode();
+        $pendingMode = $this->GetPendingMode();
+
+        // Ein bereits vorgemerkter Gegenwechsel kann durch Tippen auf die noch
+        // aktive Betriebsart wieder aufgehoben werden.
+        if ($Mode === $currentMode) {
+            if ($pendingMode !== null) {
+                $this->ClearPendingMode();
+                $this->PushVisualizationMeta();
+            }
             return;
         }
 
         if ($this->IsBusy()) {
-            throw new RuntimeException('Betriebsart kann während eines laufenden LCN-Auftrags nicht gewechselt werden.');
+            // Kein stilles Ablehnen mehr: Ein Wechsel während einer laufenden
+            // LCN-Fahrt wird vorgemerkt. Bereits wartende Aufträge des alten
+            // Modus werden verworfen. Ein eventuell bereits gesendeter A7/A8-
+            // Schritt wird noch sauber bestätigt; unmittelbar danach erfolgt
+            // der gewünschte Betriebsartwechsel.
+            $this->SetPendingMode($Mode);
+            $this->SetQueue([]);
+            $this->PushVisualizationMeta();
+            return;
+        }
+
+        $this->ApplyModeChange($Mode);
+    }
+
+    private function ApplyModeChange(int $Mode): void
+    {
+        if ($Mode === $this->GetMode()) {
+            $this->ClearPendingMode();
+            $this->PushVisualizationMeta();
+            return;
         }
 
         $rooms = $this->GetRuntimeRooms();
+        $this->ClearPendingMode();
+        $this->SetQueue([]);
 
         if ($Mode === self::MODE_COOLING) {
-            // Vor jeglicher Kühlbewegung den echten aktuellen Heizsollwert jedes Raums sichern.
+            // Beim Wechsel in die Kühlung zählt der zuletzt gewünschte Heizwert.
+            // Während einer gerade laufenden Heizfahrt enthält die sichtbare
+            // Heat-Variable bereits das Benutzerziel und nicht den Zwischenwert.
             foreach ($rooms as $room) {
-                $actual = $this->ReadTarget($room['TargetVariable']);
-                if ($actual !== null) {
-                    $this->StoreLastHeatingTarget($room['TargetVariable'], $actual);
-                    $this->SetValueIfChanged($this->HeatIdent($room['TargetVariable']), $actual);
+                $targetID = $room['TargetVariable'];
+                $preserve = $this->ReadOwnFloat($this->HeatIdent($targetID));
+                if ($preserve === null) {
+                    $preserve = $this->ReadTarget($targetID);
+                }
+                if ($preserve !== null) {
+                    $this->StoreLastHeatingTarget($targetID, $preserve);
                 }
             }
 
@@ -346,7 +384,6 @@ class LCNClimateControl extends IPSModuleStrict
             foreach ($rooms as $room) {
                 $restore = $this->GetLastHeatingTarget($room['TargetVariable']);
                 if ($restore === null) {
-                    // Kein gespeicherter Heizwert: sicherheitshalber nichts bewegen.
                     continue;
                 }
                 $this->SetValueIfChanged($this->HeatIdent($room['TargetVariable']), $restore);
@@ -373,7 +410,8 @@ class LCNClimateControl extends IPSModuleStrict
         $this->SetValueIfChanged($this->HeatIdent($targetID), (float) $rounded);
         $this->RetargetOrEnqueueHeatingJob($Room, (float) $rounded);
         $this->StartWorkerIfNeeded();
-        $this->PushVisualizationState();
+        $this->PushVisualizationRow($Room);
+        $this->PushVisualizationMeta();
     }
 
     private function RequestCoolingState(array $Room, bool $State): void
@@ -389,7 +427,8 @@ class LCNClimateControl extends IPSModuleStrict
         $this->SetValueIfChanged($this->CoolIdent($targetID), $State);
         $this->EnqueueCoolingJob($Room, $State, $previous);
         $this->StartWorkerIfNeeded();
-        $this->PushVisualizationState();
+        $this->PushVisualizationRow($Room);
+        $this->PushVisualizationMeta();
     }
 
     private function ProcessJob(array $Job): void
@@ -404,6 +443,10 @@ class LCNClimateControl extends IPSModuleStrict
         $phase = (string) ($Job['Phase'] ?? self::PHASE_SEND);
 
         if ($phase === self::PHASE_SEND) {
+            if ($this->ApplyPendingModeIfSafe()) {
+                return;
+            }
+
             if ($Job['Type'] === self::JOB_HEAT) {
                 $desired = (float) $Job['Desired'];
                 if (abs($actual - $desired) < 0.25) {
@@ -460,6 +503,13 @@ class LCNClimateControl extends IPSModuleStrict
             }
 
             $Job['NoChange'] = 0;
+
+            if ($this->HasPendingMode()) {
+                $this->SetBuffer('CurrentJob', '');
+                $this->ApplyPendingModeIfSafe();
+                return;
+            }
+
             $Job['Phase'] = self::PHASE_SEND;
             $this->SetCurrentJob($Job);
             return;
@@ -478,6 +528,12 @@ class LCNClimateControl extends IPSModuleStrict
         }
 
         // Nach Tastendruck + bestätigter Nachlese weiterhin unverändert.
+        if ($this->HasPendingMode()) {
+            $this->SetBuffer('CurrentJob', '');
+            $this->ApplyPendingModeIfSafe();
+            return;
+        }
+
         $noChange = (int) ($Job['NoChange'] ?? 0) + 1;
         $Job['NoChange'] = $noChange;
 
@@ -525,8 +581,14 @@ class LCNClimateControl extends IPSModuleStrict
         );
 
         $this->SetBuffer('CurrentJob', '');
+
+        if ($this->ApplyPendingModeIfSafe()) {
+            return;
+        }
+
         $this->StartNextJob();
-        $this->PushVisualizationState();
+        $this->PushVisualizationRowByTarget($targetID);
+        $this->PushVisualizationMeta();
     }
 
     private function FailCurrentJob(array $Job, string $Reason): void
@@ -552,10 +614,13 @@ class LCNClimateControl extends IPSModuleStrict
         $this->SendDebug('ERROR', $message, 0);
         $this->SetStatus(self::STATUS_RUNTIME_ERROR);
 
-        // Nur der fehlerhafte Raumauftrag wird verworfen. Andere Räume einer
-        // globalen Umschaltung werden weiter abgearbeitet.
+        // Bei echtem Laufzeitfehler keine weitere Automatik und keinen
+        // vorgemerkten Betriebsartwechsel ausführen. Der Benutzer bekommt den
+        // Fehler sichtbar gemeldet und kann danach bewusst neu entscheiden.
         $this->SetBuffer('CurrentJob', '');
-        $this->StartNextJob();
+        $this->SetQueue([]);
+        $this->ClearPendingMode();
+        $this->SetTimerInterval('Worker', 0);
         $this->PushVisualizationState();
     }
 
@@ -967,83 +1032,174 @@ class LCNClimateControl extends IPSModuleStrict
 
     private function BuildVisualizationState(): array
     {
-        $mode = $this->GetMode();
-        $currentJob = $this->GetCurrentJob();
-        $queue = $this->GetQueue();
         $rows = [];
-
         foreach ($this->GetRuntimeRooms() as $room) {
-            $targetID = $room['TargetVariable'];
-            $actualTarget = $this->ReadTarget($targetID);
-            $temperature = $this->ReadFloatVariable($room['TemperatureVariable']);
-
-            $displayTarget = $actualTarget;
-            $displayCooling = $this->GetStoredCoolingState($targetID);
-            $roomBusy = false;
-
-            $jobsToInspect = [];
-            if (is_array($currentJob)) {
-                $jobsToInspect[] = $currentJob;
-            }
-            foreach ($queue as $queuedJob) {
-                if (is_array($queuedJob)) {
-                    $jobsToInspect[] = $queuedJob;
-                }
-            }
-
-            foreach ($jobsToInspect as $job) {
-                if ((int) ($job['TargetVariable'] ?? 0) !== $targetID) {
-                    continue;
-                }
-
-                $roomBusy = true;
-                if (($job['Type'] ?? '') === self::JOB_HEAT) {
-                    $displayTarget = (float) ($job['Desired'] ?? $displayTarget ?? 18.0);
-                } elseif (($job['Type'] ?? '') === self::JOB_COOL_UP) {
-                    $displayCooling = true;
-                } elseif (($job['Type'] ?? '') === self::JOB_COOL_DOWN) {
-                    $displayCooling = false;
-                }
-            }
-
-            $rows[] = [
-                'name' => $room['Name'],
-                'targetId' => $targetID,
-                'temperature' => $temperature,
-                'target' => $actualTarget,
-                'displayTarget' => $displayTarget,
-                'cooling' => $displayCooling,
-                'heatIdent' => $this->HeatIdent($targetID),
-                'coolIdent' => $this->CoolIdent($targetID),
-                'busy' => $roomBusy
-            ];
+            $rows[] = $this->BuildVisualizationRow($room);
         }
 
         return [
-            'mode' => $mode,
+            'type' => 'state',
+            'mode' => $this->GetMode(),
+            'pendingMode' => $this->GetPendingMode(),
             'busy' => $this->IsBusy(),
             'error' => $this->ReadAttributeString('LastError'),
             'rows' => $rows
         ];
     }
 
-    private function PushVisualizationState(): void
+    private function BuildVisualizationRow(array $Room): array
+    {
+        $targetID = $Room['TargetVariable'];
+        $actualTarget = $this->ReadTarget($targetID);
+        $temperature = $this->ReadFloatVariable($Room['TemperatureVariable']);
+        $displayTarget = $actualTarget;
+        $displayCooling = $this->GetStoredCoolingState($targetID);
+        $roomBusy = false;
+
+        $jobsToInspect = [];
+        $currentJob = $this->GetCurrentJob();
+        if (is_array($currentJob)) {
+            $jobsToInspect[] = $currentJob;
+        }
+        foreach ($this->GetQueue() as $queuedJob) {
+            if (is_array($queuedJob)) {
+                $jobsToInspect[] = $queuedJob;
+            }
+        }
+
+        foreach ($jobsToInspect as $job) {
+            if ((int) ($job['TargetVariable'] ?? 0) !== $targetID) {
+                continue;
+            }
+            $roomBusy = true;
+            if (($job['Type'] ?? '') === self::JOB_HEAT) {
+                $displayTarget = (float) ($job['Desired'] ?? $displayTarget ?? 18.0);
+            } elseif (($job['Type'] ?? '') === self::JOB_COOL_UP) {
+                $displayCooling = true;
+            } elseif (($job['Type'] ?? '') === self::JOB_COOL_DOWN) {
+                $displayCooling = false;
+            }
+        }
+
+        return [
+            'name' => $Room['Name'],
+            'targetId' => $targetID,
+            'temperature' => $temperature,
+            'target' => $actualTarget,
+            'displayTarget' => $displayTarget,
+            'cooling' => $displayCooling,
+            'heatIdent' => $this->HeatIdent($targetID),
+            'coolIdent' => $this->CoolIdent($targetID),
+            'busy' => $roomBusy
+        ];
+    }
+
+    private function PushVisualizationPayload(array $Payload): void
     {
         try {
-            $payload = json_encode(
-                $this->BuildVisualizationState(),
-                JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
-            );
-            if ($payload !== false) {
-                if ($payload === $this->GetBuffer('LastVisualizationPayload')) {
-                    return;
-                }
-                $this->SetBuffer('LastVisualizationPayload', $payload);
-                $this->UpdateVisualizationValue($payload);
+            $payload = json_encode($Payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if ($payload === false) {
+                return;
             }
+            $this->UpdateVisualizationValue($payload);
         } catch (Throwable $e) {
-            // Eine geschlossene/noch nicht initialisierte Kachel darf die LCN-Steuerung nie beeinflussen.
             $this->SendDebug('Visualization', $e->getMessage(), 0);
+        }
+    }
+
+    private function PushVisualizationMeta(): void
+    {
+        $this->PushVisualizationPayload([
+            'type' => 'meta',
+            'mode' => $this->GetMode(),
+            'pendingMode' => $this->GetPendingMode(),
+            'busy' => $this->IsBusy(),
+            'error' => $this->ReadAttributeString('LastError')
+        ]);
+    }
+
+    private function PushVisualizationRow(array $Room): void
+    {
+        $this->PushVisualizationPayload([
+            'type' => 'row',
+            'row' => $this->BuildVisualizationRow($Room)
+        ]);
+    }
+
+    private function PushVisualizationRowByTarget(int $TargetID): void
+    {
+        $room = $this->FindRoomByTarget($TargetID);
+        if ($room !== null) {
+            $this->PushVisualizationRow($room);
+        }
+    }
+
+    private function PushVisualizationTemperature(array $Room): void
+    {
+        $this->PushVisualizationPayload([
+            'type' => 'temperature',
+            'targetId' => $Room['TargetVariable'],
+            'temperature' => $this->ReadFloatVariable($Room['TemperatureVariable'])
+        ]);
+    }
+
+    private function PushVisualizationState(): void
+    {
+        $this->PushVisualizationPayload($this->BuildVisualizationState());
+    }
+
+    private function HasPendingMode(): bool
+    {
+        return $this->GetPendingMode() !== null;
+    }
+
+    private function GetPendingMode(): ?int
+    {
+        $raw = $this->GetBuffer('PendingMode');
+        if ($raw === '') {
+            return null;
+        }
+        $mode = (int) $raw;
+        return in_array($mode, [self::MODE_HEATING, self::MODE_COOLING], true) ? $mode : null;
+    }
+
+    private function SetPendingMode(int $Mode): void
+    {
+        $this->SetBuffer('PendingMode', (string) $Mode);
+    }
+
+    private function ClearPendingMode(): void
+    {
+        $this->SetBuffer('PendingMode', '');
+    }
+
+    private function ApplyPendingModeIfSafe(): bool
+    {
+        $pending = $this->GetPendingMode();
+        if ($pending === null) {
+            return false;
+        }
+
+        // Aufruf erfolgt ausschließlich an sicheren Zustandsgrenzen:
+        // entweder vor einem neuen Tastendruck oder nachdem der zuletzt
+        // gesendete Tastendruck samt S1Target-Rückmeldung abgeschlossen ist.
+        $this->SetBuffer('CurrentJob', '');
+        $this->SetQueue([]);
+        $this->ApplyModeChange($pending);
+        return true;
+    }
+
+    private function ReadOwnFloat(string $Ident): ?float
+    {
+        $id = $this->FindOwnObjectByIdent($Ident);
+        if ($id <= 0 || !IPS_VariableExists($id)) {
+            return null;
+        }
+
+        try {
+            return (float) GetValue($id);
+        } catch (Throwable) {
+            return null;
         }
     }
 
