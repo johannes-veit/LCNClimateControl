@@ -1,0 +1,14 @@
+{
+  "id": "{209F110B-3209-4726-BEC9-12E9223F667B}",
+  "name": "LCNClimateControl",
+  "type": 3,
+  "vendor": "LCN",
+  "aliases": [
+    "LCN Heizung / Kühlung"
+  ],
+  "url": "",
+  "parentRequirements": [],
+  "childRequirements": [],
+  "implemented": [],
+  "prefix": "LCNC"
+}

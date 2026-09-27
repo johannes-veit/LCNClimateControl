@@ -1,0 +1,200 @@
+{
+  "elements": [
+    {
+      "type": "Label",
+      "caption": "Eine Instanz steuert alle Räume. LCN bleibt Master: Symcon sendet ausschließlich die vorhandenen KURZ-Tastenbefehle A7/A8 (oder je Raum abweichend konfiguriert). Direkte LCN-Sollwert- oder Relaisbefehle werden nicht verwendet."
+    },
+    {
+      "type": "List",
+      "name": "Rooms",
+      "caption": "Räume",
+      "rowCount": 10,
+      "add": true,
+      "delete": true,
+      "changeOrder": true,
+      "columns": [
+        {
+          "caption": "Aktiv",
+          "name": "Enabled",
+          "width": "60px",
+          "add": true,
+          "edit": {
+            "type": "CheckBox"
+          }
+        },
+        {
+          "caption": "Raum",
+          "name": "Name",
+          "width": "160px",
+          "add": "",
+          "edit": {
+            "type": "ValidationTextBox"
+          }
+        },
+        {
+          "caption": "LCN-Sendemodul",
+          "name": "SendModule",
+          "width": "210px",
+          "add": 0,
+          "edit": {
+            "type": "SelectInstance"
+          }
+        },
+        {
+          "caption": "Isttemperatur",
+          "name": "TemperatureVariable",
+          "width": "210px",
+          "add": 0,
+          "edit": {
+            "type": "SelectVariable",
+            "validVariableTypes": [
+              2
+            ]
+          }
+        },
+        {
+          "caption": "S1Target Float",
+          "name": "TargetVariable",
+          "width": "210px",
+          "add": 0,
+          "edit": {
+            "type": "SelectVariable",
+            "validVariableTypes": [
+              2
+            ]
+          }
+        },
+        {
+          "caption": "Tabelle",
+          "name": "Table",
+          "width": "85px",
+          "add": "A",
+          "edit": {
+            "type": "Select",
+            "options": [
+              {
+                "caption": "A",
+                "value": "A"
+              },
+              {
+                "caption": "B",
+                "value": "B"
+              },
+              {
+                "caption": "C",
+                "value": "C"
+              },
+              {
+                "caption": "D",
+                "value": "D"
+              }
+            ]
+          }
+        },
+        {
+          "caption": "Öffnen +1 °C",
+          "name": "UpKey",
+          "width": "105px",
+          "add": 7,
+          "edit": {
+            "type": "NumberSpinner",
+            "minimum": 1,
+            "maximum": 8
+          }
+        },
+        {
+          "caption": "Schließen -1 °C",
+          "name": "DownKey",
+          "width": "110px",
+          "add": 8,
+          "edit": {
+            "type": "NumberSpinner",
+            "minimum": 1,
+            "maximum": 8
+          }
+        }
+      ]
+    },
+    {
+      "type": "Label",
+      "caption": "S1Target: In der nativen Symcon-Instanz „LCN Variable / LCN Wert“ des jeweiligen neuen LCN-Moduls ausschließlich S1Target aktivieren und hier die Float-Variable „Zieltemperatur S1“ auswählen. Die zusätzlich erzeugte Boolean-Variable „Entriegelt“ nicht auswählen."
+    },
+    {
+      "type": "ExpansionPanel",
+      "caption": "Erweiterte Ablaufparameter",
+      "expanded": false,
+      "items": [
+        {
+          "type": "NumberSpinner",
+          "name": "StepWaitMs",
+          "caption": "Wartezeit nach jedem Tastendruck",
+          "minimum": 500,
+          "maximum": 3000,
+          "suffix": " ms"
+        },
+        {
+          "type": "NumberSpinner",
+          "name": "MaxSteps",
+          "caption": "Maximale Tastendrücke je Auftrag (Sicherheitsgrenze)",
+          "minimum": 15,
+          "maximum": 50
+        },
+        {
+          "type": "NumberSpinner",
+          "name": "NoChangeConfirmations",
+          "caption": "Unveränderte bestätigte Schritte bis Kühl-Endlage",
+          "minimum": 2,
+          "maximum": 4
+        }
+      ]
+    },
+    {
+      "type": "Label",
+      "caption": "Heizen: Symcon-Bedienbereich 18–24 °C, LCN-Grenzen bleiben unverändert und können am GT8 weiter vollständig genutzt werden. Kühlen: AN fährt mit +1-°C-Tastenbefehlen bis zur oberen LCN-Endlage (Ventil offen), AUS mit -1-°C-Tastenbefehlen bis zur unteren Endlage (Ventil geschlossen)."
+    }
+  ],
+  "actions": [
+    {
+      "type": "Button",
+      "caption": "Alle S1Target-Werte jetzt neu einlesen",
+      "onClick": "LCNC_RequestAllTargets($id);"
+    },
+    {
+      "type": "Button",
+      "caption": "Laufenden Auftrag abbrechen",
+      "onClick": "LCNC_Abort($id);"
+    },
+    {
+      "type": "Button",
+      "caption": "Fehlerstatus quittieren",
+      "onClick": "LCNC_ClearError($id);"
+    }
+  ],
+  "status": [
+    {
+      "code": 102,
+      "icon": "active",
+      "caption": "Aktiv"
+    },
+    {
+      "code": 104,
+      "icon": "inactive",
+      "caption": "Keine aktiven Räume konfiguriert"
+    },
+    {
+      "code": 201,
+      "icon": "error",
+      "caption": "Konfiguration fehlerhaft"
+    },
+    {
+      "code": 202,
+      "icon": "error",
+      "caption": "Letzter LCN-Auftrag fehlgeschlagen"
+    },
+    {
+      "code": 203,
+      "icon": "active",
+      "caption": "LCN-Auftrag läuft"
+    }
+  ]
+}

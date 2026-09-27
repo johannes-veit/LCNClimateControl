@@ -1,0 +1,12 @@
+{
+  "id": "{1623F760-7CBB-4DDE-B08F-7625BCFC0278}",
+  "author": "Johannes Veit",
+  "name": "LCN Climate Control",
+  "url": "",
+  "compatibility": {
+    "version": "9.0"
+  },
+  "version": "0.1.0",
+  "build": 1,
+  "date": 1790506200
+}
