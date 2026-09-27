@@ -80,6 +80,8 @@ class LCNClimateControl extends IPSModuleStrict
         $this->SetTimerInterval('Worker', 0);
         $this->SetBuffer('Queue', '[]');
         $this->SetBuffer('CurrentJob', '');
+        $this->SetBuffer('RuntimeRooms', '[]');
+        $this->SetBuffer('LastVisualizationPayload', '');
 
         // 0.2.0 hatte die Bedienobjekte entfernt. Hier werden sie absichtlich
         // wieder als Diagnose-/Fallbackobjekte angelegt. Die kompakte HTML-Kachel
@@ -102,6 +104,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->DetachMessagesAndReferences();
 
         $rooms = $this->GetRooms();
+        $runtimeRooms = [];
         $valid = true;
         $position = 100;
 
@@ -114,6 +117,8 @@ class LCNClimateControl extends IPSModuleStrict
                 $valid = false;
                 continue;
             }
+
+            $runtimeRooms[] = $room;
 
             $targetID = $room['TargetVariable'];
             $tempID = $room['TemperatureVariable'];
@@ -160,12 +165,13 @@ class LCNClimateControl extends IPSModuleStrict
             $position += 10;
         }
 
+        $this->SetRuntimeRooms($runtimeRooms);
         $this->CleanupStaleRoomObjects($rooms);
         $this->ApplyModeVisibility();
 
         if (!$valid) {
             $this->SetStatus(self::STATUS_CONFIG_ERROR);
-        } elseif ($this->CountEnabledValidRooms($rooms) === 0) {
+        } elseif (count($runtimeRooms) === 0) {
             $this->SetStatus(self::STATUS_INACTIVE);
         } elseif ($this->ReadAttributeString('LastError') !== '') {
             $this->SetStatus(self::STATUS_RUNTIME_ERROR);
@@ -214,11 +220,8 @@ class LCNClimateControl extends IPSModuleStrict
             return;
         }
 
-        $rooms = $this->GetRooms();
+        $rooms = $this->GetRuntimeRooms();
         foreach ($rooms as $room) {
-            if (!$room['Enabled'] || !$this->ValidateRoom($room, false)) {
-                continue;
-            }
 
             $targetID = $room['TargetVariable'];
 
@@ -267,10 +270,7 @@ class LCNClimateControl extends IPSModuleStrict
     public function RequestAllTargets(): bool
     {
         $ok = true;
-        foreach ($this->GetRooms() as $room) {
-            if (!$room['Enabled'] || !$this->ValidateRoom($room, false)) {
-                continue;
-            }
+        foreach ($this->GetRuntimeRooms() as $room) {
             $ok = $this->RequestTargetRead($room['TargetVariable']) && $ok;
         }
         return $ok;
@@ -296,7 +296,7 @@ class LCNClimateControl extends IPSModuleStrict
     public function ClearError(): void
     {
         $this->WriteAttributeString('LastError', '');
-        if ($this->CountEnabledValidRooms($this->GetRooms()) > 0) {
+        if (count($this->GetRuntimeRooms()) > 0) {
             $this->SetStatus(self::STATUS_ACTIVE);
         } else {
             $this->SetStatus(self::STATUS_INACTIVE);
@@ -318,10 +318,7 @@ class LCNClimateControl extends IPSModuleStrict
             throw new RuntimeException('Betriebsart kann während eines laufenden LCN-Auftrags nicht gewechselt werden.');
         }
 
-        $rooms = array_values(array_filter(
-            $this->GetRooms(),
-            fn(array $room): bool => $room['Enabled'] && $this->ValidateRoom($room, false)
-        ));
+        $rooms = $this->GetRuntimeRooms();
 
         if ($Mode === self::MODE_COOLING) {
             // Vor jeglicher Kühlbewegung den echten aktuellen Heizsollwert jedes Raums sichern.
@@ -336,7 +333,6 @@ class LCNClimateControl extends IPSModuleStrict
             $this->SetValue('Mode', self::MODE_COOLING);
             $this->WriteAttributeInteger('OperatingMode', self::MODE_COOLING);
             $this->ApplyModeVisibility();
-            $this->PushVisualizationState();
 
             foreach ($rooms as $room) {
                 $state = $this->GetStoredCoolingState($room['TargetVariable']);
@@ -346,7 +342,6 @@ class LCNClimateControl extends IPSModuleStrict
             $this->SetValue('Mode', self::MODE_HEATING);
             $this->WriteAttributeInteger('OperatingMode', self::MODE_HEATING);
             $this->ApplyModeVisibility();
-            $this->PushVisualizationState();
 
             foreach ($rooms as $room) {
                 $restore = $this->GetLastHeatingTarget($room['TargetVariable']);
@@ -376,7 +371,7 @@ class LCNClimateControl extends IPSModuleStrict
 
         $targetID = $Room['TargetVariable'];
         $this->SetValueIfChanged($this->HeatIdent($targetID), (float) $rounded);
-        $this->EnqueueHeatJob($Room, (float) $rounded);
+        $this->RetargetOrEnqueueHeatingJob($Room, (float) $rounded);
         $this->StartWorkerIfNeeded();
         $this->PushVisualizationState();
     }
@@ -580,8 +575,37 @@ class LCNClimateControl extends IPSModuleStrict
         $job['WaitStage'] = 0;
         $this->SetCurrentJob($job);
         $this->SetStatus(self::STATUS_ACTIVE);
-        $this->PushVisualizationState();
         return $job;
+    }
+
+    private function RetargetOrEnqueueHeatingJob(array $Room, float $Desired): void
+    {
+        $targetID = (int) $Room['TargetVariable'];
+        $current = $this->GetCurrentJob();
+
+        if (is_array($current)
+            && (int) ($current['TargetVariable'] ?? 0) === $targetID
+            && ($current['Type'] ?? '') === self::JOB_HEAT) {
+            // Der gerade laufende Raum darf während der langsamen LCN-Fahrt
+            // sofort auf einen neuen Benutzerwunsch umgestellt werden.
+            // Ein bereits gesendeter Tastendruck wird noch sauber bestätigt;
+            // beim nächsten SEND-Schritt wird die Richtung aus dem neuen Ziel
+            // und dem echten S1Target neu berechnet.
+            $current['Desired'] = $Desired;
+            $current['NoChange'] = 0;
+            $this->SetCurrentJob($current);
+
+            // Ein eventuell bereits wartender älterer Auftrag desselben Raums
+            // ist damit überholt.
+            $queue = array_values(array_filter(
+                $this->GetQueue(),
+                fn(array $queued): bool => (int) ($queued['TargetVariable'] ?? 0) !== $targetID
+            ));
+            $this->SetQueue($queue);
+            return;
+        }
+
+        $this->EnqueueHeatJob($Room, $Desired);
     }
 
     private function EnqueueHeatJob(array $Room, float $Desired): void
@@ -858,8 +882,8 @@ class LCNClimateControl extends IPSModuleStrict
 
     private function FindRoomByTarget(int $TargetID): ?array
     {
-        foreach ($this->GetRooms() as $room) {
-            if ($room['Enabled'] && $room['TargetVariable'] === $TargetID) {
+        foreach ($this->GetRuntimeRooms() as $room) {
+            if ($room['TargetVariable'] === $TargetID) {
                 return $room;
             }
         }
@@ -868,12 +892,26 @@ class LCNClimateControl extends IPSModuleStrict
 
     private function FindRoomByTemperature(int $VariableID): ?array
     {
-        foreach ($this->GetRooms() as $room) {
-            if ($room['Enabled'] && $room['TemperatureVariable'] === $VariableID) {
+        foreach ($this->GetRuntimeRooms() as $room) {
+            if ($room['TemperatureVariable'] === $VariableID) {
                 return $room;
             }
         }
         return null;
+    }
+
+    private function GetRuntimeRooms(): array
+    {
+        $decoded = json_decode($this->GetBuffer('RuntimeRooms'), true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    private function SetRuntimeRooms(array $Rooms): void
+    {
+        $this->SetBuffer(
+            'RuntimeRooms',
+            json_encode(array_values($Rooms), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '[]'
+        );
     }
 
     private function ReadTarget(int $TargetID): ?float
@@ -934,11 +972,7 @@ class LCNClimateControl extends IPSModuleStrict
         $queue = $this->GetQueue();
         $rows = [];
 
-        foreach ($this->GetRooms() as $room) {
-            if (!$room['Enabled'] || !$this->ValidateRoom($room, false)) {
-                continue;
-            }
-
+        foreach ($this->GetRuntimeRooms() as $room) {
             $targetID = $room['TargetVariable'];
             $actualTarget = $this->ReadTarget($targetID);
             $temperature = $this->ReadFloatVariable($room['TemperatureVariable']);
@@ -1001,6 +1035,10 @@ class LCNClimateControl extends IPSModuleStrict
                 JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
             );
             if ($payload !== false) {
+                if ($payload === $this->GetBuffer('LastVisualizationPayload')) {
+                    return;
+                }
+                $this->SetBuffer('LastVisualizationPayload', $payload);
                 $this->UpdateVisualizationValue($payload);
             }
         } catch (Throwable $e) {
@@ -1256,10 +1294,7 @@ class LCNClimateControl extends IPSModuleStrict
             return;
         }
 
-        foreach ($this->GetRooms() as $room) {
-            if (!$room['Enabled'] || !$this->ValidateRoom($room, false)) {
-                continue;
-            }
+        foreach ($this->GetRuntimeRooms() as $room) {
             $actual = $this->ReadTarget($room['TargetVariable']);
             if ($actual !== null) {
                 $this->SetValueIfChanged($this->HeatIdent($room['TargetVariable']), $actual);

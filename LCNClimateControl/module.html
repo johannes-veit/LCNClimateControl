@@ -127,6 +127,17 @@ body { overflow: auto; }
     font-size: 14px;
     font-weight: 500;
 }
+.room-row.busy .room-name::after {
+    content: '';
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    margin-left: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    vertical-align: middle;
+    animation: pulse 1s ease-in-out infinite alternate;
+}
 .value {
     text-align: right;
     white-space: nowrap;
@@ -222,10 +233,27 @@ input[type="range"]:disabled { cursor: default; opacity: .56; }
 <body>
 <div id="app"></div>
 <script>
+'use strict';
+
 let lcncInitialState = {};
 /*__LCNC_INITIAL_STATE__*/
+
 let state = lcncInitialState || { mode: 0, busy: false, error: '', rows: [] };
-let localBusy = false;
+let renderedMode = null;
+let renderedSignature = '';
+let ui = {
+    root: null,
+    busyDot: null,
+    modeHeat: null,
+    modeCool: null,
+    table: null,
+    note: null,
+    error: null,
+    rows: new Map()
+};
+const draggingTargets = new Set();
+const lastAction = new Map();
+const ACTION_GUARD_MS = 110;
 
 function parseState(data) {
     if (typeof data === 'string') {
@@ -240,7 +268,10 @@ function clamp(value, min, max) {
 
 function formatTemp(value, digits = 1) {
     if (value === null || value === undefined || Number.isNaN(Number(value))) return '–';
-    return Number(value).toLocaleString('de-DE', { minimumFractionDigits: digits, maximumFractionDigits: digits }) + ' °C';
+    return Number(value).toLocaleString('de-DE', {
+        minimumFractionDigits: digits,
+        maximumFractionDigits: digits
+    }) + ' °C';
 }
 
 function formatTarget(value) {
@@ -248,66 +279,100 @@ function formatTarget(value) {
     return Math.round(Number(value)).toLocaleString('de-DE') + ' °C';
 }
 
-function sendAction(ident, value) {
-    if (state.busy || localBusy) return;
-    localBusy = true;
-    state = { ...state, busy: true };
-    render();
-    requestAction(ident, value);
+function rowKey(row) {
+    return String(row.targetId);
 }
 
-function makeButton(text, active, onClick, disabled = false) {
+function structureSignature(nextState) {
+    const rows = Array.isArray(nextState.rows) ? nextState.rows : [];
+    return `${Number(nextState.mode) === 1 ? 1 : 0}|` +
+        rows.map(row => `${rowKey(row)}:${row.name || ''}`).join('|');
+}
+
+function getRow(targetId) {
+    const rows = Array.isArray(state.rows) ? state.rows : [];
+    return rows.find(row => String(row.targetId) === String(targetId)) || null;
+}
+
+function sendActionFast(ident, value) {
+    const now = Date.now();
+    const key = `${ident}:${String(value)}`;
+    const previous = lastAction.get(key) || 0;
+    if (now - previous < ACTION_GUARD_MS) return;
+    lastAction.set(key, now);
+
+    try {
+        requestAction(ident, value);
+    } catch (_) {
+        // Der nächste echte Serverzustand synchronisiert die Anzeige wieder.
+    }
+}
+
+function makeButton(text, className = '') {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = text;
-    if (active) button.classList.add('active');
-    button.disabled = disabled;
-    button.addEventListener('click', onClick);
+    if (className) button.className = className;
     return button;
 }
 
-function renderMode(container) {
+function buildMode(root) {
     const line = document.createElement('div');
     line.className = 'mode-line';
 
     const label = document.createElement('div');
     label.className = 'mode-label';
     label.textContent = 'Betriebsart';
+
     const dot = document.createElement('span');
-    dot.className = 'busy-dot' + (state.busy ? ' on' : '');
-    dot.title = state.busy ? 'Einstellung läuft' : '';
+    dot.className = 'busy-dot';
     label.appendChild(dot);
 
     const switcher = document.createElement('div');
     switcher.className = 'segmented';
-    switcher.appendChild(makeButton('Heizen', Number(state.mode) === 0, () => sendAction('Mode', 0), state.busy));
-    switcher.appendChild(makeButton('Kühlen', Number(state.mode) === 1, () => sendAction('Mode', 1), state.busy));
 
+    const heat = makeButton('Heizen');
+    const cool = makeButton('Kühlen');
+
+    heat.addEventListener('click', () => {
+        if (state.busy || Number(state.mode) === 0) return;
+        sendActionFast('Mode', 0);
+    });
+
+    cool.addEventListener('click', () => {
+        if (state.busy || Number(state.mode) === 1) return;
+        sendActionFast('Mode', 1);
+    });
+
+    switcher.appendChild(heat);
+    switcher.appendChild(cool);
     line.appendChild(label);
     line.appendChild(switcher);
-    container.appendChild(line);
+    root.appendChild(line);
+
+    ui.busyDot = dot;
+    ui.modeHeat = heat;
+    ui.modeCool = cool;
 }
 
 function makeHeader(mode) {
     const header = document.createElement('div');
     header.className = 'grid header ' + (mode === 0 ? 'heat' : 'cool');
-    if (mode === 0) {
-        ['Raum', 'Solltemperatur', 'Soll', 'Ist'].forEach(text => {
-            const cell = document.createElement('div');
-            cell.textContent = text;
-            header.appendChild(cell);
-        });
-    } else {
-        ['Raum', 'Kühlung', 'Ist'].forEach(text => {
-            const cell = document.createElement('div');
-            cell.textContent = text;
-            header.appendChild(cell);
-        });
-    }
+
+    const labels = mode === 0
+        ? ['Raum', 'Solltemperatur', 'Soll', 'Ist']
+        : ['Raum', 'Kühlung', 'Ist'];
+
+    labels.forEach(text => {
+        const cell = document.createElement('div');
+        cell.textContent = text;
+        header.appendChild(cell);
+    });
     return header;
 }
 
-function makeHeatRow(row) {
+function createHeatRow(row) {
+    const targetId = rowKey(row);
     const grid = document.createElement('div');
     grid.className = 'grid room-row heat';
 
@@ -319,60 +384,97 @@ function makeHeatRow(row) {
     const sliderWrap = document.createElement('div');
     sliderWrap.className = 'slider-wrap';
 
-    const raw = row.displayTarget === null || row.displayTarget === undefined ? 18 : Math.round(Number(row.displayTarget));
-    const sliderValue = clamp(raw, 18, 24);
-    const controlsDisabled = Boolean(state.busy);
-
-    const minus = document.createElement('button');
-    minus.type = 'button';
-    minus.className = 'step';
-    minus.textContent = '−';
+    const minus = makeButton('−', 'step');
     minus.title = '1 °C niedriger';
-    minus.disabled = controlsDisabled || raw <= 18;
-    minus.addEventListener('click', () => sendAction(row.heatIdent, clamp(raw - 1, 18, 24)));
 
     const slider = document.createElement('input');
     slider.type = 'range';
     slider.min = '18';
     slider.max = '24';
     slider.step = '1';
-    slider.value = String(sliderValue);
-    slider.disabled = controlsDisabled;
     slider.setAttribute('aria-label', (row.name || 'Raum') + ' Solltemperatur');
 
-    const plus = document.createElement('button');
-    plus.type = 'button';
-    plus.className = 'step';
-    plus.textContent = '+';
+    const plus = makeButton('+', 'step');
     plus.title = '1 °C höher';
-    plus.disabled = controlsDisabled || raw >= 24;
-    plus.addEventListener('click', () => sendAction(row.heatIdent, raw < 18 ? 18 : clamp(raw + 1, 18, 24)));
 
     const targetValue = document.createElement('div');
     targetValue.className = 'value target';
-    targetValue.textContent = formatTarget(row.displayTarget);
 
-    slider.addEventListener('input', () => {
-        targetValue.textContent = formatTarget(Number(slider.value));
+    const actual = document.createElement('div');
+    actual.className = 'value';
+
+    minus.addEventListener('click', () => {
+        const current = getRow(targetId);
+        if (!current) return;
+        const raw = current.displayTarget === null || current.displayTarget === undefined
+            ? 18
+            : Math.round(Number(current.displayTarget));
+        const desired = clamp(raw - 1, 18, 24);
+        current.displayTarget = desired;
+        patchHeatRow(current);
+        sendActionFast(current.heatIdent, desired);
     });
-    slider.addEventListener('change', () => sendAction(row.heatIdent, Number(slider.value)));
+
+    plus.addEventListener('click', () => {
+        const current = getRow(targetId);
+        if (!current) return;
+        const raw = current.displayTarget === null || current.displayTarget === undefined
+            ? 18
+            : Math.round(Number(current.displayTarget));
+        const desired = raw < 18 ? 18 : clamp(raw + 1, 18, 24);
+        current.displayTarget = desired;
+        patchHeatRow(current);
+        sendActionFast(current.heatIdent, desired);
+    });
+
+    slider.addEventListener('pointerdown', () => draggingTargets.add(targetId));
+    slider.addEventListener('input', () => {
+        draggingTargets.add(targetId);
+        const current = getRow(targetId);
+        if (!current) return;
+        current.displayTarget = Number(slider.value);
+        targetValue.textContent = formatTarget(current.displayTarget);
+        minus.disabled = Number(slider.value) <= 18;
+        plus.disabled = Number(slider.value) >= 24;
+    });
+    slider.addEventListener('change', () => {
+        const current = getRow(targetId);
+        if (!current) return;
+        const desired = Number(slider.value);
+        current.displayTarget = desired;
+        draggingTargets.delete(targetId);
+        patchHeatRow(current);
+        sendActionFast(current.heatIdent, desired);
+    });
+    slider.addEventListener('pointerup', () => draggingTargets.delete(targetId));
+    slider.addEventListener('pointercancel', () => draggingTargets.delete(targetId));
 
     sliderWrap.appendChild(minus);
     sliderWrap.appendChild(slider);
     sliderWrap.appendChild(plus);
 
-    const actual = document.createElement('div');
-    actual.className = 'value';
-    actual.textContent = formatTemp(row.temperature, 1);
-
     grid.appendChild(name);
     grid.appendChild(sliderWrap);
     grid.appendChild(targetValue);
     grid.appendChild(actual);
+
+    ui.rows.set(targetId, {
+        type: 'heat',
+        grid,
+        name,
+        minus,
+        slider,
+        plus,
+        targetValue,
+        actual
+    });
+
+    patchHeatRow(row);
     return grid;
 }
 
-function makeCoolRow(row) {
+function createCoolRow(row) {
+    const targetId = rowKey(row);
     const grid = document.createElement('div');
     grid.className = 'grid room-row cool';
 
@@ -383,25 +485,147 @@ function makeCoolRow(row) {
 
     const switcher = document.createElement('div');
     switcher.className = 'segmented cool-switch';
-    const disabled = Boolean(state.busy);
-    switcher.appendChild(makeButton('Nicht kühlen', !row.cooling, () => sendAction(row.coolIdent, false), disabled));
-    switcher.appendChild(makeButton('Kühlen', Boolean(row.cooling), () => sendAction(row.coolIdent, true), disabled));
+
+    const off = makeButton('Nicht kühlen');
+    const on = makeButton('Kühlen');
+
+    off.addEventListener('click', () => {
+        const current = getRow(targetId);
+        if (!current || current.cooling === false) return;
+        current.cooling = false;
+        patchCoolRow(current);
+        sendActionFast(current.coolIdent, false);
+    });
+
+    on.addEventListener('click', () => {
+        const current = getRow(targetId);
+        if (!current || current.cooling === true) return;
+        current.cooling = true;
+        patchCoolRow(current);
+        sendActionFast(current.coolIdent, true);
+    });
+
+    switcher.appendChild(off);
+    switcher.appendChild(on);
 
     const actual = document.createElement('div');
     actual.className = 'value';
-    actual.textContent = formatTemp(row.temperature, 1);
 
     grid.appendChild(name);
     grid.appendChild(switcher);
     grid.appendChild(actual);
+
+    ui.rows.set(targetId, {
+        type: 'cool',
+        grid,
+        name,
+        off,
+        on,
+        actual
+    });
+
+    patchCoolRow(row);
     return grid;
 }
 
-function render() {
+function patchHeatRow(row) {
+    const ref = ui.rows.get(rowKey(row));
+    if (!ref || ref.type !== 'heat') return;
+
+    const raw = row.displayTarget === null || row.displayTarget === undefined
+        ? 18
+        : Math.round(Number(row.displayTarget));
+    const sliderValue = clamp(raw, 18, 24);
+
+    ref.grid.classList.toggle('busy', Boolean(row.busy));
+    ref.name.textContent = row.name || 'Raum';
+    ref.name.title = row.name || '';
+
+    // Während der Benutzer den Regler aktiv bewegt, darf eine parallel
+    // eintreffende Busmeldung den Schieber nicht unter dem Finger versetzen.
+    if (!draggingTargets.has(rowKey(row))) {
+        ref.slider.value = String(sliderValue);
+    }
+
+    ref.targetValue.textContent = formatTarget(row.displayTarget);
+    ref.actual.textContent = formatTemp(row.temperature, 1);
+
+    // Heizsollwert darf auch während einer laufenden Fahrt sofort neu gewählt
+    // werden. Das Backend retargetet den aktuellen Auftrag nach der bestätigten
+    // laufenden LCN-Stufe.
+    ref.slider.disabled = false;
+    ref.minus.disabled = raw <= 18;
+    ref.plus.disabled = raw >= 24;
+}
+
+function patchCoolRow(row) {
+    const ref = ui.rows.get(rowKey(row));
+    if (!ref || ref.type !== 'cool') return;
+
+    ref.grid.classList.toggle('busy', Boolean(row.busy));
+    ref.name.textContent = row.name || 'Raum';
+    ref.name.title = row.name || '';
+    ref.actual.textContent = formatTemp(row.temperature, 1);
+
+    ref.off.classList.toggle('active', !Boolean(row.cooling));
+    ref.on.classList.toggle('active', Boolean(row.cooling));
+
+    // Kühlaufträge dürfen seriell in die Queue gelegt bzw. für denselben Raum
+    // durch den jeweils neuesten noch wartenden Wunsch ersetzt werden.
+    ref.off.disabled = false;
+    ref.on.disabled = false;
+}
+
+function patchMode() {
+    const cooling = Number(state.mode) === 1;
+    if (ui.modeHeat) {
+        ui.modeHeat.classList.toggle('active', !cooling);
+        ui.modeHeat.disabled = Boolean(state.busy);
+    }
+    if (ui.modeCool) {
+        ui.modeCool.classList.toggle('active', cooling);
+        ui.modeCool.disabled = Boolean(state.busy);
+    }
+    if (ui.busyDot) {
+        ui.busyDot.classList.toggle('on', Boolean(state.busy));
+        ui.busyDot.title = state.busy ? 'Einstellung läuft' : '';
+    }
+}
+
+function patchMeta() {
+    if (ui.note) {
+        ui.note.hidden = Number(state.mode) !== 1;
+    }
+
+    if (ui.error) {
+        const hasError = Boolean(state.error);
+        ui.error.hidden = !hasError;
+        ui.error.textContent = hasError ? state.error : '';
+    }
+}
+
+function patchUI() {
+    patchMode();
+
+    const rows = Array.isArray(state.rows) ? state.rows : [];
+    rows.forEach(row => {
+        if (Number(state.mode) === 0) {
+            patchHeatRow(row);
+        } else {
+            patchCoolRow(row);
+        }
+    });
+
+    patchMeta();
+}
+
+function renderStructure() {
     const root = document.getElementById('app');
+    ui.root = root;
+    ui.rows = new Map();
     root.replaceChildren();
 
-    renderMode(root);
+    buildMode(root);
 
     const rows = Array.isArray(state.rows) ? state.rows : [];
     if (rows.length === 0) {
@@ -409,6 +633,16 @@ function render() {
         empty.className = 'empty';
         empty.textContent = 'Keine aktiven Räume konfiguriert.';
         root.appendChild(empty);
+
+        const error = document.createElement('div');
+        error.className = 'error';
+        error.hidden = true;
+        root.appendChild(error);
+        ui.error = error;
+
+        renderedMode = Number(state.mode) === 1 ? 1 : 0;
+        renderedSignature = structureSignature(state);
+        patchUI();
         return;
     }
 
@@ -416,31 +650,50 @@ function render() {
     const table = document.createElement('div');
     table.className = 'table';
     table.appendChild(makeHeader(mode));
-    rows.forEach(row => table.appendChild(mode === 0 ? makeHeatRow(row) : makeCoolRow(row)));
+
+    rows.forEach(row => {
+        table.appendChild(mode === 0 ? createHeatRow(row) : createCoolRow(row));
+    });
+
     root.appendChild(table);
+    ui.table = table;
 
-    if (mode === 1) {
-        const note = document.createElement('div');
-        note.className = 'note';
-        note.textContent = 'Kühlen = FHB-Ventil geöffnet · Nicht kühlen = FHB-Ventil geschlossen';
-        root.appendChild(note);
-    }
+    const note = document.createElement('div');
+    note.className = 'note';
+    note.textContent = 'Kühlen = FHB-Ventil geöffnet · Nicht kühlen = FHB-Ventil geschlossen';
+    note.hidden = mode !== 1;
+    root.appendChild(note);
+    ui.note = note;
 
-    if (state.error) {
-        const error = document.createElement('div');
-        error.className = 'error';
-        error.textContent = state.error;
-        root.appendChild(error);
-    }
+    const error = document.createElement('div');
+    error.className = 'error';
+    error.hidden = true;
+    root.appendChild(error);
+    ui.error = error;
+
+    renderedMode = mode;
+    renderedSignature = structureSignature(state);
+    patchUI();
 }
 
 function handleMessage(data) {
-    state = parseState(data);
-    localBusy = false;
-    render();
+    const next = parseState(data);
+    const nextMode = Number(next.mode) === 1 ? 1 : 0;
+    const nextSignature = structureSignature(next);
+
+    state = next;
+
+    // Bei normalen S1Target-/Temperaturmeldungen bleibt der DOM vollständig
+    // bestehen; nur Werte/Klassen werden gepatcht. Ein kompletter Neuaufbau
+    // erfolgt ausschließlich bei Modus- oder Raumstrukturwechsel.
+    if (renderedMode !== nextMode || renderedSignature !== nextSignature) {
+        renderStructure();
+    } else {
+        patchUI();
+    }
 }
 
-render();
+renderStructure();
 </script>
 </body>
 </html>

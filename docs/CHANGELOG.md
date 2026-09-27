@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.3
+- Visualisierung auf inkrementelle DOM-Aktualisierung umgestellt: normale LCN-/Temperaturmeldungen bauen die Kachel nicht mehr vollständig neu auf.
+- Slider, Soll-/Istwerte und Kühlbuttons werden direkt gepatcht; dadurch deutlich weniger Flackern und spürbar flüssigere Bedienung.
+- Heiz-Sollwert kann während einer laufenden mehrstufigen LCN-Fahrt sofort neu gewählt werden; der aktuelle Auftrag wird nach der bereits gesendeten und bestätigten Stufe auf das neue Ziel retargetet.
+- Andere Räume bleiben während eines laufenden Raumauftrags bedienbar und werden sauber seriell eingereiht.
+- Runtime-Raumkonfiguration wird nach ApplyChanges gecacht; auf häufigen S1Target-/Temperaturmeldungen entfallen wiederholte Instanz-/Property-Prüfungen.
+- Identische Visualisierungsnachrichten werden nicht erneut übertragen.
+- LCN-Prozessgeschwindigkeit bleibt bewusst unverändert (standardmäßig 900 ms je bestätigtem A7/A8-Schritt).
+- Kachelkopf-Abstand aus 0.2.2 bleibt unverändert.
+
 ## 0.2.2
 - Kachelkopf korrigiert: Der von Symcon selbst gezeichnete Instanzname bleibt allein im oberen Kachelbereich.
 - Die eigene Zeile „Betriebsart / Heizen / Kühlen“ beginnt jetzt mit festem Sicherheitsabstand darunter.
