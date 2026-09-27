@@ -90,7 +90,18 @@ html, body {
     justify-content: space-between;
     gap: 14px;
     min-height: 36px;
-    margin-bottom: 7px;
+
+    /*
+     * Bleibt innerhalb des einzigen scrollbaren Bereichs fest stehen.
+     * Der separate Symcon-Titelbereich liegt darüber und scrollt ohnehin nicht.
+     */
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    margin: 0 -14px 7px;
+    padding: 4px 14px 5px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
 }
 .mode-label {
     font-size: 15px;
@@ -263,7 +274,13 @@ input[type="range"]:disabled { cursor: default; opacity: .56; }
 @media (max-width: 620px) {
     :root { --symcon-title-zone: 58px; }
     .content-scroll { padding: 0 8px 8px; }
-    .mode-line { margin-bottom: 5px; }
+    .mode-line {
+        margin-left: -8px;
+        margin-right: -8px;
+        margin-bottom: 5px;
+        padding-left: 8px;
+        padding-right: 8px;
+    }
     .mode-label { font-size: 14px; }
     .segmented button { font-size: 13px; padding: 5px 12px; }
     .grid { column-gap: 6px; }

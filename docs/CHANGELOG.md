@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.6
+- Betriebsart-Zeile bleibt beim Scrollen dauerhaft direkt unter dem Symcon-Kachelkopf sichtbar.
+- Umsetzung über `position: sticky` innerhalb des bereits getrennten `.content-scroll`-Bereichs.
+- Opaker Kartenhintergrund und eigene z-Ebene verhindern Durchscheinen der Raumzeilen.
+- Desktop- und Mobilabstände sind auf den jeweiligen Scrollcontainer abgestimmt.
+- Keine Änderung an Heiz-/Kühllogik oder LCN-Kommunikation.
+
 ## 0.2.5
 - Scroll-/Titelarchitektur der Kachel grundlegend korrigiert.
 - `html`/`body` und der äußere Kachelcontainer scrollen nicht mehr.
