@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0
+- eigene kompakte HTML-SDK-Kachel für Symcon 9
+- HTML-Darstellung bleibt auch im Vollbild aktiv
+- Heizbetrieb: genau eine Zeile pro Raum mit Raum, Regler, Soll und Ist
+- Kühlbetrieb: genau eine Zeile pro Raum mit „Nicht kühlen / Kühlen“ und Isttemperatur
+- Erklärung im Kühlbetrieb: „Kühlen = FHB-Ventil geöffnet · Nicht kühlen = FHB-Ventil geschlossen“
+- direkte Live-Aktualisierung bei GT8-/S1Target- und Isttemperaturänderungen
+- alte 0.1.x-Bedienvariablen und Isttemperatur-Links werden beim Update automatisch entfernt
+- Betriebsart wird persistent als Modulattribut gespeichert
+- Steuerlogik und LCN-Sicherheitsprinzip aus 0.1.1 bleiben unverändert
+
 ## 0.1.1
 - Normaler laufender LCN-Auftrag verwendet keinen 2xx-Instanzstatus mehr.
 - Dadurch erscheint während Sollwertfahrten kein rotes Ausrufezeichen mehr.

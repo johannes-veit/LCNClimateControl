@@ -7,7 +7,8 @@ $required = [
     'README.md',
     'LCNClimateControl/module.json',
     'LCNClimateControl/form.json',
-    'LCNClimateControl/module.php'
+    'LCNClimateControl/module.php',
+    'LCNClimateControl/module.html'
 ];
 
 foreach ($required as $file) {
@@ -43,6 +44,27 @@ if (!str_contains($php, "LCN_SendCommand(\$sendModule, 'TS', \$data)")) {
 if (!str_contains($php, 'LCN_RequestRead($parent)')) {
     fwrite(STDERR, "S1Target-Nachlese fehlt.\n");
     exit(1);
+}
+
+
+if (!str_contains($php, 'SetVisualizationType(2)')) {
+    fwrite(STDERR, "HTML-SDK Visualisierungstyp 2 fehlt.\n");
+    exit(1);
+}
+if (!str_contains($php, 'public function GetVisualizationTile(): string')) {
+    fwrite(STDERR, "GetVisualizationTile fehlt.\n");
+    exit(1);
+}
+if (!str_contains($php, 'UpdateVisualizationValue($payload)')) {
+    fwrite(STDERR, "Live-Update der HTML-SDK-Kachel fehlt.\n");
+    exit(1);
+}
+$html = file_get_contents($root . '/LCNClimateControl/module.html');
+foreach (['Nicht kühlen', 'Kühlen = FHB-Ventil geöffnet', 'Solltemperatur', '__INITIAL_STATE__'] as $needle) {
+    if (!str_contains($html, $needle)) {
+        fwrite(STDERR, "Erwarteter Visu-Bestandteil fehlt: $needle\n");
+        exit(1);
+    }
 }
 
 echo "Repository integrity OK\n";

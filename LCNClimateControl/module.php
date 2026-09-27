@@ -49,6 +49,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterPropertyInteger('MaxSteps', 25);
         $this->RegisterPropertyInteger('NoChangeConfirmations', 2);
 
+        $this->RegisterAttributeInteger('OperatingMode', self::MODE_HEATING);
         $this->RegisterAttributeString('LastHeatingTargets', '{}');
         $this->RegisterAttributeString('CoolingStates', '{}');
         $this->RegisterAttributeString('RegisteredTargetMessages', '[]');
@@ -57,18 +58,19 @@ class LCNClimateControl extends IPSModuleStrict
 
         $this->RegisterTimer('Worker', 0, 'LCNC_Worker($_IPS[\'TARGET\']);');
 
-        $this->EnsureProfiles();
-
-        $this->RegisterVariableInteger('Mode', 'Betriebsart', self::PROFILE_MODE, 10);
-        $this->EnableAction('Mode');
-
+        // Symcon 9: HTML-SDK sowohl in der normalen Kachel als auch im Vollbild.
+        $this->SetVisualizationType(2);
     }
-
     public function ApplyChanges(): void
     {
         parent::ApplyChanges();
 
-        $this->EnsureProfiles();
+        // Für bestehende 0.1.x-Instanzen den zuletzt gewählten Modus übernehmen
+        // und die alten Bedienvariablen/Links entfernen. Die 0.2.x-Visu benötigt
+        // keine zusätzlichen Raumvariablen mehr.
+        $this->MigrateLegacyVisualizationObjects();
+
+        $this->SetVisualizationType(2);
         $this->SetTimerInterval('Worker', 0);
         $this->SetBuffer('Queue', '[]');
         $this->SetBuffer('CurrentJob', '');
@@ -77,7 +79,6 @@ class LCNClimateControl extends IPSModuleStrict
 
         $rooms = $this->GetRooms();
         $valid = true;
-        $position = 100;
 
         foreach ($rooms as $room) {
             if (!$room['Enabled']) {
@@ -100,37 +101,23 @@ class LCNClimateControl extends IPSModuleStrict
             }
 
             $this->RegisterMessage($targetID, self::MSG_VARIABLE_UPDATE);
-            $this->AppendRegisteredTarget($targetID);
-
-            $heatIdent = $this->HeatIdent($targetID);
-            $coolIdent = $this->CoolIdent($targetID);
-
-            $this->MaintainVariable($heatIdent, $room['Name'] . ' – Soll', VARIABLETYPE_FLOAT, self::PROFILE_HEAT, $position + 1, true);
-            $this->EnableAction($heatIdent);
-
-            $this->MaintainVariable($coolIdent, $room['Name'] . ' – Kühlung', VARIABLETYPE_BOOLEAN, self::PROFILE_COOL, $position + 1, true);
-            $this->EnableAction($coolIdent);
+            $this->AppendRegisteredMessage($targetID);
 
             if ($tempID > 0) {
-                $this->EnsureLink($this->TempLinkIdent($targetID), $room['Name'] . ' – Ist', $tempID, $position);
-            } else {
-                $this->RemoveObjectByIdent($this->TempLinkIdent($targetID));
+                $this->RegisterMessage($tempID, self::MSG_VARIABLE_UPDATE);
+                $this->AppendRegisteredMessage($tempID);
             }
 
-            $currentTarget = $this->ReadTarget($targetID);
-            if ($currentTarget !== null && $this->GetMode() === self::MODE_HEATING) {
-                $this->SetValueIfChanged($heatIdent, $currentTarget);
-                $this->StoreLastHeatingTarget($targetID, $currentTarget);
+            // Nur im Heizbetrieb darf der aktuelle S1Target-Wert als letzter
+            // Heizsollwert übernommen werden. Im Kühlbetrieb liegt S1Target
+            // absichtlich an einer Endlage.
+            if ($this->GetMode() === self::MODE_HEATING) {
+                $currentTarget = $this->ReadTarget($targetID);
+                if ($currentTarget !== null) {
+                    $this->StoreLastHeatingTarget($targetID, $currentTarget);
+                }
             }
-
-            $coolingState = $this->GetStoredCoolingState($targetID);
-            $this->SetValueIfChanged($coolIdent, $coolingState);
-
-            $position += 10;
         }
-
-        $this->CleanupStaleRoomObjects($rooms);
-        $this->ApplyModeVisibility();
 
         if (!$valid) {
             $this->SetStatus(self::STATUS_CONFIG_ERROR);
@@ -141,35 +128,39 @@ class LCNClimateControl extends IPSModuleStrict
         } else {
             $this->SetStatus(self::STATUS_ACTIVE);
         }
-    }
 
+        $this->PushVisualizationState();
+    }
     public function MessageSink(int $TimeStamp, int $SenderID, int $Message, array $Data): void
     {
         if ($Message !== self::MSG_VARIABLE_UPDATE) {
             return;
         }
 
-        $room = $this->FindRoomByTarget($SenderID);
-        if ($room === null) {
+        $roomByTarget = $this->FindRoomByTarget($SenderID);
+        if ($roomByTarget !== null) {
+            // Niemals $Data interpretieren: den echten aktuellen Variablenwert lesen.
+            $value = $this->ReadTarget($SenderID);
+            if ($value !== null) {
+                $currentJob = $this->GetCurrentJob();
+                $jobOwnsTarget = is_array($currentJob)
+                    && (int) ($currentJob['TargetVariable'] ?? 0) === $SenderID;
+
+                // Änderungen am echten GT8 außerhalb eines Symcon-Auftrags
+                // werden sofort als neuer Heizsollwert übernommen.
+                if ($this->GetMode() === self::MODE_HEATING && !$jobOwnsTarget) {
+                    $this->StoreLastHeatingTarget($SenderID, $value);
+                }
+            }
+
+            $this->PushVisualizationState();
             return;
         }
 
-        // Niemals $Data interpretieren: den echten aktuellen Variablenwert lesen.
-        $value = $this->ReadTarget($SenderID);
-        if ($value === null) {
-            return;
-        }
-
-        $currentJob = $this->GetCurrentJob();
-        $jobOwnsTarget = is_array($currentJob)
-            && (int) ($currentJob['TargetVariable'] ?? 0) === $SenderID;
-
-        if ($this->GetMode() === self::MODE_HEATING && !$jobOwnsTarget) {
-            $this->SetValueIfChanged($this->HeatIdent($SenderID), $value);
-            $this->StoreLastHeatingTarget($SenderID, $value);
+        if ($this->FindRoomByTemperature($SenderID) !== null) {
+            $this->PushVisualizationState();
         }
     }
-
     public function RequestAction(string $Ident, mixed $Value): void
     {
         if ($Ident === 'Mode') {
@@ -177,8 +168,7 @@ class LCNClimateControl extends IPSModuleStrict
             return;
         }
 
-        $rooms = $this->GetRooms();
-        foreach ($rooms as $room) {
+        foreach ($this->GetRooms() as $room) {
             if (!$room['Enabled'] || !$this->ValidateRoom($room, false)) {
                 continue;
             }
@@ -198,7 +188,6 @@ class LCNClimateControl extends IPSModuleStrict
 
         throw new InvalidArgumentException('Unbekannte Aktion: ' . $Ident);
     }
-
     public function Worker(): void
     {
         if (!IPS_SemaphoreEnter('LCNC_' . $this->InstanceID, 1000)) {
@@ -216,6 +205,7 @@ class LCNClimateControl extends IPSModuleStrict
                     } else {
                         $this->SetStatus(self::STATUS_ACTIVE);
                     }
+                    $this->PushVisualizationState();
                     return;
                 }
             }
@@ -225,7 +215,6 @@ class LCNClimateControl extends IPSModuleStrict
             IPS_SemaphoreLeave('LCNC_' . $this->InstanceID);
         }
     }
-
     public function RequestAllTargets(): bool
     {
         $ok = true;
@@ -245,15 +234,14 @@ class LCNClimateControl extends IPSModuleStrict
                 $this->SetBuffer('Queue', '[]');
                 $this->SetBuffer('CurrentJob', '');
                 $this->SetTimerInterval('Worker', 0);
-                $this->SyncAllHeatingDisplayFromLCN();
                 $this->SetStatus($this->ReadAttributeString('LastError') === '' ? self::STATUS_ACTIVE : self::STATUS_RUNTIME_ERROR);
                 $this->SendDebug('Abort', 'Laufender Symcon-Auftrag wurde abgebrochen. LCN/GT8 bleiben unverändert bedienbar.', 0);
+                $this->PushVisualizationState();
             } finally {
                 IPS_SemaphoreLeave('LCNC_' . $this->InstanceID);
             }
         }
     }
-
     public function ClearError(): void
     {
         $this->WriteAttributeString('LastError', '');
@@ -262,8 +250,8 @@ class LCNClimateControl extends IPSModuleStrict
         } else {
             $this->SetStatus(self::STATUS_INACTIVE);
         }
+        $this->PushVisualizationState();
     }
-
     private function RequestMode(int $Mode): void
     {
         if (!in_array($Mode, [self::MODE_HEATING, self::MODE_COOLING], true)) {
@@ -289,20 +277,19 @@ class LCNClimateControl extends IPSModuleStrict
                 $actual = $this->ReadTarget($room['TargetVariable']);
                 if ($actual !== null) {
                     $this->StoreLastHeatingTarget($room['TargetVariable'], $actual);
-                    $this->SetValueIfChanged($this->HeatIdent($room['TargetVariable']), $actual);
                 }
             }
 
-            $this->SetValue('Mode', self::MODE_COOLING);
-            $this->ApplyModeVisibility();
+            $this->WriteAttributeInteger('OperatingMode', self::MODE_COOLING);
+            $this->PushVisualizationState();
 
             foreach ($rooms as $room) {
                 $state = $this->GetStoredCoolingState($room['TargetVariable']);
                 $this->EnqueueCoolingJob($room, $state, $state);
             }
         } else {
-            $this->SetValue('Mode', self::MODE_HEATING);
-            $this->ApplyModeVisibility();
+            $this->WriteAttributeInteger('OperatingMode', self::MODE_HEATING);
+            $this->PushVisualizationState();
 
             foreach ($rooms as $room) {
                 $restore = $this->GetLastHeatingTarget($room['TargetVariable']);
@@ -310,14 +297,13 @@ class LCNClimateControl extends IPSModuleStrict
                     // Kein gespeicherter Heizwert: sicherheitshalber nichts bewegen.
                     continue;
                 }
-                $this->SetValueIfChanged($this->HeatIdent($room['TargetVariable']), $restore);
                 $this->EnqueueHeatJob($room, $restore);
             }
         }
 
         $this->StartWorkerIfNeeded();
+        $this->PushVisualizationState();
     }
-
     private function RequestHeatingTarget(array $Room, float $Value): void
     {
         if ($this->GetMode() !== self::MODE_HEATING) {
@@ -329,12 +315,10 @@ class LCNClimateControl extends IPSModuleStrict
             throw new InvalidArgumentException('Symcon erlaubt im Heizbetrieb nur ganze Sollwerte von 18 bis 24 °C.');
         }
 
-        $targetID = $Room['TargetVariable'];
-        $this->SetValueIfChanged($this->HeatIdent($targetID), (float) $rounded);
         $this->EnqueueHeatJob($Room, (float) $rounded);
         $this->StartWorkerIfNeeded();
+        $this->PushVisualizationState();
     }
-
     private function RequestCoolingState(array $Room, bool $State): void
     {
         if ($this->GetMode() !== self::MODE_COOLING) {
@@ -344,12 +328,10 @@ class LCNClimateControl extends IPSModuleStrict
         $targetID = $Room['TargetVariable'];
         $previous = $this->GetStoredCoolingState($targetID);
 
-        // Optimistische Bedienanzeige; bei Fehler wird auf previous zurückgestellt.
-        $this->SetValueIfChanged($this->CoolIdent($targetID), $State);
         $this->EnqueueCoolingJob($Room, $State, $previous);
         $this->StartWorkerIfNeeded();
+        $this->PushVisualizationState();
     }
-
     private function ProcessJob(array $Job): void
     {
         $targetID = (int) $Job['TargetVariable'];
@@ -468,11 +450,9 @@ class LCNClimateControl extends IPSModuleStrict
         $targetID = (int) $Job['TargetVariable'];
 
         if ($Job['Type'] === self::JOB_HEAT) {
-            $this->SetValueIfChanged($this->HeatIdent($targetID), $Actual);
             $this->StoreLastHeatingTarget($targetID, $Actual);
         } else {
             $state = $Job['Type'] === self::JOB_COOL_UP;
-            $this->SetValueIfChanged($this->CoolIdent($targetID), $state);
             $this->StoreCoolingState($targetID, $state);
         }
 
@@ -484,24 +464,17 @@ class LCNClimateControl extends IPSModuleStrict
 
         $this->SetBuffer('CurrentJob', '');
         $this->StartNextJob();
+        $this->PushVisualizationState();
     }
-
     private function FailCurrentJob(array $Job, string $Reason): void
     {
         $targetID = (int) ($Job['TargetVariable'] ?? 0);
 
-        if (($Job['Type'] ?? '') === self::JOB_HEAT) {
+        if (($Job['Type'] ?? '') === self::JOB_HEAT && $this->GetMode() === self::MODE_HEATING) {
             $actual = $this->ReadTarget($targetID);
             if ($actual !== null) {
-                $this->SetValueIfChanged($this->HeatIdent($targetID), $actual);
-                if ($this->GetMode() === self::MODE_HEATING) {
-                    $this->StoreLastHeatingTarget($targetID, $actual);
-                }
+                $this->StoreLastHeatingTarget($targetID, $actual);
             }
-        } else {
-            $previous = (bool) ($Job['PreviousCoolingState'] ?? false);
-            $this->SetValueIfChanged($this->CoolIdent($targetID), $previous);
-            $this->StoreCoolingState($targetID, $previous);
         }
 
         $message = ($Job['Name'] ?? 'Raum') . ': ' . $Reason;
@@ -513,8 +486,8 @@ class LCNClimateControl extends IPSModuleStrict
         // globalen Umschaltung werden weiter abgearbeitet.
         $this->SetBuffer('CurrentJob', '');
         $this->StartNextJob();
+        $this->PushVisualizationState();
     }
-
     private function StartNextJob(): ?array
     {
         $queue = $this->GetQueue();
@@ -531,9 +504,9 @@ class LCNClimateControl extends IPSModuleStrict
         $job['WaitStage'] = 0;
         $this->SetCurrentJob($job);
         $this->SetStatus(self::STATUS_ACTIVE);
+        $this->PushVisualizationState();
         return $job;
     }
-
     private function EnqueueHeatJob(array $Room, float $Desired): void
     {
         $this->AppendJob([
@@ -586,7 +559,6 @@ class LCNClimateControl extends IPSModuleStrict
             $this->SetTimerInterval('Worker', 250);
         }
     }
-
     private function SendShortKey(array $Job, bool $Up): bool
     {
         $sendModule = (int) $Job['SendModule'];
@@ -816,6 +788,15 @@ class LCNClimateControl extends IPSModuleStrict
         return null;
     }
 
+    private function FindRoomByTemperature(int $VariableID): ?array
+    {
+        foreach ($this->GetRooms() as $room) {
+            if ($room['Enabled'] && $room['TemperatureVariable'] === $VariableID) {
+                return $room;
+            }
+        }
+        return null;
+    }
     private function ReadTarget(int $TargetID): ?float
     {
         if ($TargetID <= 0 || !IPS_VariableExists($TargetID)) {
@@ -830,106 +811,158 @@ class LCNClimateControl extends IPSModuleStrict
 
     private function GetMode(): int
     {
-        try {
-            $mode = (int) $this->GetValue('Mode');
-        } catch (Throwable) {
-            return self::MODE_HEATING;
-        }
+        $mode = $this->ReadAttributeInteger('OperatingMode');
         return $mode === self::MODE_COOLING ? self::MODE_COOLING : self::MODE_HEATING;
     }
-
-    private function EnsureProfiles(): void
+public function GetVisualizationTile(): string
     {
-        if (!IPS_VariableProfileExists(self::PROFILE_MODE)) {
-            IPS_CreateVariableProfile(self::PROFILE_MODE, VARIABLETYPE_INTEGER);
+        $path = __DIR__ . '/module.html';
+        if (!is_file($path)) {
+            return '<div>Visualisierung fehlt.</div>';
         }
-        IPS_SetVariableProfileAssociation(self::PROFILE_MODE, self::MODE_HEATING, 'Heizen', '', -1);
-        IPS_SetVariableProfileAssociation(self::PROFILE_MODE, self::MODE_COOLING, 'Kühlen', '', -1);
 
-        if (!IPS_VariableProfileExists(self::PROFILE_HEAT)) {
-            IPS_CreateVariableProfile(self::PROFILE_HEAT, VARIABLETYPE_FLOAT);
+        $html = file_get_contents($path);
+        if ($html === false) {
+            return '<div>Visualisierung konnte nicht geladen werden.</div>';
         }
-        IPS_SetVariableProfileValues(self::PROFILE_HEAT, 18.0, 24.0, 1.0);
-        IPS_SetVariableProfileDigits(self::PROFILE_HEAT, 0);
-        IPS_SetVariableProfileText(self::PROFILE_HEAT, '', ' °C');
 
-        if (!IPS_VariableProfileExists(self::PROFILE_COOL)) {
-            IPS_CreateVariableProfile(self::PROFILE_COOL, VARIABLETYPE_BOOLEAN);
-        }
-        IPS_SetVariableProfileAssociation(self::PROFILE_COOL, 0, 'AUS – keine Kühlung', '', -1);
-        IPS_SetVariableProfileAssociation(self::PROFILE_COOL, 1, 'AN – Kühlen', '', -1);
+        $initial = json_encode(
+            $this->BuildVisualizationState(),
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
+        );
+
+        return str_replace('__INITIAL_STATE__', $initial ?: '{}', $html);
     }
 
-    private function ApplyModeVisibility(): void
+    private function BuildVisualizationState(): array
     {
-        $cooling = $this->GetMode() === self::MODE_COOLING;
+        $mode = $this->GetMode();
+        $currentJob = $this->GetCurrentJob();
+        $queue = $this->GetQueue();
+        $rows = [];
 
         foreach ($this->GetRooms() as $room) {
-            if (!$room['Enabled'] || $room['TargetVariable'] <= 0) {
+            if (!$room['Enabled'] || !$this->ValidateRoom($room, false)) {
                 continue;
             }
 
-            $heatID = $this->FindOwnObjectByIdent($this->HeatIdent($room['TargetVariable']));
-            if (is_int($heatID) && $heatID > 0 && IPS_ObjectExists($heatID)) {
-                IPS_SetHidden($heatID, $cooling);
+            $targetID = $room['TargetVariable'];
+            $actualTarget = $this->ReadTarget($targetID);
+            $temperature = $this->ReadFloatVariable($room['TemperatureVariable']);
+
+            $displayTarget = $actualTarget;
+            $displayCooling = $this->GetStoredCoolingState($targetID);
+            $roomBusy = false;
+
+            $jobsToInspect = [];
+            if (is_array($currentJob)) {
+                $jobsToInspect[] = $currentJob;
+            }
+            foreach ($queue as $queuedJob) {
+                if (is_array($queuedJob)) {
+                    $jobsToInspect[] = $queuedJob;
+                }
             }
 
-            $coolID = $this->FindOwnObjectByIdent($this->CoolIdent($room['TargetVariable']));
-            if (is_int($coolID) && $coolID > 0 && IPS_ObjectExists($coolID)) {
-                IPS_SetHidden($coolID, !$cooling);
-                IPS_SetInfo($coolID, 'AN = Kühlen = Ventil geöffnet; AUS = keine Kühlung = Ventil geschlossen.');
+            foreach ($jobsToInspect as $job) {
+                if ((int) ($job['TargetVariable'] ?? 0) !== $targetID) {
+                    continue;
+                }
+
+                $roomBusy = true;
+                if (($job['Type'] ?? '') === self::JOB_HEAT) {
+                    $displayTarget = (float) ($job['Desired'] ?? $displayTarget ?? 18.0);
+                } elseif (($job['Type'] ?? '') === self::JOB_COOL_UP) {
+                    $displayCooling = true;
+                } elseif (($job['Type'] ?? '') === self::JOB_COOL_DOWN) {
+                    $displayCooling = false;
+                }
             }
+
+            $rows[] = [
+                'name' => $room['Name'],
+                'targetId' => $targetID,
+                'temperature' => $temperature,
+                'target' => $actualTarget,
+                'displayTarget' => $displayTarget,
+                'cooling' => $displayCooling,
+                'heatIdent' => $this->HeatIdent($targetID),
+                'coolIdent' => $this->CoolIdent($targetID),
+                'busy' => $roomBusy
+            ];
+        }
+
+        return [
+            'mode' => $mode,
+            'busy' => $this->IsBusy(),
+            'error' => $this->ReadAttributeString('LastError'),
+            'rows' => $rows
+        ];
+    }
+
+    private function PushVisualizationState(): void
+    {
+        try {
+            $payload = json_encode(
+                $this->BuildVisualizationState(),
+                JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+            );
+            if ($payload !== false) {
+                $this->UpdateVisualizationValue($payload);
+            }
+        } catch (Throwable $e) {
+            // Eine nicht geöffnete Visualisierung darf niemals die LCN-Steuerung beeinflussen.
+            $this->SendDebug('Visualization', $e->getMessage(), 0);
         }
     }
 
-    private function EnsureLink(string $Ident, string $Name, int $TargetID, int $Position): void
+    private function ReadFloatVariable(int $VariableID): ?float
     {
-        $objectID = $this->FindOwnObjectByIdent($Ident);
-        if (!is_int($objectID) || $objectID <= 0 || !IPS_LinkExists($objectID)) {
-            $objectID = IPS_CreateLink();
-            IPS_SetParent($objectID, $this->InstanceID);
-            IPS_SetIdent($objectID, $Ident);
+        if ($VariableID <= 0 || !IPS_VariableExists($VariableID)) {
+            return null;
         }
-        IPS_SetName($objectID, $Name);
-        IPS_SetPosition($objectID, $Position);
-        IPS_SetLinkTargetID($objectID, $TargetID);
+
+        try {
+            return (float) GetValue($VariableID);
+        } catch (Throwable) {
+            return null;
+        }
     }
 
-    private function CleanupStaleRoomObjects(array $Rooms): void
+    private function MigrateLegacyVisualizationObjects(): void
     {
-        $wanted = ['Mode' => true];
-        foreach ($Rooms as $room) {
-            if (!$room['Enabled'] || $room['TargetVariable'] <= 0) {
-                continue;
+        // Modus aus 0.1.x übernehmen, bevor die alte Variable entfernt wird.
+        $modeID = $this->FindOwnObjectByIdent('Mode');
+        if ($modeID > 0 && IPS_VariableExists($modeID)) {
+            try {
+                $legacyMode = (int) GetValue($modeID);
+                if (in_array($legacyMode, [self::MODE_HEATING, self::MODE_COOLING], true)) {
+                    $this->WriteAttributeInteger('OperatingMode', $legacyMode);
+                }
+            } catch (Throwable) {
             }
-            $wanted[$this->HeatIdent($room['TargetVariable'])] = true;
-            $wanted[$this->CoolIdent($room['TargetVariable'])] = true;
-            if ($room['TemperatureVariable'] > 0) {
-                $wanted[$this->TempLinkIdent($room['TargetVariable'])] = true;
+
+            try {
+                $this->UnregisterVariable('Mode');
+            } catch (Throwable) {
             }
         }
 
         foreach (IPS_GetChildrenIDs($this->InstanceID) as $childID) {
             $object = IPS_GetObject($childID);
             $ident = (string) ($object['ObjectIdent'] ?? '');
-            if (
-                (str_starts_with($ident, 'Heat_') || str_starts_with($ident, 'Cool_') || str_starts_with($ident, 'Temp_'))
-                && !isset($wanted[$ident])
-            ) {
-                if (str_starts_with($ident, 'Temp_') && IPS_LinkExists($childID)) {
-                    IPS_DeleteLink($childID);
-                } elseif (str_starts_with($ident, 'Heat_') || str_starts_with($ident, 'Cool_')) {
-                    $this->UnregisterVariable($ident);
-                }
-            }
-        }
-    }
 
-    private function RemoveObjectByIdent(string $Ident): void
-    {
-        $id = $this->FindOwnObjectByIdent($Ident);
-        if (is_int($id) && $id > 0 && IPS_LinkExists($id)) {
-            IPS_DeleteLink($id);
+            if ((str_starts_with($ident, 'Heat_') || str_starts_with($ident, 'Cool_')) && IPS_VariableExists($childID)) {
+                try {
+                    $this->UnregisterVariable($ident);
+                } catch (Throwable) {
+                }
+                continue;
+            }
+
+            if (str_starts_with($ident, 'Temp_') && IPS_LinkExists($childID)) {
+                IPS_DeleteLink($childID);
+            }
         }
     }
 
@@ -947,11 +980,6 @@ class LCNClimateControl extends IPSModuleStrict
     private function CoolIdent(int $TargetID): string
     {
         return 'Cool_' . $TargetID;
-    }
-
-    private function TempLinkIdent(int $TargetID): string
-    {
-        return 'Temp_' . $TargetID;
     }
 
     private function NormalizeTable(string $Table): string
@@ -1078,12 +1106,12 @@ class LCNClimateControl extends IPSModuleStrict
             }
             $actual = $this->ReadTarget($room['TargetVariable']);
             if ($actual !== null) {
-                $this->SetValueIfChanged($this->HeatIdent($room['TargetVariable']), $actual);
                 $this->StoreLastHeatingTarget($room['TargetVariable'], $actual);
             }
         }
-    }
 
+        $this->PushVisualizationState();
+    }
     private function DetachMessagesAndReferences(): void
     {
         foreach ($this->ReadJsonAttribute('RegisteredTargetMessages') as $id) {
@@ -1109,7 +1137,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->WriteAttributeString('RegisteredReferences', '[]');
     }
 
-    private function AppendRegisteredTarget(int $ID): void
+    private function AppendRegisteredMessage(int $ID): void
     {
         $ids = $this->ReadJsonAttribute('RegisteredTargetMessages');
         if (!in_array($ID, $ids, true)) {
