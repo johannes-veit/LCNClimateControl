@@ -37,7 +37,10 @@
           "width": "210px",
           "add": 0,
           "edit": {
-            "type": "SelectInstance"
+            "type": "SelectInstance",
+            "validModules": [
+              "{0E31FED6-E465-4621-95D4-AAF2683C41EC}"
+            ]
           }
         },
         {
@@ -127,8 +130,8 @@
         {
           "type": "NumberSpinner",
           "name": "StepWaitMs",
-          "caption": "Wartezeit nach jedem Tastendruck",
-          "minimum": 500,
+          "caption": "Mindestwartezeit je Raum nach Tastendruck",
+          "minimum": 900,
           "maximum": 3000,
           "suffix": " ms"
         },
@@ -150,15 +153,14 @@
     },
     {
       "type": "Label",
+      "caption": "Die automatische Regelung arbeitet ausschließlich mit den laufenden S1Target-Rückmeldungen. Eine zyklische oder gebündelte LCN_RequestRead-Abfrage wird bewusst nicht verwendet, um den LCN-Bus nicht unnötig zu belasten."
+    },
+    {
+      "type": "Label",
       "caption": "Heizen: Symcon-Bedienbereich 18–24 °C, LCN-Grenzen bleiben unverändert und können am GT8 weiter vollständig genutzt werden. Kühlen: AN fährt mit +1-°C-Tastenbefehlen bis zur oberen LCN-Endlage (Ventil offen), AUS mit -1-°C-Tastenbefehlen bis zur unteren Endlage (Ventil geschlossen)."
     }
   ],
   "actions": [
-    {
-      "type": "Button",
-      "caption": "Alle S1Target-Werte jetzt neu einlesen",
-      "onClick": "LCNC_RequestAllTargets($id);"
-    },
     {
       "type": "Button",
       "caption": "Laufenden Auftrag abbrechen",

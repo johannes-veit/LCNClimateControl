@@ -35,6 +35,15 @@ class LCNClimateControl extends IPSModuleStrict
 
     // Native LCN module ID used by the existing, proven LCN-Light integration.
     private const LCN_MODULE_MODULE_ID = '{0E31FED6-E465-4621-95D4-AAF2683C41EC}';
+    private const LCN_VALUE_MODULE_ID = '{0102BDC9-3B85-4A11-968D-7D314DA07C06}';
+
+    // Instanzübergreifende Sendesperre für mehrere LCN-Klima-Instanzen.
+    // Andere Module können denselben Namen übernehmen, um denselben PCHK-Pfad
+    // ebenfalls kooperativ zu serialisieren.
+    private const GLOBAL_LCN_SEND_SEMAPHORE = 'LCN_BUS_SEND_GLOBAL';
+
+    private const SEND_RETRY_MAX = 2;
+    private const SEND_RETRY_DELAY_MS = 750;
 
     private const PROFILE_MODE = 'LCNC.Mode';
     private const PROFILE_HEAT = 'LCNC.HeatSetpoint';
@@ -75,14 +84,51 @@ class LCNClimateControl extends IPSModuleStrict
     {
         parent::ApplyChanges();
 
-        $this->EnsureProfiles();
+        $applyLock = 'LCNC_' . $this->InstanceID;
+        if (!IPS_SemaphoreEnter($applyLock, 5000)) {
+            $this->SetStatus(self::STATUS_RUNTIME_ERROR);
+            $this->SendDebug('ApplyChanges', 'Laufende Steuerung konnte nicht innerhalb von 5 s exklusiv angehalten werden.', 0);
+            return;
+        }
+
+        try {
+            $interruptedCoolingJobs = [];
+            if ($this->GetMode() === self::MODE_COOLING) {
+                $existingJobs = [];
+                $existingCurrent = $this->GetCurrentJob();
+                if (is_array($existingCurrent)) {
+                    $existingJobs[] = $existingCurrent;
+                }
+                foreach ($this->GetQueue() as $existingQueued) {
+                    if (is_array($existingQueued)) {
+                        $existingJobs[] = $existingQueued;
+                    }
+                }
+
+                foreach ($existingJobs as $existingJob) {
+                    $type = (string) ($existingJob['RetargetType'] ?? $existingJob['Type'] ?? '');
+                    if (in_array($type, [self::JOB_COOL_UP, self::JOB_COOL_DOWN], true)) {
+                        $interruptedCoolingJobs[(int) ($existingJob['TargetVariable'] ?? 0)] =
+                            (string) ($existingJob['Name'] ?? 'Raum');
+                    }
+                }
+            }
+
+            $this->EnsureProfiles();
         $this->SetVisualizationType(1);
         $this->SetTimerInterval('Worker', 0);
         $this->SetBuffer('Queue', '[]');
         $this->SetBuffer('CurrentJob', '');
         $this->SetBuffer('RuntimeRooms', '[]');
-        $this->SetBuffer('LastVisualizationPayload', '');
         $this->SetBuffer('PendingMode', '');
+        $this->SetBuffer('RoomErrors', '{}');
+        $this->SetBuffer('ConfigurationValid', '1');
+
+        // Laufzeitfehler aus älteren Versionen dürfen nach einem erfolgreichen
+        // ApplyChanges nicht dauerhaft hängen bleiben. Ab 0.2.9 werden
+        // Raumfehler bewusst nur flüchtig geführt und bei Erfolg automatisch
+        // wieder aufgehoben.
+        $this->WriteAttributeString('LastError', '');
 
         // 0.2.0 hatte die Bedienobjekte entfernt. Hier werden sie absichtlich
         // wieder als Diagnose-/Fallbackobjekte angelegt. Die kompakte HTML-Kachel
@@ -108,17 +154,49 @@ class LCNClimateControl extends IPSModuleStrict
         $runtimeRooms = [];
         $valid = true;
         $position = 100;
+        $seenTargets = [];
+        $seenRoutes = [];
 
         foreach ($rooms as $room) {
             if (!$room['Enabled']) {
                 continue;
             }
 
-            if (!$this->ValidateRoom($room, false)) {
+            $targetKey = (string) $room['TargetVariable'];
+            $routeKey = implode('|', [
+                (string) $room['SendModule'],
+                (string) $room['Table'],
+                (string) $room['UpKey'],
+                (string) $room['DownKey']
+            ]);
+
+            if ($room['TargetVariable'] > 0 && isset($seenTargets[$targetKey])) {
+                $valid = false;
+                $this->SendDebug(
+                    'Config',
+                    sprintf('%s: S1Target #%d ist bereits dem Raum %s zugeordnet.', $room['Name'], $room['TargetVariable'], $seenTargets[$targetKey]),
+                    0
+                );
+                continue;
+            }
+
+            if ($room['SendModule'] > 0 && isset($seenRoutes[$routeKey])) {
+                $valid = false;
+                $this->SendDebug(
+                    'Config',
+                    sprintf('%s: dieselbe LCN-Sendemodul-/TS-Route wird bereits von %s verwendet.', $room['Name'], $seenRoutes[$routeKey]),
+                    0
+                );
+                continue;
+            }
+
+            if (!$this->ValidateRoom($room, true)) {
                 $valid = false;
                 continue;
             }
 
+            $seenTargets[$targetKey] = $room['Name'];
+            $seenRoutes[$routeKey] = $room['Name'];
             $runtimeRooms[] = $room;
 
             $targetID = $room['TargetVariable'];
@@ -167,20 +245,30 @@ class LCNClimateControl extends IPSModuleStrict
         }
 
         $this->SetRuntimeRooms($runtimeRooms);
+        $this->SetBuffer('ConfigurationValid', $valid ? '1' : '0');
+
+        $runtimeTargets = [];
+        foreach ($runtimeRooms as $runtimeRoom) {
+            $runtimeTargets[(int) $runtimeRoom['TargetVariable']] = true;
+        }
+        foreach ($interruptedCoolingJobs as $interruptedTarget => $interruptedName) {
+            if ($interruptedTarget > 0 && isset($runtimeTargets[$interruptedTarget])) {
+                $this->SetRoomError(
+                    $interruptedTarget,
+                    $interruptedName . ': Kühlfahrt durch Übernehmen/Update unterbrochen; Endlage nicht bestätigt.'
+                );
+            }
+        }
+
         $this->CleanupStaleRoomObjects($rooms);
         $this->ApplyModeVisibility();
 
-        if (!$valid) {
-            $this->SetStatus(self::STATUS_CONFIG_ERROR);
-        } elseif (count($runtimeRooms) === 0) {
-            $this->SetStatus(self::STATUS_INACTIVE);
-        } elseif ($this->ReadAttributeString('LastError') !== '') {
-            $this->SetStatus(self::STATUS_RUNTIME_ERROR);
-        } else {
-            $this->SetStatus(self::STATUS_ACTIVE);
+        $this->RefreshRuntimeStatus();
+        $this->PushVisualizationState();
+        } finally {
+            IPS_SemaphoreLeave($applyLock);
         }
 
-        $this->PushVisualizationState();
     }
 
     public function MessageSink(int $TimeStamp, int $SenderID, int $Message, array $Data): void
@@ -189,56 +277,90 @@ class LCNClimateControl extends IPSModuleStrict
             return;
         }
 
-        $room = $this->FindRoomByTarget($SenderID);
-        if ($room !== null) {
-            // Niemals $Data interpretieren: den echten aktuellen Variablenwert lesen.
-            $value = $this->ReadTarget($SenderID);
-            if ($value !== null) {
-                $currentJob = $this->GetCurrentJob();
-                $jobOwnsTarget = is_array($currentJob)
-                    && (int) ($currentJob['TargetVariable'] ?? 0) === $SenderID;
-
-                if ($this->GetMode() === self::MODE_HEATING && !$jobOwnsTarget) {
-                    $this->SetValueIfChanged($this->HeatIdent($SenderID), $value);
-                    $this->StoreLastHeatingTarget($SenderID, $value);
-                }
-            }
-
-            $this->PushVisualizationRow($room);
+        if (!IPS_SemaphoreEnter('LCNC_' . $this->InstanceID, 2000)) {
+            $this->SendDebug(
+                'MessageSink',
+                'Rückmeldung konnte wegen einer länger laufenden exklusiven Modulaktion nicht sofort verarbeitet werden.',
+                0
+            );
             return;
         }
 
-        // Isttemperaturänderungen übertragen nur noch genau diesen einen Wert.
-        $temperatureRoom = $this->FindRoomByTemperature($SenderID);
-        if ($temperatureRoom !== null) {
+        $targetRoom = null;
+        $temperatureRoom = null;
+
+        try {
+            $room = $this->FindRoomByTarget($SenderID);
+            if ($room !== null) {
+                // Niemals $Data interpretieren: dessen Aufbau ist je nach
+                // Symcon-Nachrichtentyp nicht verbindlich dokumentiert.
+                $value = $this->ReadTarget($SenderID);
+                if ($value !== null) {
+                    $jobOwnsTarget = $this->HasJobForTarget($SenderID);
+
+                    if ($this->GetMode() === self::MODE_HEATING && !$jobOwnsTarget) {
+                        $this->SetValueIfChanged($this->HeatIdent($SenderID), $value);
+                        $this->StoreLastHeatingTarget($SenderID, $value);
+                    }
+                }
+
+                $targetRoom = $room;
+            } else {
+                $temperatureRoom = $this->FindRoomByTemperature($SenderID);
+            }
+        } finally {
+            IPS_SemaphoreLeave('LCNC_' . $this->InstanceID);
+        }
+
+        // HTML-SDK-Nachrichten werden außerhalb des kritischen Abschnitts
+        // verschickt, damit die Queue-Sperre möglichst kurz gehalten wird.
+        if ($targetRoom !== null) {
+            $this->PushVisualizationRow($targetRoom);
+        } elseif ($temperatureRoom !== null) {
             $this->PushVisualizationTemperature($temperatureRoom);
         }
     }
 
     public function RequestAction(string $Ident, mixed $Value): void
     {
-        if ($Ident === 'Mode') {
-            $this->RequestMode((int) $Value);
-            return;
+        if (!IPS_SemaphoreEnter('LCNC_' . $this->InstanceID, 2000)) {
+            throw new RuntimeException('LCN-Klimasteuerung ist kurzzeitig beschäftigt. Bitte erneut versuchen.');
         }
 
-        $rooms = $this->GetRuntimeRooms();
-        foreach ($rooms as $room) {
+        try {
+            if ($this->GetBuffer('ConfigurationValid') === '0') {
+                throw new RuntimeException(
+                    'Konfiguration fehlerhaft. Aus Sicherheitsgründen werden keine LCN-Befehle gesendet, bis alle aktiven Räume korrekt zugeordnet sind.'
+                );
+            }
 
-            $targetID = $room['TargetVariable'];
+            if (IPS_GetKernelRunlevel() !== KR_READY) {
+                throw new RuntimeException('IP-Symcon ist noch nicht vollständig betriebsbereit.');
+            }
 
-            if ($Ident === $this->HeatIdent($targetID)) {
-                $this->RequestHeatingTarget($room, (float) $Value);
+            if ($Ident === 'Mode') {
+                $this->RequestMode((int) $Value);
                 return;
             }
 
-            if ($Ident === $this->CoolIdent($targetID)) {
-                $this->RequestCoolingState($room, (bool) $Value);
-                return;
-            }
-        }
+            foreach ($this->GetRuntimeRooms() as $room) {
+                $targetID = $room['TargetVariable'];
 
-        throw new InvalidArgumentException('Unbekannte Aktion: ' . $Ident);
+                if ($Ident === $this->HeatIdent($targetID)) {
+                    $this->RequestHeatingTarget($room, (float) $Value);
+                    return;
+                }
+
+                if ($Ident === $this->CoolIdent($targetID)) {
+                    $this->RequestCoolingState($room, (bool) $Value);
+                    return;
+                }
+            }
+
+            throw new InvalidArgumentException('Unbekannte Aktion: ' . $Ident);
+        } finally {
+            IPS_SemaphoreLeave('LCNC_' . $this->InstanceID);
+        }
     }
 
     public function Worker(): void
@@ -248,47 +370,106 @@ class LCNClimateControl extends IPSModuleStrict
         }
 
         try {
-            $job = $this->GetCurrentJob();
-            if (!is_array($job)) {
-                $job = $this->StartNextJob();
-                if (!is_array($job)) {
-                    $this->SetTimerInterval('Worker', 0);
-                    if ($this->ReadAttributeString('LastError') !== '') {
-                        $this->SetStatus(self::STATUS_RUNTIME_ERROR);
-                    } else {
-                        $this->SetStatus(self::STATUS_ACTIVE);
-                    }
-                    $this->PushVisualizationMeta();
-                    return;
-                }
-            }
+            try {
+                $job = $this->GetCurrentJob();
 
-            $this->ProcessJob($job);
+                if (!is_array($job)) {
+                    $job = $this->StartNextJob();
+
+                    if (!is_array($job)) {
+                        $pending = $this->GetPendingMode();
+                        if ($pending !== null) {
+                            $this->ApplyModeChange($pending);
+                            return;
+                        }
+
+                        $this->SetTimerInterval('Worker', 0);
+                        $this->RefreshRuntimeStatus();
+                        $this->PushVisualizationMeta();
+                        return;
+                    }
+                }
+
+                $this->ProcessJob($job);
+            } catch (Throwable $e) {
+                $job = $this->GetCurrentJob();
+                $message = 'Interner Worker-Fehler: ' . $e->getMessage();
+                $this->SendDebug('Worker-Exception', $message, 0);
+
+                if (is_array($job)) {
+                    $targetID = (int) ($job['TargetVariable'] ?? 0);
+                    $name = (string) ($job['Name'] ?? 'Raum');
+                    $this->SetRoomError($targetID, $name . ': ' . $message);
+                    $this->SetBuffer('CurrentJob', '');
+                    if ($targetID > 0) {
+                        $this->PushVisualizationRowByTarget($targetID);
+                    }
+                } else {
+                    $this->WriteAttributeString('LastError', $message);
+                }
+
+                // Nach einem unerwarteten internen Fehler keinen automatischen
+                // Betriebsartwechsel fortsetzen. Andere bereits wartende Räume
+                // dürfen weiterlaufen.
+                $this->ClearPendingMode();
+                if ($this->GetQueue() === []) {
+                    $this->SetTimerInterval('Worker', 0);
+                }
+                $this->RefreshRuntimeStatus();
+                $this->PushVisualizationMeta();
+            }
         } finally {
             IPS_SemaphoreLeave('LCNC_' . $this->InstanceID);
         }
-    }
-
-    public function RequestAllTargets(): bool
-    {
-        $ok = true;
-        foreach ($this->GetRuntimeRooms() as $room) {
-            $ok = $this->RequestTargetRead($room['TargetVariable']) && $ok;
-        }
-        return $ok;
     }
 
     public function Abort(): void
     {
         if (IPS_SemaphoreEnter('LCNC_' . $this->InstanceID, 1000)) {
             try {
+                $affectedCooling = [];
+                if ($this->GetMode() === self::MODE_COOLING) {
+                    $jobs = [];
+                    $current = $this->GetCurrentJob();
+                    if (is_array($current)) {
+                        $jobs[] = $current;
+                    }
+                    foreach ($this->GetQueue() as $queued) {
+                        if (is_array($queued)) {
+                            $jobs[] = $queued;
+                        }
+                    }
+
+                    foreach ($jobs as $job) {
+                        $type = (string) ($job['RetargetType'] ?? $job['Type'] ?? '');
+                        if (in_array($type, [self::JOB_COOL_UP, self::JOB_COOL_DOWN], true)) {
+                            $affectedCooling[(int) ($job['TargetVariable'] ?? 0)] =
+                                (string) ($job['Name'] ?? 'Raum');
+                        }
+                    }
+                }
+
                 $this->SetBuffer('Queue', '[]');
                 $this->SetBuffer('CurrentJob', '');
                 $this->ClearPendingMode();
                 $this->SetTimerInterval('Worker', 0);
                 $this->SyncAllHeatingDisplayFromLCN();
-                $this->SetStatus($this->ReadAttributeString('LastError') === '' ? self::STATUS_ACTIVE : self::STATUS_RUNTIME_ERROR);
-                $this->SendDebug('Abort', 'Laufender Symcon-Auftrag wurde abgebrochen. LCN/GT8 bleiben unverändert bedienbar.', 0);
+
+                foreach ($affectedCooling as $targetID => $name) {
+                    if ($targetID > 0) {
+                        $this->SetRoomError(
+                            $targetID,
+                            $name . ': Kühlfahrt manuell abgebrochen; Endlage nicht bestätigt.'
+                        );
+                    }
+                }
+
+                $this->RefreshRuntimeStatus();
+                $this->SendDebug(
+                    'Abort',
+                    'Laufender Symcon-Auftrag wurde abgebrochen. LCN/GT8 bleiben unverändert bedienbar.',
+                    0
+                );
                 $this->PushVisualizationState();
             } finally {
                 IPS_SemaphoreLeave('LCNC_' . $this->InstanceID);
@@ -298,13 +479,19 @@ class LCNClimateControl extends IPSModuleStrict
 
     public function ClearError(): void
     {
-        $this->WriteAttributeString('LastError', '');
-        if (count($this->GetRuntimeRooms()) > 0) {
-            $this->SetStatus(self::STATUS_ACTIVE);
-        } else {
-            $this->SetStatus(self::STATUS_INACTIVE);
+        if (!IPS_SemaphoreEnter('LCNC_' . $this->InstanceID, 1000)) {
+            return;
         }
-        $this->PushVisualizationState();
+
+        try {
+            $this->WriteAttributeString('LastError', '');
+            $this->SetBuffer('RoomErrors', '{}');
+
+            $this->RefreshRuntimeStatus();
+            $this->PushVisualizationState();
+        } finally {
+            IPS_SemaphoreLeave('LCNC_' . $this->InstanceID);
+        }
     }
 
     private function RequestMode(int $Mode): void
@@ -316,8 +503,6 @@ class LCNClimateControl extends IPSModuleStrict
         $currentMode = $this->GetMode();
         $pendingMode = $this->GetPendingMode();
 
-        // Ein bereits vorgemerkter Gegenwechsel kann durch Tippen auf die noch
-        // aktive Betriebsart wieder aufgehoben werden.
         if ($Mode === $currentMode) {
             if ($pendingMode !== null) {
                 $this->ClearPendingMode();
@@ -327,13 +512,9 @@ class LCNClimateControl extends IPSModuleStrict
         }
 
         if ($this->IsBusy()) {
-            // Kein stilles Ablehnen mehr: Ein Wechsel während einer laufenden
-            // LCN-Fahrt wird vorgemerkt. Bereits wartende Aufträge des alten
-            // Modus werden verworfen. Ein eventuell bereits gesendeter A7/A8-
-            // Schritt wird noch sauber bestätigt; unmittelbar danach erfolgt
-            // der gewünschte Betriebsartwechsel.
+            // Bereits gesendete Schritte laufen noch ihre Mindestwartezeit ab.
+            // Neue Schritte des alten Modus werden nicht mehr gestartet.
             $this->SetPendingMode($Mode);
-            $this->SetQueue([]);
             $this->PushVisualizationMeta();
             return;
         }
@@ -407,6 +588,8 @@ class LCNClimateControl extends IPSModuleStrict
         }
 
         $targetID = $Room['TargetVariable'];
+        $this->ClearRoomError($targetID);
+        $this->RefreshRuntimeStatus();
         $this->SetValueIfChanged($this->HeatIdent($targetID), (float) $rounded);
         $this->RetargetOrEnqueueHeatingJob($Room, (float) $rounded);
         $this->StartWorkerIfNeeded();
@@ -421,11 +604,13 @@ class LCNClimateControl extends IPSModuleStrict
         }
 
         $targetID = $Room['TargetVariable'];
+        $this->ClearRoomError($targetID);
+        $this->RefreshRuntimeStatus();
         $previous = $this->GetStoredCoolingState($targetID);
 
         // Optimistische Bedienanzeige; bei Fehler wird auf previous zurückgestellt.
         $this->SetValueIfChanged($this->CoolIdent($targetID), $State);
-        $this->EnqueueCoolingJob($Room, $State, $previous);
+        $this->RetargetOrEnqueueCoolingJob($Room, $State, $previous);
         $this->StartWorkerIfNeeded();
         $this->PushVisualizationRow($Room);
         $this->PushVisualizationMeta();
@@ -434,6 +619,44 @@ class LCNClimateControl extends IPSModuleStrict
     private function ProcessJob(array $Job): void
     {
         $targetID = (int) $Job['TargetVariable'];
+        $sendModule = (int) ($Job['SendModule'] ?? 0);
+
+        $feedbackRetryNotBefore = (int) ($Job['FeedbackRetryNotBeforeMs'] ?? 0);
+        if ($feedbackRetryNotBefore > $this->NowMs()) {
+            $this->YieldCurrentJob($Job);
+            return;
+        }
+
+        if (!$this->IsOperationalTargetVariable($targetID, $sendModule)) {
+            $feedbackFailures = (int) ($Job['FeedbackFailures'] ?? 0) + 1;
+
+            if ($feedbackFailures <= self::SEND_RETRY_MAX) {
+                $Job['FeedbackFailures'] = $feedbackFailures;
+                $Job['FeedbackRetryNotBeforeMs'] = $this->NowMs() + self::SEND_RETRY_DELAY_MS;
+                $this->SendDebug(
+                    'Feedback-Retry',
+                    sprintf(
+                        '%s: S1Target-Rückmeldeinstanz nicht betriebsbereit; Wiederholung %d/%d.',
+                        $Job['Name'],
+                        $feedbackFailures,
+                        self::SEND_RETRY_MAX
+                    ),
+                    0
+                );
+                $this->YieldCurrentJob($Job);
+                return;
+            }
+
+            $this->FailCurrentJob(
+                $Job,
+                'S1Target-Rückmeldung ist nicht betriebsbereit; es wurden keine weiteren LCN-Schritte gesendet.'
+            );
+            return;
+        }
+
+        $Job['FeedbackFailures'] = 0;
+        unset($Job['FeedbackRetryNotBeforeMs']);
+
         $actual = $this->ReadTarget($targetID);
         if ($actual === null) {
             $this->FailCurrentJob($Job, 'S1Target ist nicht lesbar.');
@@ -441,9 +664,17 @@ class LCNClimateControl extends IPSModuleStrict
         }
 
         $phase = (string) ($Job['Phase'] ?? self::PHASE_SEND);
+        $pendingMode = $this->GetPendingMode();
+
+        if ($pendingMode !== null && $phase === self::PHASE_SEND) {
+            $this->DiscardCurrentJob($Job);
+            return;
+        }
 
         if ($phase === self::PHASE_SEND) {
-            if ($this->ApplyPendingModeIfSafe()) {
+            $retryNotBefore = (int) ($Job['RetryNotBeforeMs'] ?? 0);
+            if ($retryNotBefore > $this->NowMs()) {
+                $this->YieldCurrentJob($Job);
                 return;
             }
 
@@ -462,27 +693,66 @@ class LCNClimateControl extends IPSModuleStrict
 
             $steps = (int) ($Job['Steps'] ?? 0);
             if ($steps >= $this->GetMaxSteps()) {
-                $this->FailCurrentJob($Job, 'Sicherheitsgrenze von ' . $this->GetMaxSteps() . ' Tastendrücken erreicht.');
+                $this->FailCurrentJob(
+                    $Job,
+                    'Sicherheitsgrenze von ' . $this->GetMaxSteps() . ' Tastendrücken erreicht.'
+                );
                 return;
             }
 
             if (!$this->SendShortKey($Job, $direction > 0)) {
-                $this->FailCurrentJob($Job, 'LCN-KURZ-Tastenbefehl konnte nicht gesendet werden.');
+                $sendFailures = (int) ($Job['SendFailures'] ?? 0) + 1;
+
+                if ($sendFailures <= self::SEND_RETRY_MAX) {
+                    $Job['SendFailures'] = $sendFailures;
+                    $Job['RetryNotBeforeMs'] = $this->NowMs() + self::SEND_RETRY_DELAY_MS;
+                    $this->SendDebug(
+                        'TS-Retry',
+                        sprintf(
+                            '%s: LCN_SendCommand nicht angenommen; Wiederholung %d/%d nach %d ms.',
+                            $Job['Name'],
+                            $sendFailures,
+                            self::SEND_RETRY_MAX,
+                            self::SEND_RETRY_DELAY_MS
+                        ),
+                        0
+                    );
+                    $this->YieldCurrentJob($Job);
+                    return;
+                }
+
+                $this->FailCurrentJob(
+                    $Job,
+                    'LCN-KURZ-Tastenbefehl wurde auch nach ' . self::SEND_RETRY_MAX . ' Wiederholungen nicht angenommen.'
+                );
                 return;
             }
+
+            $Job['SendFailures'] = 0;
+            unset($Job['RetryNotBeforeMs']);
 
             $Job['Before'] = $actual;
             $Job['Direction'] = $direction;
             $Job['Steps'] = $steps + 1;
             $Job['Phase'] = self::PHASE_WAIT;
-            $Job['WaitStage'] = 0;
             $Job['SentAtMs'] = $this->NowMs();
-            $this->SetCurrentJob($Job);
+
+            // Round-robin: Während dieser Raum wartet, darf der nächste Raum
+            // einen Schritt senden.
+            $this->YieldCurrentJob($Job);
             return;
         }
 
         $elapsed = $this->NowMs() - (int) ($Job['SentAtMs'] ?? 0);
         if ($elapsed < $this->GetStepWaitMs()) {
+            $this->YieldCurrentJob($Job);
+            return;
+        }
+
+        // Bei vorgemerktem Betriebsartwechsel ist der zuletzt gesendete Schritt
+        // jetzt lange genug gelaufen und wird nicht fortgesetzt.
+        if ($pendingMode !== null) {
+            $this->DiscardCurrentJob($Job);
             return;
         }
 
@@ -491,49 +761,61 @@ class LCNClimateControl extends IPSModuleStrict
         $direction = (int) ($Job['Direction'] ?? 0);
 
         if (abs($delta) >= 0.40) {
-            // Erwartet sind 1-K-Schritte. Jede andere oder entgegengesetzte Änderung
-            // wird als externer GT8-/LCN-Eingriff gewertet: GT8 hat Vorrang.
             $expectedDelta = $direction > 0 ? 1.0 : -1.0;
+
             if (abs($delta - $expectedDelta) > 0.35) {
                 $this->FailCurrentJob(
                     $Job,
-                    sprintf('Unerwartete S1Target-Änderung %.1f K erkannt; externer LCN/GT8-Eingriff hat Vorrang.', $delta)
+                    sprintf(
+                        'Unerwartete S1Target-Änderung %.1f K erkannt; externer LCN/GT8-Eingriff hat Vorrang.',
+                        $delta
+                    )
                 );
                 return;
             }
 
             $Job['NoChange'] = 0;
 
-            if ($this->HasPendingMode()) {
-                $this->SetBuffer('CurrentJob', '');
-                $this->ApplyPendingModeIfSafe();
+            if (isset($Job['RetargetType'])) {
+                $Job['Type'] = (string) $Job['RetargetType'];
+                unset($Job['RetargetType']);
+                $Job['NoChange'] = 0;
+                $Job['Phase'] = self::PHASE_SEND;
+                $this->SetCurrentJob($Job);
+                $this->ProcessJob($Job);
                 return;
+            }
+
+            if ($Job['Type'] === self::JOB_HEAT) {
+                $desired = (float) $Job['Desired'];
+                if (abs($actual - $desired) < 0.25) {
+                    $this->CompleteCurrentJob($Job, $actual);
+                    return;
+                }
             }
 
             $Job['Phase'] = self::PHASE_SEND;
             $this->SetCurrentJob($Job);
+            $this->ProcessJob($Job);
             return;
         }
 
-        $waitStage = (int) ($Job['WaitStage'] ?? 0);
-        if ($waitStage === 0) {
-            if (!$this->RequestTargetRead($targetID)) {
-                $this->FailCurrentJob($Job, 'LCN_RequestRead für S1Target fehlgeschlagen.');
-                return;
-            }
-            $Job['WaitStage'] = 1;
-            $Job['SentAtMs'] = $this->NowMs();
+        // Wurde während der Wartephase die Kühlrichtung geändert, gehört
+        // diese Nichtänderung noch zum ALTEN Tastendruck und darf niemals als
+        // Endlagenbestätigung der neuen Richtung gezählt werden.
+        if (isset($Job['RetargetType'])) {
+            $Job['Type'] = (string) $Job['RetargetType'];
+            unset($Job['RetargetType']);
+            $Job['NoChange'] = 0;
+            $Job['Phase'] = self::PHASE_SEND;
             $this->SetCurrentJob($Job);
+            $this->ProcessJob($Job);
             return;
         }
 
-        // Nach Tastendruck + bestätigter Nachlese weiterhin unverändert.
-        if ($this->HasPendingMode()) {
-            $this->SetBuffer('CurrentJob', '');
-            $this->ApplyPendingModeIfSafe();
-            return;
-        }
-
+        // Kein automatisches LCN_RequestRead mehr:
+        // Zwei zeitlich getrennte, erfolgreich gesendete Befehle ohne
+        // S1Target-Änderung bestätigen die Kühl-Endlage.
         $noChange = (int) ($Job['NoChange'] ?? 0) + 1;
         $Job['NoChange'] = $noChange;
 
@@ -545,20 +827,21 @@ class LCNClimateControl extends IPSModuleStrict
                 );
                 return;
             }
+
             $Job['Phase'] = self::PHASE_SEND;
             $this->SetCurrentJob($Job);
+            $this->ProcessJob($Job);
             return;
         }
 
         if ($noChange >= $this->GetNoChangeConfirmations()) {
-            // Kühlbetrieb braucht keinen Zahlenwert. Zwei (konfigurierbare) bestätigte
-            // unveränderte Tastendrücke bedeuten: LCN-Regler-Endlage erreicht.
             $this->CompleteCurrentJob($Job, $actual);
             return;
         }
 
         $Job['Phase'] = self::PHASE_SEND;
         $this->SetCurrentJob($Job);
+        $this->ProcessJob($Job);
     }
 
     private function CompleteCurrentJob(array $Job, float $Actual): void
@@ -581,12 +864,8 @@ class LCNClimateControl extends IPSModuleStrict
         );
 
         $this->SetBuffer('CurrentJob', '');
-
-        if ($this->ApplyPendingModeIfSafe()) {
-            return;
-        }
-
-        $this->StartNextJob();
+        $this->ClearRoomError($targetID);
+        $this->RefreshRuntimeStatus();
         $this->PushVisualizationRowByTarget($targetID);
         $this->PushVisualizationMeta();
     }
@@ -604,24 +883,71 @@ class LCNClimateControl extends IPSModuleStrict
                 }
             }
         } else {
-            $previous = (bool) ($Job['PreviousCoolingState'] ?? false);
+            // Der zuletzt erfolgreich bestätigte Kühlzustand bleibt die
+            // Fallbackanzeige. Eine teilweise angefahrene Zwischenlage wird
+            // nicht fälschlich als sicherer Zustand gespeichert.
+            $previous = (bool) ($Job['PreviousCoolingState'] ?? $this->GetStoredCoolingState($targetID));
             $this->SetValueIfChanged($this->CoolIdent($targetID), $previous);
-            $this->StoreCoolingState($targetID, $previous);
         }
 
         $message = ($Job['Name'] ?? 'Raum') . ': ' . $Reason;
-        $this->WriteAttributeString('LastError', $message);
+        $this->SetRoomError($targetID, $message);
         $this->SendDebug('ERROR', $message, 0);
-        $this->SetStatus(self::STATUS_RUNTIME_ERROR);
 
-        // Bei echtem Laufzeitfehler keine weitere Automatik und keinen
-        // vorgemerkten Betriebsartwechsel ausführen. Der Benutzer bekommt den
-        // Fehler sichtbar gemeldet und kann danach bewusst neu entscheiden.
+        // Ein einzelner Raumfehler darf niemals die komplette Heiz-/Kühlung
+        // aller übrigen Räume stoppen. Nur dieser Job wird beendet.
         $this->SetBuffer('CurrentJob', '');
-        $this->SetQueue([]);
-        $this->ClearPendingMode();
-        $this->SetTimerInterval('Worker', 0);
-        $this->PushVisualizationState();
+        $this->RefreshRuntimeStatus();
+
+        if ($this->GetQueue() === [] && $this->GetPendingMode() === null) {
+            $this->SetTimerInterval('Worker', 0);
+        }
+
+        $this->PushVisualizationRowByTarget($targetID);
+        $this->PushVisualizationMeta();
+    }
+
+    private function HasJobForTarget(int $TargetID): bool
+    {
+        if ($TargetID <= 0) {
+            return false;
+        }
+
+        $current = $this->GetCurrentJob();
+        if (is_array($current) && (int) ($current['TargetVariable'] ?? 0) === $TargetID) {
+            return true;
+        }
+
+        foreach ($this->GetQueue() as $queued) {
+            if ((int) ($queued['TargetVariable'] ?? 0) === $TargetID) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function YieldCurrentJob(array $Job): void
+    {
+        $targetID = (int) ($Job['TargetVariable'] ?? 0);
+        $queue = array_values(array_filter(
+            $this->GetQueue(),
+            fn(array $queued): bool => (int) ($queued['TargetVariable'] ?? 0) !== $targetID
+        ));
+        $queue[] = $Job;
+        $this->SetQueue($queue);
+        $this->SetBuffer('CurrentJob', '');
+    }
+
+    private function DiscardCurrentJob(array $Job): void
+    {
+        $targetID = (int) ($Job['TargetVariable'] ?? 0);
+        $this->SetBuffer('CurrentJob', '');
+
+        if ($targetID > 0) {
+            $this->PushVisualizationRowByTarget($targetID);
+        }
+        $this->PushVisualizationMeta();
     }
 
     private function StartNextJob(): ?array
@@ -632,45 +958,95 @@ class LCNClimateControl extends IPSModuleStrict
             return null;
         }
 
+        // Round-robin-Jobs tragen ihren vollständigen Zustand mit sich.
+        // Insbesondere WAIT, SentAtMs, Steps und NoChange dürfen beim erneuten
+        // Herausnehmen aus der Queue niemals zurückgesetzt werden.
         $job = array_shift($queue);
         $this->SetQueue($queue);
-        $job['Phase'] = self::PHASE_SEND;
-        $job['Steps'] = 0;
-        $job['NoChange'] = 0;
-        $job['WaitStage'] = 0;
         $this->SetCurrentJob($job);
-        $this->SetStatus(self::STATUS_ACTIVE);
+        $this->RefreshRuntimeStatus();
         return $job;
     }
 
     private function RetargetOrEnqueueHeatingJob(array $Room, float $Desired): void
     {
         $targetID = (int) $Room['TargetVariable'];
-        $current = $this->GetCurrentJob();
 
+        $current = $this->GetCurrentJob();
         if (is_array($current)
             && (int) ($current['TargetVariable'] ?? 0) === $targetID
             && ($current['Type'] ?? '') === self::JOB_HEAT) {
-            // Der gerade laufende Raum darf während der langsamen LCN-Fahrt
-            // sofort auf einen neuen Benutzerwunsch umgestellt werden.
-            // Ein bereits gesendeter Tastendruck wird noch sauber bestätigt;
-            // beim nächsten SEND-Schritt wird die Richtung aus dem neuen Ziel
-            // und dem echten S1Target neu berechnet.
+            // Phase, Before und SentAtMs bleiben erhalten. Ein bereits
+            // gesendeter A7/A8-Schritt wird vollständig ausgewertet; danach
+            // wird anhand des neuen Ziels weitergefahren.
             $current['Desired'] = $Desired;
             $current['NoChange'] = 0;
             $this->SetCurrentJob($current);
+            return;
+        }
 
-            // Ein eventuell bereits wartender älterer Auftrag desselben Raums
-            // ist damit überholt.
-            $queue = array_values(array_filter(
-                $this->GetQueue(),
-                fn(array $queued): bool => (int) ($queued['TargetVariable'] ?? 0) !== $targetID
-            ));
+        $queue = $this->GetQueue();
+        foreach ($queue as $index => $queued) {
+            if ((int) ($queued['TargetVariable'] ?? 0) !== $targetID
+                || ($queued['Type'] ?? '') !== self::JOB_HEAT) {
+                continue;
+            }
+
+            $queued['Desired'] = $Desired;
+            $queued['NoChange'] = 0;
+            $queue[$index] = $queued;
             $this->SetQueue($queue);
             return;
         }
 
         $this->EnqueueHeatJob($Room, $Desired);
+    }
+
+    private function RetargetOrEnqueueCoolingJob(array $Room, bool $State, bool $Previous): void
+    {
+        $targetID = (int) $Room['TargetVariable'];
+        $newType = $State ? self::JOB_COOL_UP : self::JOB_COOL_DOWN;
+
+        $current = $this->GetCurrentJob();
+        if (is_array($current) && (int) ($current['TargetVariable'] ?? 0) === $targetID) {
+            if (($current['Phase'] ?? self::PHASE_SEND) === self::PHASE_WAIT) {
+                // Der bereits gesendete alte Schritt wird noch sauber
+                // ausgewertet. Erst danach wird auf den neuen Kühlwunsch
+                // gewechselt.
+                $current['RetargetType'] = $newType;
+            } else {
+                $current['Type'] = $newType;
+                unset($current['RetargetType']);
+                $current['NoChange'] = 0;
+            }
+            $this->SetCurrentJob($current);
+            return;
+        }
+
+        $queue = $this->GetQueue();
+        foreach ($queue as $index => $queued) {
+            if ((int) ($queued['TargetVariable'] ?? 0) !== $targetID) {
+                continue;
+            }
+
+            if (($queued['Phase'] ?? self::PHASE_SEND) === self::PHASE_WAIT) {
+                $queued['RetargetType'] = $newType;
+            } else {
+                $queued['Type'] = $newType;
+                unset($queued['RetargetType']);
+                $queued['NoChange'] = 0;
+            }
+            // Der ursprüngliche stabile Kühlzustand bleibt als Rollbackwert.
+            if (!array_key_exists('PreviousCoolingState', $queued)) {
+                $queued['PreviousCoolingState'] = $Previous;
+            }
+
+            $queue[$index] = $queued;
+            $this->SetQueue($queue);
+            return;
+        }
+
+        $this->EnqueueCoolingJob($Room, $State, $Previous);
     }
 
     private function EnqueueHeatJob(array $Room, float $Desired): void
@@ -703,14 +1079,22 @@ class LCNClimateControl extends IPSModuleStrict
 
     private function AppendJob(array $Job): void
     {
-        $queue = $this->GetQueue();
+        $targetID = (int) ($Job['TargetVariable'] ?? 0);
 
-        // Für denselben Raum nur den neuesten noch nicht gestarteten Auftrag behalten.
-        $targetID = (int) $Job['TargetVariable'];
-        $queue = array_values(array_filter(
-            $queue,
-            fn(array $queued): bool => (int) ($queued['TargetVariable'] ?? 0) !== $targetID
-        ));
+        // Doppelte Jobs desselben Raums dürfen nicht entstehen. Benutzer-
+        // Änderungen laufen über die Retarget-Funktionen und erhalten einen
+        // eventuell bereits gesendeten WAIT-Schritt.
+        if ($this->HasJobForTarget($targetID)) {
+            $this->SendDebug('Queue', 'Doppelter Raumauftrag #' . $targetID . ' wurde nicht angelegt.', 0);
+            return;
+        }
+
+        $Job['Phase'] = self::PHASE_SEND;
+        $Job['Steps'] = 0;
+        $Job['NoChange'] = 0;
+        $Job['SentAtMs'] = 0;
+
+        $queue = $this->GetQueue();
         $queue[] = $Job;
         $this->SetQueue($queue);
     }
@@ -721,21 +1105,43 @@ class LCNClimateControl extends IPSModuleStrict
             $this->StartNextJob();
         }
         if ($this->GetCurrentJob() !== null || $this->GetQueue() !== []) {
-            $this->SetStatus(self::STATUS_ACTIVE);
+            $this->RefreshRuntimeStatus();
+            // Konservativ: global maximal vier TS-Befehle pro Sekunde.
+            // Die Mindestwartezeit pro EINZELNEM Raum bleibt zusätzlich
+            // vollständig erhalten.
             $this->SetTimerInterval('Worker', 250);
         }
     }
 
     private function SendShortKey(array $Job, bool $Up): bool
     {
+        if (IPS_GetKernelRunlevel() !== KR_READY) {
+            $this->SendDebug('TS', 'Kernel ist nicht KR_READY; es wird kein LCN-Befehl gesendet.', 0);
+            return false;
+        }
+
         $sendModule = (int) $Job['SendModule'];
-        if ($sendModule <= 0 || !IPS_InstanceExists($sendModule)) {
+        if (!$this->IsOperationalLCNModule($sendModule)) {
+            $this->SendDebug('TS', 'LCN-Sendemodul ist nicht betriebsbereit: #' . $sendModule, 0);
+            return false;
+        }
+
+        if (!IPS_FunctionExists('LCN_SendCommand')) {
+            $this->SendDebug('TS', 'LCN_SendCommand ist in dieser Symcon-Laufzeit nicht verfügbar.', 0);
             return false;
         }
 
         $table = $this->NormalizeTable((string) $Job['Table']);
         $key = (int) ($Up ? $Job['UpKey'] : $Job['DownKey']);
         $data = $this->BuildShortTSData($table, $key);
+
+        // Zusätzlich zur Instanz-Queue wird der sehr kurze eigentliche
+        // LCN_SendCommand-Aufruf global zwischen mehreren Klima-Instanzen
+        // serialisiert. Es gibt bewusst kein Sleep in dieser Sperre.
+        if (!IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 2000)) {
+            $this->SendDebug('TS', 'Globale LCN-Sendesperre war länger als 2 s belegt.', 0);
+            return false;
+        }
 
         try {
             $result = (bool) LCN_SendCommand($sendModule, 'TS', $data);
@@ -747,6 +1153,45 @@ class LCNClimateControl extends IPSModuleStrict
             return $result;
         } catch (Throwable $e) {
             $this->SendDebug('TS', 'LCN_SendCommand: ' . $e->getMessage(), 0);
+            return false;
+        } finally {
+            IPS_SemaphoreLeave(self::GLOBAL_LCN_SEND_SEMAPHORE);
+        }
+    }
+
+    private function IsOperationalLCNModule(int $InstanceID): bool
+    {
+        if ($InstanceID <= 0 || !IPS_InstanceExists($InstanceID)) {
+            return false;
+        }
+
+        try {
+            $instance = IPS_GetInstance($InstanceID);
+            return (int) ($instance['InstanceStatus'] ?? 0) === self::STATUS_ACTIVE
+                && strtoupper((string) ($instance['ModuleInfo']['ModuleID'] ?? '')) === strtoupper(self::LCN_MODULE_MODULE_ID)
+                && (int) ($instance['ModuleInfo']['ModuleType'] ?? -1) === 2;
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    private function IsOperationalTargetVariable(int $TargetVariable, int $ExpectedSendModule): bool
+    {
+        if ($TargetVariable <= 0 || !IPS_VariableExists($TargetVariable)) {
+            return false;
+        }
+
+        $parent = IPS_GetParent($TargetVariable);
+        if ($parent <= 0 || !IPS_InstanceExists($parent)) {
+            return false;
+        }
+
+        try {
+            $instance = IPS_GetInstance($parent);
+            return (int) ($instance['InstanceStatus'] ?? 0) === self::STATUS_ACTIVE
+                && strtoupper((string) ($instance['ModuleInfo']['ModuleID'] ?? '')) === strtoupper(self::LCN_VALUE_MODULE_ID)
+                && (int) ($instance['ConnectionID'] ?? 0) === $ExpectedSendModule;
+        } catch (Throwable) {
             return false;
         }
     }
@@ -764,27 +1209,6 @@ class LCNClimateControl extends IPSModuleStrict
         $keys[$Key - 1] = '1';
 
         return implode('', $tables) . implode('', $keys);
-    }
-
-    private function RequestTargetRead(int $TargetVariable): bool
-    {
-        if ($TargetVariable <= 0 || !IPS_VariableExists($TargetVariable)) {
-            return false;
-        }
-
-        $parent = IPS_GetParent($TargetVariable);
-        if ($parent <= 0 || !IPS_InstanceExists($parent)) {
-            return false;
-        }
-
-        try {
-            $result = (bool) LCN_RequestRead($parent);
-            $this->SendDebug('RequestRead', sprintf('S1Target #%d über LCN-Wertinstanz #%d', $TargetVariable, $parent), 0);
-            return $result;
-        } catch (Throwable $e) {
-            $this->SendDebug('RequestRead', 'Fehler: ' . $e->getMessage(), 0);
-            return false;
-        }
     }
 
     private function ValidateRoom(array $Room, bool $Debug = true): bool
@@ -811,9 +1235,10 @@ class LCNClimateControl extends IPSModuleStrict
         try {
             $instance = IPS_GetInstance($sendModule);
             $moduleID = strtoupper((string) ($instance['ModuleInfo']['ModuleID'] ?? ''));
-            if ($moduleID !== strtoupper(self::LCN_MODULE_MODULE_ID)) {
+            $moduleType = (int) ($instance['ModuleInfo']['ModuleType'] ?? -1);
+            if ($moduleID !== strtoupper(self::LCN_MODULE_MODULE_ID) || $moduleType !== 2) {
                 if ($Debug) {
-                    $this->SendDebug('Config', $Room['Name'] . ': gewählte Sendemodul-Instanz ist kein natives LCN Modul.', 0);
+                    $this->SendDebug('Config', $Room['Name'] . ': gewählte Sendemodul-Instanz ist kein natives LCN Modul/Splitter.', 0);
                 }
                 return false;
             }
@@ -837,6 +1262,19 @@ class LCNClimateControl extends IPSModuleStrict
 
         $targetParent = IPS_GetParent($targetID);
         if ($targetParent <= 0 || !IPS_InstanceExists($targetParent)) {
+            return false;
+        }
+
+        try {
+            $targetParentInfo = IPS_GetInstance($targetParent);
+            $targetParentModuleID = strtoupper((string) ($targetParentInfo['ModuleInfo']['ModuleID'] ?? ''));
+            if ($targetParentModuleID !== strtoupper(self::LCN_VALUE_MODULE_ID)) {
+                if ($Debug) {
+                    $this->SendDebug('Config', $Room['Name'] . ': Parent der Zielvariable ist keine native LCN-Value-Instanz.', 0);
+                }
+                return false;
+            }
+        } catch (Throwable) {
             return false;
         }
 
@@ -897,7 +1335,8 @@ class LCNClimateControl extends IPSModuleStrict
 
         return in_array($Room['Table'], ['A', 'B', 'C', 'D'], true)
             && $Room['UpKey'] >= 1 && $Room['UpKey'] <= 8
-            && $Room['DownKey'] >= 1 && $Room['DownKey'] <= 8;
+            && $Room['DownKey'] >= 1 && $Room['DownKey'] <= 8
+            && $Room['UpKey'] !== $Room['DownKey'];
     }
 
     private function GetRooms(): array
@@ -934,16 +1373,6 @@ class LCNClimateControl extends IPSModuleStrict
         return $rooms;
     }
 
-    private function CountEnabledValidRooms(array $Rooms): int
-    {
-        $count = 0;
-        foreach ($Rooms as $room) {
-            if ($room['Enabled'] && $this->ValidateRoom($room, false)) {
-                $count++;
-            }
-        }
-        return $count;
-    }
 
     private function FindRoomByTarget(int $TargetID): ?array
     {
@@ -1042,7 +1471,7 @@ class LCNClimateControl extends IPSModuleStrict
             'mode' => $this->GetMode(),
             'pendingMode' => $this->GetPendingMode(),
             'busy' => $this->IsBusy(),
-            'error' => $this->ReadAttributeString('LastError'),
+            'error' => $this->GetVisualizationErrorSummary(),
             'rows' => $rows
         ];
     }
@@ -1074,10 +1503,13 @@ class LCNClimateControl extends IPSModuleStrict
             $roomBusy = true;
             if (($job['Type'] ?? '') === self::JOB_HEAT) {
                 $displayTarget = (float) ($job['Desired'] ?? $displayTarget ?? 18.0);
-            } elseif (($job['Type'] ?? '') === self::JOB_COOL_UP) {
-                $displayCooling = true;
-            } elseif (($job['Type'] ?? '') === self::JOB_COOL_DOWN) {
-                $displayCooling = false;
+            } else {
+                $effectiveType = (string) ($job['RetargetType'] ?? $job['Type'] ?? '');
+                if ($effectiveType === self::JOB_COOL_UP) {
+                    $displayCooling = true;
+                } elseif ($effectiveType === self::JOB_COOL_DOWN) {
+                    $displayCooling = false;
+                }
             }
         }
 
@@ -1090,7 +1522,8 @@ class LCNClimateControl extends IPSModuleStrict
             'cooling' => $displayCooling,
             'heatIdent' => $this->HeatIdent($targetID),
             'coolIdent' => $this->CoolIdent($targetID),
-            'busy' => $roomBusy
+            'busy' => $roomBusy,
+            'error' => $this->GetRoomError($targetID)
         ];
     }
 
@@ -1114,7 +1547,7 @@ class LCNClimateControl extends IPSModuleStrict
             'mode' => $this->GetMode(),
             'pendingMode' => $this->GetPendingMode(),
             'busy' => $this->IsBusy(),
-            'error' => $this->ReadAttributeString('LastError')
+            'error' => $this->GetVisualizationErrorSummary()
         ]);
     }
 
@@ -1148,10 +1581,6 @@ class LCNClimateControl extends IPSModuleStrict
         $this->PushVisualizationPayload($this->BuildVisualizationState());
     }
 
-    private function HasPendingMode(): bool
-    {
-        return $this->GetPendingMode() !== null;
-    }
 
     private function GetPendingMode(): ?int
     {
@@ -1171,22 +1600,6 @@ class LCNClimateControl extends IPSModuleStrict
     private function ClearPendingMode(): void
     {
         $this->SetBuffer('PendingMode', '');
-    }
-
-    private function ApplyPendingModeIfSafe(): bool
-    {
-        $pending = $this->GetPendingMode();
-        if ($pending === null) {
-            return false;
-        }
-
-        // Aufruf erfolgt ausschließlich an sicheren Zustandsgrenzen:
-        // entweder vor einem neuen Tastendruck oder nachdem der zuletzt
-        // gesendete Tastendruck samt S1Target-Rückmeldung abgeschlossen ist.
-        $this->SetBuffer('CurrentJob', '');
-        $this->SetQueue([]);
-        $this->ApplyModeChange($pending);
-        return true;
     }
 
     private function ReadOwnFloat(string $Ident): ?float
@@ -1240,37 +1653,34 @@ class LCNClimateControl extends IPSModuleStrict
 
     private function ApplyModeVisibility(): void
     {
-        $cooling = $this->GetMode() === self::MODE_COOLING;
-
-        foreach ($this->GetRooms() as $room) {
-            if (!$room['Enabled'] || $room['TargetVariable'] <= 0) {
-                continue;
-            }
-
-            $heatID = $this->FindOwnObjectByIdent($this->HeatIdent($room['TargetVariable']));
-            if (is_int($heatID) && $heatID > 0 && IPS_ObjectExists($heatID)) {
-                IPS_SetHidden($heatID, $cooling);
-            }
-
-            $coolID = $this->FindOwnObjectByIdent($this->CoolIdent($room['TargetVariable']));
-            if (is_int($coolID) && $coolID > 0 && IPS_ObjectExists($coolID)) {
-                IPS_SetHidden($coolID, !$cooling);
-                IPS_SetInfo($coolID, 'AN = Kühlen = Ventil geöffnet; AUS = keine Kühlung = Ventil geschlossen.');
-            }
-        }
+        // Die eigene HTML-SDK-Kachel entscheidet selbst, welche Bedienung
+        // sichtbar ist. Objekt-Eigenschaften wie Hidden/Info gehören nach den
+        // Symcon-Vorgaben nach der Erstellung in die Hoheit des Benutzers und
+        // werden deshalb im laufenden Betrieb nicht mehr umgeschrieben.
     }
 
     private function EnsureLink(string $Ident, string $Name, int $TargetID, int $Position): void
     {
         $objectID = $this->FindOwnObjectByIdent($Ident);
+        $created = false;
+
         if (!is_int($objectID) || $objectID <= 0 || !IPS_LinkExists($objectID)) {
             $objectID = IPS_CreateLink();
             IPS_SetParent($objectID, $this->InstanceID);
             IPS_SetIdent($objectID, $Ident);
+            IPS_SetName($objectID, $Name);
+            IPS_SetPosition($objectID, $Position);
+            $created = true;
         }
-        IPS_SetName($objectID, $Name);
-        IPS_SetPosition($objectID, $Position);
-        IPS_SetLinkTargetID($objectID, $TargetID);
+
+        try {
+            $link = IPS_GetLink($objectID);
+            if ($created || (int) ($link['TargetID'] ?? 0) !== $TargetID) {
+                IPS_SetLinkTargetID($objectID, $TargetID);
+            }
+        } catch (Throwable) {
+            IPS_SetLinkTargetID($objectID, $TargetID);
+        }
     }
 
     private function CleanupStaleRoomObjects(array $Rooms): void
@@ -1340,7 +1750,9 @@ class LCNClimateControl extends IPSModuleStrict
 
     private function GetStepWaitMs(): int
     {
-        return max(500, min(3000, $this->ReadPropertyInteger('StepWaitMs')));
+        // 900 ms ist in der realen Anlage als zuverlässig bestätigt.
+        // Schnellere Werte werden absichtlich nicht zugelassen.
+        return max(900, min(3000, $this->ReadPropertyInteger('StepWaitMs')));
     }
 
     private function GetMaxSteps(): int
@@ -1403,6 +1815,101 @@ class LCNClimateControl extends IPSModuleStrict
             $this->SetValue($Ident, $Value);
         } catch (Throwable) {
             // Ident may be absent during configuration changes.
+        }
+    }
+
+    private function GetRoomErrors(): array
+    {
+        $decoded = json_decode($this->GetBuffer('RoomErrors'), true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    private function SetRoomError(int $TargetID, string $Message): void
+    {
+        if ($TargetID <= 0) {
+            $this->WriteAttributeString('LastError', $Message);
+            return;
+        }
+
+        $errors = $this->GetRoomErrors();
+        $errors[(string) $TargetID] = [
+            'message' => $Message,
+            'time' => time()
+        ];
+        $this->SetBuffer(
+            'RoomErrors',
+            json_encode($errors, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}'
+        );
+    }
+
+    private function ClearRoomError(int $TargetID): void
+    {
+        $errors = $this->GetRoomErrors();
+        $key = (string) $TargetID;
+
+        if (!array_key_exists($key, $errors)) {
+            return;
+        }
+
+        unset($errors[$key]);
+        $this->SetBuffer(
+            'RoomErrors',
+            json_encode($errors, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}'
+        );
+    }
+
+    private function GetRoomError(int $TargetID): string
+    {
+        $errors = $this->GetRoomErrors();
+        $entry = $errors[(string) $TargetID] ?? null;
+
+        if (is_array($entry)) {
+            return (string) ($entry['message'] ?? '');
+        }
+        return is_string($entry) ? $entry : '';
+    }
+
+    private function GetVisualizationErrorSummary(): string
+    {
+        if ($this->GetBuffer('ConfigurationValid') === '0') {
+            return 'Konfiguration enthält ungültige oder mehrfach zugeordnete Räume.';
+        }
+
+        $fatal = $this->ReadAttributeString('LastError');
+        if ($fatal !== '') {
+            return $fatal;
+        }
+
+        $errors = $this->GetRoomErrors();
+        $count = count($errors);
+        if ($count === 0) {
+            return '';
+        }
+
+        if ($count === 1) {
+            $entry = reset($errors);
+            if (is_array($entry) && (string) ($entry['message'] ?? '') !== '') {
+                return (string) $entry['message'];
+            }
+            if (is_string($entry) && $entry !== '') {
+                return $entry;
+            }
+            return '1 Raum konnte nicht vollständig eingestellt werden.';
+        }
+
+        return $count . ' Räume konnten nicht vollständig eingestellt werden.';
+    }
+
+    private function RefreshRuntimeStatus(): void
+    {
+        if ($this->GetBuffer('ConfigurationValid') === '0') {
+            $this->SetStatus(self::STATUS_CONFIG_ERROR);
+        } elseif ($this->ReadAttributeString('LastError') !== '' || $this->GetRoomErrors() !== []) {
+            $this->SetStatus(self::STATUS_RUNTIME_ERROR);
+        } elseif (count($this->GetRuntimeRooms()) > 0) {
+            $this->SetStatus(self::STATUS_ACTIVE);
+        } else {
+            $this->SetStatus(self::STATUS_INACTIVE);
         }
     }
 

@@ -189,7 +189,17 @@ html, body {
     border-radius: 50%;
     background: var(--accent);
     vertical-align: middle;
-    animation: pulse 1s ease-in-out infinite alternate;
+    opacity: .75;
+}
+.room-row.error .room-name {
+    color: #c84a4a;
+}
+.room-row.error .room-name::before {
+    content: '!';
+    display: inline-block;
+    margin-right: 5px;
+    font-weight: 800;
+    color: #c84a4a;
 }
 .value {
     text-align: right;
@@ -268,9 +278,7 @@ input[type="range"]:disabled { cursor: default; opacity: .56; }
 }
 .busy-dot.on {
     opacity: 1;
-    animation: pulse 1s ease-in-out infinite alternate;
 }
-@keyframes pulse { from { opacity: .35; } to { opacity: 1; } }
 @media (max-width: 620px) {
     :root { --symcon-title-zone: 58px; }
     .content-scroll { padding: 0 8px 8px; }
@@ -322,7 +330,7 @@ let ui = {
 const draggingTargets = new Set();
 
 let actionInFlight = null;
-let queuedAction = null;
+let actionQueue = [];
 let actionTimeout = 0;
 let actionGeneration = 0;
 let queueTimer = 0;
@@ -450,16 +458,67 @@ function clearActionInFlight(dispatchQueued = true) {
     }
 }
 
+function queueAction(action) {
+    if (action.ident === 'Mode') {
+        // Ein Betriebsartwechsel macht noch nicht versendete Raumaktionen des
+        // alten Modus bedeutungslos. Vor dem Verwerfen wird deren optimistische
+        // Anzeige auf den letzten serverbestätigten Wert zurückgesetzt.
+        actionQueue
+            .filter(item => item.ident !== 'Mode')
+            .forEach(item => rollbackOptimisticAction(item));
+        actionQueue = actionQueue.filter(item => item.ident === 'Mode');
+
+        const modeIndex = actionQueue.findIndex(item => item.ident === 'Mode');
+        if (modeIndex >= 0) actionQueue[modeIndex] = action;
+        else actionQueue.unshift(action);
+        return;
+    }
+
+    // Unterschiedliche Räume bleiben vollständig erhalten. Nur mehrere noch
+    // nicht versendete Änderungen DERSELBEN Variable werden auf den neuesten
+    // Benutzerwunsch zusammengefasst.
+    const existingIndex = actionQueue.findIndex(item => item.ident === action.ident);
+    if (existingIndex >= 0) {
+        const previous = actionQueue[existingIndex];
+        if (previous.previousValue !== undefined) {
+            action.previousValue = previous.previousValue;
+        }
+        actionQueue[existingIndex] = action;
+    } else {
+        actionQueue.push(action);
+    }
+}
+
 function scheduleQueuedAction() {
-    if (actionInFlight || !queuedAction || queueTimer) return;
+    if (actionInFlight || actionQueue.length === 0 || queueTimer) return;
 
     queueTimer = window.setTimeout(() => {
         queueTimer = 0;
-        if (actionInFlight || !queuedAction) return;
-        const next = queuedAction;
-        queuedAction = null;
+        if (actionInFlight || actionQueue.length === 0) return;
+        const next = actionQueue.shift();
         dispatchAction(next);
     }, QUEUE_DELAY_MS);
+}
+
+function rollbackOptimisticAction(action) {
+    if (!action) return;
+
+    if (action.ident === 'Mode') {
+        state.pendingMode = null;
+        patchMode();
+        return;
+    }
+
+    const row = getRow(action.targetId);
+    if (!row || action.previousValue === undefined) return;
+
+    if (action.kind === 'heat') {
+        row.displayTarget = action.previousValue;
+        patchHeatRow(row);
+    } else if (action.kind === 'cool') {
+        row.cooling = Boolean(action.previousValue);
+        patchCoolRow(row);
+    }
 }
 
 function showWarning(message) {
@@ -476,7 +535,10 @@ function showWarning(message) {
 function dispatchAction(action) {
     const now = Date.now();
     const key = actionKey(action.ident, action.value);
-    if (key === lastActionKey && now - lastActionTime < ACTION_GUARD_MS) return;
+    if (key === lastActionKey && now - lastActionTime < ACTION_GUARD_MS) {
+        scheduleQueuedAction();
+        return;
+    }
 
     lastActionKey = key;
     lastActionTime = now;
@@ -487,34 +549,42 @@ function dispatchAction(action) {
     if (actionTimeout) window.clearTimeout(actionTimeout);
     actionTimeout = window.setTimeout(() => {
         if (!actionInFlight || generation !== actionGeneration) return;
+        const failed = actionInFlight;
+        rollbackOptimisticAction(failed);
         clearActionInFlight(true);
-        showWarning('Keine Rückmeldung von Symcon. Die tatsächliche LCN-Stellung wurde nicht automatisch erneut verändert.');
+        showWarning('Keine Rückmeldung von Symcon. Der lokale Anzeigewert wurde zurückgesetzt.');
     }, ACTION_TIMEOUT_MS);
 
     try {
         const result = requestAction(action.ident, action.value);
         if (result && typeof result.then === 'function') {
             result.catch(error => {
+                const failed = actionInFlight;
+                rollbackOptimisticAction(failed);
                 clearActionInFlight(true);
                 showWarning('Symcon-Kommunikation fehlgeschlagen: ' + String(error?.message || error));
             });
         }
     } catch (error) {
+        const failed = actionInFlight;
+        rollbackOptimisticAction(failed);
         clearActionInFlight(true);
         showWarning('Symcon-Kommunikation fehlgeschlagen: ' + String(error?.message || error));
     }
 }
 
 function sendAction(action) {
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-        showWarning('Keine Netzwerkverbindung. Es wurde kein Befehl an Symcon gesendet.');
+    // Der Browser-Netzwerkstatus wird bewusst NICHT ausgewertet. Die SymBox kann im
+    // lokalen Netz vollständig erreichbar sein, obwohl der Internetzugang
+    // ausgefallen ist. Entscheidend ist ausschließlich requestAction selbst.
+    if (action.ident !== 'Mode' && state.pendingMode !== null) {
+        rollbackOptimisticAction(action);
+        showWarning('Betriebsartwechsel läuft. Raumänderung danach erneut auswählen.');
         return;
     }
 
     if (actionInFlight || queueTimer) {
-        // Keine parallelen /api/-Aufrufe. Nur der jeweils neueste Folgewunsch
-        // bleibt erhalten und wird direkt nach der Serverbestätigung gesendet.
-        queuedAction = action;
+        queueAction(action);
         return;
     }
 
@@ -628,6 +698,7 @@ function createHeatRow(row) {
         const raw = current.displayTarget === null || current.displayTarget === undefined
             ? 18
             : Math.round(Number(current.displayTarget));
+        const previousValue = current.displayTarget;
         const desired = clamp(raw - 1, 18, 24);
         current.displayTarget = desired;
         patchHeatRow(current);
@@ -635,7 +706,8 @@ function createHeatRow(row) {
             ident: current.heatIdent,
             value: desired,
             kind: 'heat',
-            targetId: current.targetId
+            targetId: current.targetId,
+            previousValue
         });
     });
 
@@ -645,6 +717,7 @@ function createHeatRow(row) {
         const raw = current.displayTarget === null || current.displayTarget === undefined
             ? 18
             : Math.round(Number(current.displayTarget));
+        const previousValue = current.displayTarget;
         const desired = raw < 18 ? 18 : clamp(raw + 1, 18, 24);
         current.displayTarget = desired;
         patchHeatRow(current);
@@ -652,11 +725,16 @@ function createHeatRow(row) {
             ident: current.heatIdent,
             value: desired,
             kind: 'heat',
-            targetId: current.targetId
+            targetId: current.targetId,
+            previousValue
         });
     });
 
-    slider.addEventListener('pointerdown', () => draggingTargets.add(targetId));
+    slider.addEventListener('pointerdown', () => {
+        const current = getRow(targetId);
+        if (current) slider.dataset.startValue = String(current.displayTarget ?? slider.value);
+        draggingTargets.add(targetId);
+    });
     slider.addEventListener('input', () => {
         draggingTargets.add(targetId);
         const current = getRow(targetId);
@@ -669,6 +747,9 @@ function createHeatRow(row) {
     slider.addEventListener('change', () => {
         const current = getRow(targetId);
         if (!current) return;
+        const previousValue = slider.dataset.startValue !== undefined
+            ? Number(slider.dataset.startValue)
+            : current.displayTarget;
         const desired = Number(slider.value);
         current.displayTarget = desired;
         draggingTargets.delete(targetId);
@@ -677,7 +758,8 @@ function createHeatRow(row) {
             ident: current.heatIdent,
             value: desired,
             kind: 'heat',
-            targetId: current.targetId
+            targetId: current.targetId,
+            previousValue
         });
     });
     slider.addEventListener('pointerup', () => draggingTargets.delete(targetId));
@@ -717,26 +799,30 @@ function createCoolRow(row) {
     off.addEventListener('click', () => {
         const current = getRow(targetId);
         if (!current || current.cooling === false) return;
+        const previousValue = current.cooling;
         current.cooling = false;
         patchCoolRow(current);
         sendAction({
             ident: current.coolIdent,
             value: false,
             kind: 'cool',
-            targetId: current.targetId
+            targetId: current.targetId,
+            previousValue
         });
     });
 
     on.addEventListener('click', () => {
         const current = getRow(targetId);
         if (!current || current.cooling === true) return;
+        const previousValue = current.cooling;
         current.cooling = true;
         patchCoolRow(current);
         sendAction({
             ident: current.coolIdent,
             value: true,
             kind: 'cool',
-            targetId: current.targetId
+            targetId: current.targetId,
+            previousValue
         });
     });
 
@@ -765,6 +851,8 @@ function patchHeatRow(row) {
     const sliderValue = clamp(raw, 18, 24);
 
     ref.grid.classList.toggle('busy', Boolean(row.busy));
+    ref.grid.classList.toggle('error', Boolean(row.error));
+    ref.grid.title = row.error || '';
     ref.name.textContent = row.name || 'Raum';
     ref.name.title = row.name || '';
 
@@ -784,6 +872,8 @@ function patchCoolRow(row) {
     if (!ref || ref.type !== 'cool') return;
 
     ref.grid.classList.toggle('busy', Boolean(row.busy));
+    ref.grid.classList.toggle('error', Boolean(row.error));
+    ref.grid.title = row.error || '';
     ref.name.textContent = row.name || 'Raum';
     ref.name.title = row.name || '';
     ref.actual.textContent = formatTemp(row.temperature, 1);

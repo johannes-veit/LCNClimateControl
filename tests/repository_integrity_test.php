@@ -40,8 +40,8 @@ if (!str_contains($php, "LCN_SendCommand(\$sendModule, 'TS', \$data)")) {
     fwrite(STDERR, "TS-Sendeweg fehlt.\n");
     exit(1);
 }
-if (!str_contains($php, 'LCN_RequestRead($parent)')) {
-    fwrite(STDERR, "S1Target-Nachlese fehlt.\n");
+if (str_contains($php, 'LCN_RequestRead(')) {
+    fwrite(STDERR, "LCNClimateControl soll keine eigene LCN_RequestRead-Abfrage mehr auslösen.\n");
     exit(1);
 }
 

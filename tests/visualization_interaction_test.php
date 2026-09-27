@@ -18,8 +18,7 @@ $requiredHtml = [
     "message.type === 'row'",
     "message.type === 'meta'",
     'ui.modeHeat.disabled = false',
-    'ui.modeCool.disabled = false',
-    'Betriebsartwechsel vorgemerkt'
+    'ui.modeCool.disabled = false'
 ];
 
 foreach ($requiredHtml as $needle) {
@@ -29,15 +28,11 @@ foreach ($requiredHtml as $needle) {
     }
 }
 
-if (str_contains($html, 'if (state.busy || Number(state.mode)')) {
-    fwrite(STDERR, "Betriebsartschalter darf nicht mehr über state.busy blockiert werden.\n");
-    exit(1);
-}
-
 $requiredPhp = [
     'PendingMode',
-    'ApplyPendingModeIfSafe',
     'ApplyModeChange',
+    'YieldCurrentJob',
+    'DiscardCurrentJob',
     'PushVisualizationMeta',
     'PushVisualizationRow',
     'PushVisualizationTemperature'
@@ -50,8 +45,8 @@ foreach ($requiredPhp as $needle) {
     }
 }
 
-if (str_contains($php, "throw new RuntimeException('Betriebsart kann während eines laufenden LCN-Auftrags nicht gewechselt werden.')")) {
-    fwrite(STDERR, "Alter Busy-Abbruch für Betriebsartwechsel ist noch vorhanden.\n");
+if (str_contains($php, "Betriebsart kann während eines laufenden LCN-Auftrags nicht gewechselt werden.")) {
+    fwrite(STDERR, "Alter Busy-Abbruch ist wieder vorhanden.\n");
     exit(1);
 }
 

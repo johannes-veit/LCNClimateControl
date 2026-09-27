@@ -1,6 +1,6 @@
 # LCN Climate Control für IP-Symcon 9
 
-Version **0.2.6**
+Version **0.2.9**
 
 GitHub-fertige Modulbibliothek für eine bestehende LCN-Fußbodenheizung mit GT8/GUS-Regelung.
 
@@ -72,7 +72,6 @@ Je Raum:
 - immer nur **ein** LCN-Tastenbefehl zur Zeit
 - standardmäßig 900 ms Wartezeit nach jedem Tastendruck
 - echte S1Target-Rückmeldung vor dem nächsten Schritt
-- bei fehlender Änderung gezielte `LCN_RequestRead()`-Nachlese
 - Kühl-Endlage erst nach mehrfach bestätigter unveränderter Rückmeldung
 - harte Maximalzahl an Tastendrücken verhindert Endlosschleifen
 - keine `IPS_Sleep()`-Schleifen
@@ -84,7 +83,7 @@ Je Raum:
 ## Version
 - Library GUID: `{1623F760-7CBB-4DDE-B08F-7625BCFC0278}`
 - Modul GUID: `{209F110B-3209-4726-BEC9-12E9223F667B}`
-- Version: 0.2.6
+- Version: 0.2.9
 
 
 ## Kompakte Kachel ab 0.2.1
@@ -144,3 +143,17 @@ Inhalt scrollt. Dadurch können Raumzeilen nicht mehr unter den Instanznamen lau
 
 Die Zeile **Betriebsart / Heizen / Kühlen** bleibt beim Scrollen direkt unter
 dem Symcon-eigenen Instanznamen sichtbar.
+
+## Parallelbedienung 0.2.8
+
+Queue und Worker sind gegen zeitgleiche Visualisierungsaktionen serialisiert.
+Pro Raum kann nur ein Auftrag existieren. Round-robin erhält den vollständigen
+WAIT-Zustand jedes Raums; global werden konservativ höchstens etwa vier
+TS-Befehle pro Sekunde erzeugt.
+
+## Stabilitätsaudit 0.2.9
+
+Die Laufzeit trennt Raumfehler voneinander, serialisiert UI/Worker und den eigentlichen
+LCN-Sendecall, erhält schnelle Bedienaktionen verschiedener Räume und prüft die native
+LCN-Modul-/LCN-Value-Zuordnung strenger. Ein einzelner Raumfehler stoppt die restlichen
+Räume nicht mehr.
