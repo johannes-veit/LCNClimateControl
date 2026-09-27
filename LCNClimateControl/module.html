@@ -5,44 +5,84 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 :root {
-    color-scheme: light dark;
-    --accent: #00c7a5;
-    --accent-soft: rgba(0, 199, 165, 0.15);
-    --accent-border: rgba(0, 199, 165, 0.36);
-    --text: #1f2328;
-    --muted: #6f7780;
-    --line: rgba(127, 127, 127, 0.22);
-    --control-bg: rgba(127, 127, 127, 0.10);
-    --row-hover: rgba(127, 127, 127, 0.055);
-}
-@media (prefers-color-scheme: dark) {
-    :root {
-        --text: #f1f3f4;
-        --muted: #aeb4ba;
-        --line: rgba(255, 255, 255, 0.14);
-        --control-bg: rgba(255, 255, 255, 0.08);
-        --row-hover: rgba(255, 255, 255, 0.04);
-    }
+    /*
+     * Farben stammen aus der geöffneten Symcon-Visualisierung. Der Browser-
+     * bzw. Betriebssystem-Dark-Mode wird bewusst nicht separat ausgewertet.
+     */
+    --accent: var(--accent-color, #00c7a5);
+    --surface: var(--card-color, #ffffff);
+    --text: var(--content-color, #1f2328);
+    --accent-soft: color-mix(in srgb, var(--accent) 15%, transparent);
+    --accent-border: color-mix(in srgb, var(--accent) 36%, transparent);
+    --muted: color-mix(in srgb, var(--text) 62%, transparent);
+    --line: color-mix(in srgb, var(--text) 20%, transparent);
+    --control-bg: color-mix(in srgb, var(--text) 10%, transparent);
+    --row-hover: color-mix(in srgb, var(--text) 5.5%, transparent);
+
+    /*
+     * Dieser Bereich gehört optisch dem von Symcon selbst gezeichneten
+     * Instanznamen und dem Maximieren-Symbol. Er darf niemals Teil des
+     * scrollenden Modul-Inhalts sein.
+     */
+    --symcon-title-zone: 62px;
 }
 * { box-sizing: border-box; }
 html, body {
     margin: 0;
     padding: 0;
     width: 100%;
-    min-height: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
     background: transparent;
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
 }
-body { overflow: auto; }
 #app {
     width: 100%;
-    /*
-     * Der obere Bereich der Kachel gehört Symcon selbst (Instanzname + Maximieren).
-     * Deshalb beginnt unsere eigene Bedienoberfläche bewusst deutlich darunter.
-     * So überlagert "Betriebsart" niemals mehr den von Symcon gezeichneten Titel.
-     */
-    padding: 48px 14px 10px;
+    height: 100%;
+    min-height: 0;
+    display: grid;
+    grid-template-rows: var(--symcon-title-zone) minmax(0, 1fr);
+    overflow: hidden;
+    padding: 0;
+    background: transparent;
+}
+
+/*
+ * OPAKER TITELSCHUTZ
+ * ------------------
+ * Symcon zeichnet Instanzname/Maximieren über dem HTML-Inhalt. Dieser feste,
+ * nicht scrollende Bereich liegt direkt darunter und besitzt denselben
+ * Kartenhintergrund. Dadurch kann niemals eine Raumzeile hinter dem Titel
+ * sichtbar werden, selbst wenn sehr weit nach unten gescrollt wird.
+ */
+.symcon-title-shield {
+    grid-row: 1;
+    min-height: var(--symcon-title-zone);
+    background: var(--surface);
+    position: relative;
+    z-index: 50;
+    pointer-events: none;
+}
+
+/*
+ * Ausschließlich dieser Bereich scrollt. Das iframe/body selbst bleibt fest.
+ * Dieses Muster verhindert die wiederkehrende Überschneidung mit dem
+ * Symcon-Kachelkopf grundsätzlich statt nur mit zusätzlichem Padding.
+ */
+.content-scroll {
+    grid-row: 2;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-gutter: stable;
+    padding: 0 14px 10px;
+    background: var(--surface);
 }
 .mode-line {
     display: flex;
@@ -221,7 +261,8 @@ input[type="range"]:disabled { cursor: default; opacity: .56; }
 }
 @keyframes pulse { from { opacity: .35; } to { opacity: 1; } }
 @media (max-width: 620px) {
-    #app { padding: 44px 8px 8px; }
+    :root { --symcon-title-zone: 58px; }
+    .content-scroll { padding: 0 8px 8px; }
     .mode-line { margin-bottom: 5px; }
     .mode-label { font-size: 14px; }
     .segmented button { font-size: 13px; padding: 5px 12px; }
@@ -785,39 +826,53 @@ function renderStructure() {
     ui.rows = new Map();
     root.replaceChildren();
 
-    buildMode(root);
+    // Der erste Grid-Bereich bleibt immer unbewegt und deckt den Bereich unter
+    // dem von Symcon selbst gezeichneten Instanznamen opak ab.
+    const titleShield = document.createElement('div');
+    titleShield.className = 'symcon-title-shield';
+    titleShield.setAttribute('aria-hidden', 'true');
+
+    // Nur dieser zweite Bereich darf scrollen. Dadurch können Raumzeilen den
+    // Symcon-Titelbereich konstruktiv nicht mehr erreichen.
+    const content = document.createElement('div');
+    content.className = 'content-scroll';
+
+    root.appendChild(titleShield);
+    root.appendChild(content);
+
+    buildMode(content);
 
     if (state.rows.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'empty';
         empty.textContent = 'Keine aktiven Räume konfiguriert.';
-        root.appendChild(empty);
+        content.appendChild(empty);
     } else {
         const mode = Number(state.mode) === 1 ? 1 : 0;
         const table = document.createElement('div');
         table.className = 'table';
         table.appendChild(makeHeader(mode));
         state.rows.forEach(row => table.appendChild(mode === 0 ? createHeatRow(row) : createCoolRow(row)));
-        root.appendChild(table);
+        content.appendChild(table);
         ui.table = table;
     }
 
     const note = document.createElement('div');
     note.className = 'note';
     note.textContent = 'Kühlen = FHB-Ventil geöffnet · Nicht kühlen = FHB-Ventil geschlossen';
-    root.appendChild(note);
+    content.appendChild(note);
     ui.note = note;
 
     const error = document.createElement('div');
     error.className = 'error';
     error.hidden = true;
-    root.appendChild(error);
+    content.appendChild(error);
     ui.error = error;
 
     const warning = document.createElement('div');
     warning.className = 'warning';
     warning.hidden = true;
-    root.appendChild(warning);
+    content.appendChild(warning);
     ui.warning = warning;
 
     renderedMode = Number(state.mode) === 1 ? 1 : 0;

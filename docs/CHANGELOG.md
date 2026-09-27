@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.5
+- Scroll-/Titelarchitektur der Kachel grundlegend korrigiert.
+- `html`/`body` und der äußere Kachelcontainer scrollen nicht mehr.
+- Der von Symcon belegte Titelbereich erhält einen permanenten opaken Hintergrundschutz.
+- Nur ein eigener Inhaltsbereich unterhalb des Symcon-Titels ist scrollbar.
+- Dadurch können Raumzeilen beim Scrollen konstruktiv nicht mehr hinter Instanzname oder Maximieren-Symbol laufen.
+- Kartenhintergrund/Textfarbe werden jetzt direkt aus den Symcon-Themevariablen übernommen.
+- Desktop und mobile Ansicht besitzen getrennte feste Titelzonen.
+- Keine Änderung an LCN-, A7/A8-, S1Target-, Heiz- oder Kühllogik.
+
 ## 0.2.4
 - Visualisierungsaktionen vollständig überarbeitet und an den bewährten HTML-SDK-Transport der LCN-Jalousie angelehnt.
 - Kein stilles Verschlucken von `requestAction()`-Fehlern mehr; Transportfehler werden in der Kachel angezeigt.

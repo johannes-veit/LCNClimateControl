@@ -12,13 +12,18 @@ if (str_contains($html, 'LCN Heizung / Kühlung')) {
     exit(1);
 }
 
-if (!str_contains($html, 'padding: 48px 14px 10px;')) {
-    fwrite(STDERR, "Desktop-Sicherheitsabstand für den Symcon-Kachelkopf fehlt.\n");
+if (!str_contains($html, '--symcon-title-zone: 62px;')) {
+    fwrite(STDERR, "Feste Desktop-Titelzone fehlt.\n");
     exit(1);
 }
 
-if (!str_contains($html, '#app { padding: 44px 8px 8px; }')) {
-    fwrite(STDERR, "Mobile-Sicherheitsabstand für den Symcon-Kachelkopf fehlt.\n");
+if (!str_contains($html, '--symcon-title-zone: 58px;')) {
+    fwrite(STDERR, "Feste mobile Titelzone fehlt.\n");
+    exit(1);
+}
+
+if (!str_contains($html, '.symcon-title-shield')) {
+    fwrite(STDERR, "Opaker Titelschutz fehlt.\n");
     exit(1);
 }
 
