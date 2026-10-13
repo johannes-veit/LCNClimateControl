@@ -21,6 +21,7 @@ class IPSModuleStrict {
  public function GetValue(string $s): mixed {return $this->own[$s]??0;}
  public function SetValue(string $s,mixed $v): void {$this->own[$s]=$v;}
  public function SetTimerInterval(string $name,int $ms): void {$this->interval=$ms;}
+ public function SetStatus(int $status): void {$this->attrs['Status']=$status;}
  public function SendDebug(string $a,string $b,int $c): void {}
  public function UpdateVisualizationValue(string $json): void {}
 }
