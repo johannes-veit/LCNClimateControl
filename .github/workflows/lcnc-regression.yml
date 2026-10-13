@@ -76,5 +76,7 @@ jobs:
         run: php tests/visualization_sticky_mode_test.php
       - name: PHP test - worker_exception_guard_test.php
         run: php tests/worker_exception_guard_test.php
+      - name: PHP test - runtime_heating_cooling_cycle_test.php
+        run: php tests/runtime_heating_cooling_cycle_test.php
       - name: Node frontend simulation
         run: node tests/ui_async_generation_test.js
