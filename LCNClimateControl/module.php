@@ -326,7 +326,7 @@ class LCNClimateControl extends IPSModuleStrict
 
         try {
             if ($this->GetBuffer('ConfigurationValid') === '0') {
-                $this->SendDebug('Config', $this->GetVisualizationErrorSummary(), 0);
+                $this->SendDebug('Config', $this->GetVisualizationErrorSummary() . ' Aus Sicherheitsgründen werden keine LCN-Befehle gesendet.', 0);
                 $this->PushVisualizationMeta();
                 return;
             }
