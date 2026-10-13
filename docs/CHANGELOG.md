@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.10
+- Konfigurationsdiagnose mit exaktem Raum und Instanz-/Variablen-IDs statt generischer Fehlermeldung.
+- Fail-Closed bei Bedienung und zusätzlich beim Worker geprüft; Konfigurationsfehler werden ohne Fatal-Popup im HTML-SDK angezeigt.
+- Fehlende oder unpassende native LCN-Value-Instanz, S1TargetEnabled, ConnectionID, Floattyp, Isttemperatur oder TS-Tasten werden konkret bezeichnet.
+- Späte Promise-Fehler des HTML-SDK dürfen nachfolgende Bedienaktionen nicht mehr zurücksetzen; bei Konfigurationsfehler erfolgt sofortiger Anzeige-Rollback.
+- Unveränderte LCN-TS-Kodierung, Kachelstruktur, A7/A8-Ablauflogik und Betriebsart-Persistenz.
+- GitHub-Actions: PHP 8.4 Syntax- und Regressionstests, Node-Asynchronitätsprüfung, Mock-Konfigurations- und vollständige Heiz-/Kühl-/Heizsimulation.
+- Reale SymBox-/LCN-Praxistests und mechanische Ventilrückmeldung sind ausdrücklich nicht Bestandteil der Offline-Freigabe.
+
+
 ## 0.2.9
 - Stabilitätsaudit gegen aktuelle IP-Symcon-9-SDK-Vorgaben und die vorhandene LCN/PCHK-Anbindung.
 - Visualisierungs-Transport korrigiert: schnelle Bedienung verschiedener Räume wird nicht mehr auf nur einen globalen Folgebefehl reduziert. Unterschiedliche Raumaktionen bleiben erhalten; nur mehrfache noch nicht gesendete Änderungen derselben Variable werden zusammengefasst.
