@@ -11,7 +11,7 @@ const ctx={
   Date, JSON,Error,Number,String,
   actionInFlight:null, actionGeneration:0, actionTimeout:0,
   lastActionKey:'',lastActionTime:0, ACTION_GUARD_MS:0,ACTION_TIMEOUT_MS:6000,
-  requestAction:(id,value)=>({then:()=>({catch:(cb)=>callbacks.push(cb)})}),
+  requestAction:(id,value)=>({then:()=>{},catch:(cb)=>callbacks.push(cb)}),
   window:{setTimeout:()=>12,clearTimeout:()=>{}},
   actionKey:(id,value)=>id+value,
   scheduleQueuedAction:()=>{},rollbackOptimisticAction:(action)=>ctx.rollbacks.push(action.ident),
