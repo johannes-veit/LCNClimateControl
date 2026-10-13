@@ -1,0 +1,22 @@
+name: LCNClimateControl regression tests
+on:
+  push:
+    branches: ['fix/v0.2.10-tested']
+  pull_request:
+  workflow_dispatch:
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+      - name: PHP syntax and regression suite
+        run: |
+          php -l LCNClimateControl/module.php
+          find tests -name '*_test.php' -print0 | sort -z | xargs -0 -n1 php
+      - name: Frontend syntax
+        run: |
+          node --version
+          node tests/ui_async_generation_test.js
