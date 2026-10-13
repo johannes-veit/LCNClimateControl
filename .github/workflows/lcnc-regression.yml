@@ -1,0 +1,82 @@
+name: LCNClimateControl regression tests
+on:
+  push:
+    branches: ['fix/v0.2.10-tested']
+  pull_request:
+  workflow_dispatch:
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+      - name: PHP module syntax
+        run: php -l LCNClimateControl/module.php
+      - name: PHP test - applychanges_lock_test.php
+        run: php tests/applychanges_lock_test.php
+      - name: PHP test - configuration_guard_test.php
+        run: php tests/configuration_guard_test.php
+      - name: PHP test - cooling_abort_truth_test.php
+        run: php tests/cooling_abort_truth_test.php
+      - name: PHP test - fail_closed_configuration_test.php
+        run: php tests/fail_closed_configuration_test.php
+      - name: PHP test - feedback_path_guard_test.php
+        run: php tests/feedback_path_guard_test.php
+      - name: PHP test - frontend_action_queue_test.php
+        run: php tests/frontend_action_queue_test.php
+      - name: PHP test - kernel_ready_guard_test.php
+        run: php tests/kernel_ready_guard_test.php
+      - name: PHP test - local_network_independence_test.php
+        run: php tests/local_network_independence_test.php
+      - name: PHP test - messagesink_job_ownership_test.php
+        run: php tests/messagesink_job_ownership_test.php
+      - name: PHP test - messagesink_semaphore_test.php
+        run: php tests/messagesink_semaphore_test.php
+      - name: PHP test - public_api_test.php
+        run: php tests/public_api_test.php
+      - name: PHP test - queue_single_job_per_room_test.php
+        run: php tests/queue_single_job_per_room_test.php
+      - name: PHP test - repository_integrity_test.php
+        run: php tests/repository_integrity_test.php
+      - name: PHP test - requestread_resilience_test.php
+        run: php tests/requestread_resilience_test.php
+      - name: PHP test - room_error_isolation_test.php
+        run: php tests/room_error_isolation_test.php
+      - name: PHP test - runtime_configuration_simulation_test.php
+        run: php tests/runtime_configuration_simulation_test.php
+      - name: PHP test - safe_pacing_test.php
+        run: php tests/safe_pacing_test.php
+      - name: PHP test - scheduler_round_robin_test.php
+        run: php tests/scheduler_round_robin_test.php
+      - name: PHP test - scheduler_state_preservation_test.php
+        run: php tests/scheduler_state_preservation_test.php
+      - name: PHP test - send_retry_and_bus_lock_test.php
+        run: php tests/send_retry_and_bus_lock_test.php
+      - name: PHP test - status_preservation_test.php
+        run: php tests/status_preservation_test.php
+      - name: PHP test - symcon_object_ownership_test.php
+        run: php tests/symcon_object_ownership_test.php
+      - name: PHP test - ts_encoder_test.php
+        run: php tests/ts_encoder_test.php
+      - name: PHP test - visualization_busy_indicator_test.php
+        run: php tests/visualization_busy_indicator_test.php
+      - name: PHP test - visualization_header_spacing_test.php
+        run: php tests/visualization_header_spacing_test.php
+      - name: PHP test - visualization_interaction_test.php
+        run: php tests/visualization_interaction_test.php
+      - name: PHP test - visualization_performance_test.php
+        run: php tests/visualization_performance_test.php
+      - name: PHP test - visualization_regression_test.php
+        run: php tests/visualization_regression_test.php
+      - name: PHP test - visualization_scroll_header_test.php
+        run: php tests/visualization_scroll_header_test.php
+      - name: PHP test - visualization_sticky_mode_test.php
+        run: php tests/visualization_sticky_mode_test.php
+      - name: PHP test - worker_exception_guard_test.php
+        run: php tests/worker_exception_guard_test.php
+      - name: PHP test - runtime_heating_cooling_cycle_test.php
+        run: php tests/runtime_heating_cooling_cycle_test.php
+      - name: Node frontend simulation
+        run: node tests/ui_async_generation_test.js

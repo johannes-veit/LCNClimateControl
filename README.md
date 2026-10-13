@@ -1,6 +1,6 @@
 # LCN Climate Control für IP-Symcon 9
 
-Version **0.2.9**
+Version **0.2.10**
 
 GitHub-fertige Modulbibliothek für eine bestehende LCN-Fußbodenheizung mit GT8/GUS-Regelung.
 
@@ -83,7 +83,7 @@ Je Raum:
 ## Version
 - Library GUID: `{1623F760-7CBB-4DDE-B08F-7625BCFC0278}`
 - Modul GUID: `{209F110B-3209-4726-BEC9-12E9223F667B}`
-- Version: 0.2.9
+- Version: 0.2.10
 
 
 ## Kompakte Kachel ab 0.2.1
@@ -157,3 +157,13 @@ Die Laufzeit trennt Raumfehler voneinander, serialisiert UI/Worker und den eigen
 LCN-Sendecall, erhält schnelle Bedienaktionen verschiedener Räume und prüft die native
 LCN-Modul-/LCN-Value-Zuordnung strenger. Ein einzelner Raumfehler stoppt die restlichen
 Räume nicht mehr.
+
+## Version 0.2.10 – Konfigurationsdiagnose und Bedien-Sicherheit
+
+- Ungültige Raumzuordnungen werden mit Raumname und beteiligten IDs konkret gemeldet.
+- Keine fatalen Bedien-Dialoge durch den bewusst blockierten Betriebsartwechsel bei Konfigurationsfehlern. Der Fehler steht in der Kachel und im Modul-Debug.
+- Worker blockiert auch bereits anstehende Aufträge, solange die Konfiguration fehlerhaft ist.
+- Smartphone-/Browser-Kachel behandelt verspätete Fehlerrückmeldungen ohne Rollback neuer Aktionen.
+- PHP-/Node-Regressionstests und gemockte IP-Symcon-Laufzeit für Heizen → Kühlen → Heizen sind im GitHub-Workflow enthalten.
+- Bekannte Grenzen: Die S1Target-basierte Endlagenerkennung beweist keine mechanische Ventilstellung; reale SymBox-/GT8-Tests bleiben nötig.
+

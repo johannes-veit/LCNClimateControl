@@ -559,6 +559,7 @@ function dispatchAction(action) {
         const result = requestAction(action.ident, action.value);
         if (result && typeof result.then === 'function') {
             result.catch(error => {
+                if (!actionInFlight || generation !== actionGeneration) return;
                 const failed = actionInFlight;
                 rollbackOptimisticAction(failed);
                 clearActionInFlight(true);
@@ -1045,6 +1046,16 @@ function handleMessage(data) {
     }
 
     applyMessage(message);
+
+    // Fehlkonfiguration sofort anzeigen und optimistische Aktion zurückrollen.
+    if (actionInFlight && (message.type === 'state' || message.type === 'meta') &&
+        typeof message.error === 'string' && message.error.startsWith('Konfiguration fehlerhaft')) {
+        const rejected = actionInFlight;
+        rollbackOptimisticAction(rejected);
+        clearActionInFlight(true);
+        showWarning(message.error);
+        return;
+    }
 
     if (actionInFlight && isActionAcknowledged(message, actionInFlight)) {
         clearActionInFlight(true);
