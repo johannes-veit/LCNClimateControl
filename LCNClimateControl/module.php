@@ -123,6 +123,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->SetBuffer('PendingMode', '');
         $this->SetBuffer('RoomErrors', '{}');
         $this->SetBuffer('ConfigurationValid', '1');
+        $this->SetBuffer('ConfigurationErrors', '[]');
 
         // Laufzeitfehler aus älteren Versionen dürfen nach einem erfolgreichen
         // ApplyChanges nicht dauerhaft hängen bleiben. Ab 0.2.9 werden
@@ -172,20 +173,16 @@ class LCNClimateControl extends IPSModuleStrict
 
             if ($room['TargetVariable'] > 0 && isset($seenTargets[$targetKey])) {
                 $valid = false;
-                $this->SendDebug(
-                    'Config',
-                    sprintf('%s: S1Target #%d ist bereits dem Raum %s zugeordnet.', $room['Name'], $room['TargetVariable'], $seenTargets[$targetKey]),
-                    0
+                $this->RecordConfigurationError(
+                    sprintf('%s: S1Target #%d ist bereits dem Raum %s zugeordnet.', $room['Name'], $room['TargetVariable'], $seenTargets[$targetKey])
                 );
                 continue;
             }
 
             if ($room['SendModule'] > 0 && isset($seenRoutes[$routeKey])) {
                 $valid = false;
-                $this->SendDebug(
-                    'Config',
-                    sprintf('%s: dieselbe LCN-Sendemodul-/TS-Route wird bereits von %s verwendet.', $room['Name'], $seenRoutes[$routeKey]),
-                    0
+                $this->RecordConfigurationError(
+                    sprintf('%s: dieselbe LCN-Sendemodul-/TS-Route wird bereits von %s verwendet.', $room['Name'], $seenRoutes[$routeKey])
                 );
                 continue;
             }
@@ -329,9 +326,9 @@ class LCNClimateControl extends IPSModuleStrict
 
         try {
             if ($this->GetBuffer('ConfigurationValid') === '0') {
-                throw new RuntimeException(
-                    'Konfiguration fehlerhaft. Aus Sicherheitsgründen werden keine LCN-Befehle gesendet, bis alle aktiven Räume korrekt zugeordnet sind.'
-                );
+                $this->SendDebug('Config', $this->GetVisualizationErrorSummary(), 0);
+                $this->PushVisualizationMeta();
+                return;
             }
 
             if (IPS_GetKernelRunlevel() !== KR_READY) {
@@ -370,6 +367,12 @@ class LCNClimateControl extends IPSModuleStrict
         }
 
         try {
+            // Fail-closed auch für bereits wartende Worker-Aufträge.
+            if ($this->GetBuffer('ConfigurationValid') === '0') {
+                $this->SetTimerInterval('Worker', 0);
+                return;
+            }
+
             try {
                 $job = $this->GetCurrentJob();
 
@@ -1211,25 +1214,43 @@ class LCNClimateControl extends IPSModuleStrict
         return implode('', $tables) . implode('', $keys);
     }
 
+    private function RecordConfigurationError(string $Message): void
+    {
+        $errors = json_decode($this->GetBuffer('ConfigurationErrors'), true);
+        if (!is_array($errors)) {
+            $errors = [];
+        }
+        if (!in_array($Message, $errors, true)) {
+            $errors[] = $Message;
+            $this->SetBuffer(
+                'ConfigurationErrors',
+                json_encode($errors, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '[]'
+            );
+        }
+        $this->SendDebug('Config', $Message, 0);
+    }
+
     private function ValidateRoom(array $Room, bool $Debug = true): bool
     {
         if (!$Room['Enabled']) {
             return false;
         }
 
-        if ($Room['Name'] === '') {
+        $fail = function (string $Message) use ($Room, $Debug): bool {
             if ($Debug) {
-                $this->SendDebug('Config', 'Raum ohne Namen.', 0);
+                $name = $Room['Name'] !== '' ? $Room['Name'] : '(Raum ohne Namen)';
+                $this->RecordConfigurationError($name . ': ' . $Message);
             }
             return false;
+        };
+
+        if ($Room['Name'] === '') {
+            return $fail('Raumname fehlt.');
         }
 
-        $sendModule = $Room['SendModule'];
+        $sendModule = (int) $Room['SendModule'];
         if ($sendModule <= 0 || !IPS_InstanceExists($sendModule)) {
-            if ($Debug) {
-                $this->SendDebug('Config', $Room['Name'] . ': LCN-Sendemodul ungültig.', 0);
-            }
-            return false;
+            return $fail('LCN-Sendemodul #' . $sendModule . ' fehlt oder ist keine Instanz.');
         }
 
         try {
@@ -1237,106 +1258,73 @@ class LCNClimateControl extends IPSModuleStrict
             $moduleID = strtoupper((string) ($instance['ModuleInfo']['ModuleID'] ?? ''));
             $moduleType = (int) ($instance['ModuleInfo']['ModuleType'] ?? -1);
             if ($moduleID !== strtoupper(self::LCN_MODULE_MODULE_ID) || $moduleType !== 2) {
-                if ($Debug) {
-                    $this->SendDebug('Config', $Room['Name'] . ': gewählte Sendemodul-Instanz ist kein natives LCN Modul/Splitter.', 0);
-                }
-                return false;
+                return $fail(sprintf(
+                    'Sendemodul #%d: unerwartete LCN-GUID %s oder Modultyp %d (erwartet nativer LCN-Splitter Typ 2).',
+                    $sendModule, $moduleID, $moduleType
+                ));
             }
-        } catch (Throwable) {
-            return false;
+        } catch (Throwable $e) {
+            return $fail('LCN-Sendemodul nicht prüfbar: ' . $e->getMessage());
         }
 
-        $targetID = $Room['TargetVariable'];
+        $targetID = (int) $Room['TargetVariable'];
         if ($targetID <= 0 || !IPS_VariableExists($targetID)) {
-            return false;
+            return $fail('S1Target-Variable #' . $targetID . ' fehlt.');
         }
 
         try {
             $var = IPS_GetVariable($targetID);
             if ((int) ($var['VariableType'] ?? -1) !== VARIABLETYPE_FLOAT) {
-                return false;
+                return $fail('S1Target-Variable #' . $targetID . ' ist nicht Float.');
             }
-        } catch (Throwable) {
-            return false;
-        }
-
-        $targetParent = IPS_GetParent($targetID);
-        if ($targetParent <= 0 || !IPS_InstanceExists($targetParent)) {
-            return false;
-        }
-
-        try {
-            $targetParentInfo = IPS_GetInstance($targetParent);
-            $targetParentModuleID = strtoupper((string) ($targetParentInfo['ModuleInfo']['ModuleID'] ?? ''));
-            if ($targetParentModuleID !== strtoupper(self::LCN_VALUE_MODULE_ID)) {
-                if ($Debug) {
-                    $this->SendDebug('Config', $Room['Name'] . ': Parent der Zielvariable ist keine native LCN-Value-Instanz.', 0);
-                }
-                return false;
+            $targetParent = IPS_GetParent($targetID);
+            if ($targetParent <= 0 || !IPS_InstanceExists($targetParent)) {
+                return $fail('S1Target-Variable #' . $targetID . ' hat keine native LCN-Value-Elterninstanz.');
             }
-        } catch (Throwable) {
-            return false;
-        }
-
-        // Prozesssicherheitsprüfung: Die S1Target-LCN-Wertinstanz muss technisch
-        // genau an dem LCN-Modul hängen, über das auch A7/A8 gesendet werden.
-        // Dadurch kann eine falsch zugeordnete Sendemodul-ID nicht unbemerkt
-        // einen anderen Raum bedienen.
-        try {
-            $targetParentInstance = IPS_GetInstance($targetParent);
-            $connectionID = (int) ($targetParentInstance['ConnectionID'] ?? 0);
+            $targetInstance = IPS_GetInstance($targetParent);
+            $valueModuleID = strtoupper((string) ($targetInstance['ModuleInfo']['ModuleID'] ?? ''));
+            if ($valueModuleID !== strtoupper(self::LCN_VALUE_MODULE_ID)) {
+                return $fail(sprintf('Elterninstanz #%d ist kein natives LCN-Value-Modul (%s).', $targetParent, $valueModuleID));
+            }
+            $connectionID = (int) ($targetInstance['ConnectionID'] ?? 0);
             if ($connectionID <= 0 || $connectionID !== $sendModule) {
-                if ($Debug) {
-                    $this->SendDebug(
-                        'Config',
-                        sprintf(
-                            '%s: S1Target ConnectionID #%d passt nicht zum gewählten LCN-Sendemodul #%d.',
-                            $Room['Name'],
-                            $connectionID,
-                            $sendModule
-                        ),
-                        0
-                    );
-                }
-                return false;
+                return $fail(sprintf(
+                    'S1Target ConnectionID #%d passt nicht zum LCN-Sendemodul #%d.',
+                    $connectionID, $sendModule
+                ));
             }
-        } catch (Throwable) {
-            return false;
-        }
-
-        // Schutz vor versehentlich ausgewählter beliebiger Float-Variable:
-        // die native LCN-Wertinstanz muss S1TargetEnabled als Property besitzen und aktiv haben.
-        try {
             $cfg = json_decode(IPS_GetConfiguration($targetParent), true);
             if (!is_array($cfg) || !array_key_exists('S1TargetEnabled', $cfg) || !(bool) $cfg['S1TargetEnabled']) {
-                if ($Debug) {
-                    $this->SendDebug('Config', $Room['Name'] . ': Parent der Zielvariable ist keine aktive S1Target-LCN-Wertinstanz.', 0);
-                }
-                return false;
+                return $fail('LCN-Value-Instanz #' . $targetParent . ': S1TargetEnabled fehlt oder ist deaktiviert.');
             }
-        } catch (Throwable) {
-            return false;
+        } catch (Throwable $e) {
+            return $fail('S1Target-/LCN-Value-Konfiguration nicht prüfbar: ' . $e->getMessage());
         }
 
-        $tempID = $Room['TemperatureVariable'];
+        $tempID = (int) $Room['TemperatureVariable'];
         if ($tempID > 0) {
             if (!IPS_VariableExists($tempID)) {
-                return false;
+                return $fail('Isttemperatur-Variable #' . $tempID . ' fehlt.');
             }
             try {
-                $var = IPS_GetVariable($tempID);
-                if ((int) ($var['VariableType'] ?? -1) !== VARIABLETYPE_FLOAT) {
-                    return false;
+                if ((int) (IPS_GetVariable($tempID)['VariableType'] ?? -1) !== VARIABLETYPE_FLOAT) {
+                    return $fail('Isttemperatur-Variable #' . $tempID . ' ist nicht Float.');
                 }
-            } catch (Throwable) {
-                return false;
+            } catch (Throwable $e) {
+                return $fail('Isttemperatur nicht prüfbar: ' . $e->getMessage());
             }
         }
 
-        return in_array($Room['Table'], ['A', 'B', 'C', 'D'], true)
-            && $Room['UpKey'] >= 1 && $Room['UpKey'] <= 8
-            && $Room['DownKey'] >= 1 && $Room['DownKey'] <= 8
-            && $Room['UpKey'] !== $Room['DownKey'];
+        if (!in_array($Room['Table'], ['A', 'B', 'C', 'D'], true)) {
+            return $fail('Ungültige TS-Tastentabelle.');
+        }
+        if ($Room['UpKey'] < 1 || $Room['UpKey'] > 8 ||
+            $Room['DownKey'] < 1 || $Room['DownKey'] > 8 ||
+            $Room['UpKey'] === $Room['DownKey']) {
+            return $fail('Auf-/Zu-TS-Tasten müssen verschieden und jeweils zwischen 1 und 8 liegen.');
+        }
+
+        return true;
     }
 
     private function GetRooms(): array
@@ -1872,7 +1860,13 @@ class LCNClimateControl extends IPSModuleStrict
     private function GetVisualizationErrorSummary(): string
     {
         if ($this->GetBuffer('ConfigurationValid') === '0') {
-            return 'Konfiguration enthält ungültige oder mehrfach zugeordnete Räume.';
+            $problems = json_decode($this->GetBuffer('ConfigurationErrors'), true);
+            if (!is_array($problems) || $problems === []) {
+                return 'Konfiguration fehlerhaft. Bitte Modul-Debug prüfen.';
+            }
+            $preview = array_slice($problems, 0, 3);
+            return 'Konfiguration fehlerhaft: ' . implode(' | ', $preview)
+                . (count($problems) > 3 ? ' | weitere ' . (count($problems) - 3) . ' Fehler.' : '');
         }
 
         $fatal = $this->ReadAttributeString('LastError');
