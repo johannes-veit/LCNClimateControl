@@ -2,7 +2,7 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const html=fs.readFileSync('LCNClimateControl/module.html','utf8');
 function extract(name,next) {
-  const a=html.indexOf('function '+name+'('), b=html.indexOf('function '+next+'(',a+5);
+  const a=html.indexOf('function '+name+'('), b=next==='END' ? html.indexOf('\nrenderStructure();',a+5) : html.indexOf('function '+next+'(',a+5);
   if(a<0||b<0)throw Error('missing function '+name);
   return html.slice(a,b);
 }
@@ -36,7 +36,7 @@ const s2={actionInFlight:{ident:'Mode',value:1},rolled:0,cleared:0,warned:0,
  rollbackOptimisticAction:()=>s2.rolled++,clearActionInFlight:()=>{s2.cleared++;s2.actionInFlight=null;},
  showWarning:()=>s2.warned++};
 vm.createContext(s2);
-vm.runInContext(extract('handleMessage','renderStructure'),s2);
+vm.runInContext(extract('handleMessage','END'),s2);
 s2.handleMessage({type:'meta',error:'Konfiguration fehlerhaft: EG Bad'});
 assert.equal(s2.rolled,1);
 assert.equal(s2.cleared,1);
