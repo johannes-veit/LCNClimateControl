@@ -1460,7 +1460,12 @@ class LCNClimateControl extends IPSModuleStrict
             return null;
         }
         try {
-            return (float) GetValue($TargetID);
+            $value = (float) GetValue($TargetID);
+            // Ein gesperrter LCN-Regler kann einen Statuscode >3000
+            // als Solltemperatur melden. Dieser darf niemals als
+            // Heizsollwert gespeichert oder ueber A7/A8 nachgefahren werden.
+            return is_finite($value) && $value >= 5.0 && $value <= 60.0
+                ? $value : null;
         } catch (Throwable) {
             return null;
         }
