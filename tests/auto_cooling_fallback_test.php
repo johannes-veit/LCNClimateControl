@@ -25,6 +25,7 @@ final class AutoProbe {
     public array $jobs = [];
     public array $buffers = [];
     public array $errors = [];
+    public array $coolingStored = [];
     public array $room = ['Name'=>'EG Buero','SendModule'=>11,'TargetVariable'=>777,'Table'=>'A','UpKey'=>7,'DownKey'=>8];
     public int $now = 10000;
     private function ReadPropertyBoolean(string $name): bool { return (bool) ($this->properties[$name] ?? false); }
@@ -55,6 +56,8 @@ final class AutoProbe {
     public function chooseRoom(array $room, bool $on): void { $this->EnqueueCoolingAutomatically($room,$on,false); }
     public function summary(): string { return $this->DirectCoolingFallbackSummary(); }
     public function recover(array $job): void { $this->HandleDirectCoolingRecovery($job); }
+    public function processDirect(array $job): void { $this->HandleDirectCoolingJob($job); }
+    private function StoreCoolingState(int $target, bool $state): void { $this->coolingStored[$target]=$state; }
     public function lockState(int $target, string $state): void { $this->DirectCoolingSetLockState($target,$state); }
 }
 function check(bool $condition, string $message): void { if (!$condition) throw new RuntimeException($message); }
@@ -210,4 +213,25 @@ $saved->lockState(777,'locked');
 $saved->lockState(777,'');
 check(!isset($saved->attrs['DirectCoolingLockMappings']['777']),
     'durable mapping must be deleted only after confirmed unlock');
-echo "PASS: 17 fallback, 11-room, idle-room, lock-mapping and recovery scenarios\n";
+// 18. Vollstaendige neue Direktschaltung EIN ueber den echten PHP
+// Zustandsautomaten (ohne Hardware): lock -> feedback -> relay -> feedback.
+$z=new AutoProbe();config($z);
+$GLOBALS['v'][101]=true;$GLOBALS['v'][102]=false;
+$z->choose(true);$job=$z->jobs[0];$z->jobs=[];
+$z->processDirect($job);
+check(count($z->jobs)===1 && $z->jobs[0]['Phase']==='lock_wait',
+    'direct phase must first send controller lock');
+$job=$z->jobs[0];$z->jobs=[];$z->now=$job['SentAtMs']+600;
+$GLOBALS['v'][101]=false;$GLOBALS['updated'][101]=time();
+$z->processDirect($job);
+check($z->attrs['DirectCoolingLocks']['777']==='locked'
+    && $z->jobs[0]['Phase']==='relay','lock feedback must precede relay');
+$job=$z->jobs[0];$z->jobs=[];$z->processDirect($job);
+check($z->jobs[0]['Phase']==='relay_wait','relay switch must await feedback');
+$job=$z->jobs[0];$z->jobs=[];$z->now=$job['SentAtMs']+600;
+$GLOBALS['v'][102]=true;$GLOBALS['updated'][102]=time();
+$z->processDirect($job);
+check(($z->coolingStored[777]??false)===true
+    && $z->jobs===[], 'only confirmed relay ON may store cooling ON');
+$GLOBALS['v'][101]=true;$GLOBALS['v'][102]=false;
+echo "PASS: 18 scenarios incl. simulated full lock/relay state machine\n";
