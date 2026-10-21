@@ -19,5 +19,7 @@ jobs:
         run: php tests/direct_cooling_masks.php
       - name: Automatic fallback and recovery scenarios
         run: php tests/auto_cooling_fallback_test.php
-      - name: Assert opt-in default off
-        run: grep -q "RegisterPropertyBoolean('DirectCoolingEnabled', false)" LCNClimateControl/module.php
+      - name: Assert safe automatic fallback enabled
+        run: |
+          grep -q "RegisterPropertyBoolean('DirectCoolingEnabled', true)" LCNClimateControl/module.php
+          grep -q "EnqueueCoolingAutomatically" LCNClimateControl/DirectCooling.php
