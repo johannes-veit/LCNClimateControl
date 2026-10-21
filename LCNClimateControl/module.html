@@ -981,7 +981,8 @@ function renderStructure() {
 
     const note = document.createElement('div');
     note.className = 'note';
-    note.textContent = 'Kühlen = FHB-Ventil geöffnet · Nicht kühlen = FHB-Ventil geschlossen';
+    note.textContent = 'Kühlen = FHB-Ventil geöffnet · Nicht kühlen = FHB-Ventil geschlossen. ' +
+        'Kühlwasser nur mit unabhängiger Taupunktabschaltung freigeben.';
     content.appendChild(note);
     ui.note = note;
 
