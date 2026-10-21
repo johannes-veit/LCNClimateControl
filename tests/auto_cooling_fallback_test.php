@@ -32,7 +32,7 @@ final class AutoProbe {
     private function ReadPropertyString(string $name): string { return (string) ($this->properties[$name] ?? ''); }
     private function ReadJsonAttribute(string $name): array { return $this->attrs[$name] ?? []; }
     private function WriteJsonAttribute(string $name, array $value): void { $this->attrs[$name]=$value; }
-    private function IsOperationalLCNModule(int $id): bool { return in_array($id, [11, 92], true); }
+    private function IsOperationalLCNModule(int $id): bool { return in_array($id, [11,21,31,41,51,61,111,121,131,141,151,92,192], true); }
     private function AppendJob(array $job): void { $this->jobs[]=$job; }
     private function YieldCurrentJob(array $job): void { $this->jobs[]=$job; }
     public array $rooms = [];
@@ -127,4 +127,37 @@ $k->choose(true);
 $k->chooseRoom($k->rooms[1],true);
 check(count($k->jobs)===2 && $k->jobs[0]['Type']==='direct_cool'
     && $k->jobs[1]['Type']==='cool_up','independent paths in parallel rooms');
-echo "PASS: 12 automatic fallback, watchdog isolation and two-room scenarios\n";
+// 13. Elf Raeume werden unabhaengig in einem Kuehlzyklus geplant:
+// direkt pro bestaetigtem Raum und automatisch alt ohne Voraussetzungen.
+$m=new AutoProbe();
+$roomSpecs=[
+  ['EG Buero',11,92,1],['EG Kueche',21,92,2],
+  ['EG Wohnen',31,92,3],['EG Schlafen',41,92,5],
+  ['EG Bad',51,92,6],['EG Gaeste-WC',61,92,4],
+  ['OG Schlafen1',111,192,4],['OG Schlafen2',121,192,3],
+  ['OG Ankleide',131,192,1],['OG Bad',141,192,2],['OG Flur',151,192,5]
+];
+$bindings=[];$m->rooms=[];
+foreach($roomSpecs as $index=>$spec){
+  $target=777+$index;
+  $m->rooms[]=['Name'=>$spec[0],'SendModule'=>$spec[1],
+    'TargetVariable'=>$target,'Table'=>'A','UpKey'=>7,'DownKey'=>8];
+  $unlock=2000+$index;$relay=3000+$index;
+  $GLOBALS['v'][$unlock]=true;$GLOBALS['v'][$relay]=false;
+  $GLOBALS['updated'][$unlock]=time();$GLOBALS['updated'][$relay]=time();
+  if ($index%2===0) {
+      $bindings[]=['TargetVariable'=>$target,'RelayModule'=>$spec[2],
+        'RelayChannel'=>$spec[3],'RegulatorIndex'=>2,
+        'UnlockedVariable'=>$unlock,'RelayStatusVariable'=>$relay,
+        'OpenRelayOn'=>true,'PolarityConfirmed'=>true];
+  }
+}
+$m->properties['CoolingRelays']=json_encode($bindings);
+foreach($m->rooms as $row){$m->chooseRoom($row,true);}
+check(count($m->jobs)===11,'all 11 rooms get exactly one job');
+foreach($m->jobs as $index=>$job){
+  $expected=$index%2===0 ? 'direct_cool' : 'cool_up';
+  check($job['Type']===$expected,'per-room independent selection at '.$index);
+}
+check(str_contains($m->summary(),'bisherige Steuerung aktiv'),'mixed rooms show legacy footer');
+echo "PASS: 13 scenarios incl. all 11 parallel room decisions\n";
