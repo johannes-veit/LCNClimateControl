@@ -436,6 +436,7 @@ trait LCNDirectCooling
                     $this->FailCurrentJob($job, 'Regler entriegelt, aber kein normaler S1Target bestaetigt. LCN-PRO pruefen.');
                     return;
                 }
+                $job = $this->DirectCoolingRequestFreshTarget($job);
                 $this->YieldCurrentJob($job);
                 return;
             }
@@ -465,8 +466,9 @@ trait LCNDirectCooling
             // vor jedem einzelnen Oeffnungs-Schaltbefehl erneut.
             foreach ($this->GetRuntimeRooms() as $room) {
                 $target = (int) $room['TargetVariable'];
-                $m = $this->DirectCoolingMapping($target);
-                if ($m !== null && $this->DirectCoolingLockState($target) !== '') {
+                $m = $this->DirectCoolingMapping($target)
+                    ?? ($this->ReadJsonAttribute('DirectCoolingLockMappings')[(string) $target] ?? null);
+                if (is_array($m) && $this->DirectCoolingLockState($target) !== '') {
                     $ok = $this->DirectCoolingRelaySet($m, false);
                     $this->SetRoomError($target, $ok
                         ? 'Kuehlfreigabe verloren: Schliessbefehl gesendet; Stellung ungeprueft.'
@@ -808,11 +810,52 @@ trait LCNDirectCooling
                 $this->FailCurrentJob($job, 'Regler freigegeben, aber Sollwert unplausibel; kein automatischer Rueckfall.');
                 return;
             }
+            $job = $this->DirectCoolingRequestFreshTarget($job);
             $this->YieldCurrentJob($job);
             return;
         }
         $this->DirectCoolingFallbackSet($target, 'Unbekannter Freigabezustand', 'blocked');
         $this->FailCurrentJob($job, 'Unbekannter Rueckfallzustand.');
+    }
+
+    private function DirectCoolingRequestFreshTarget(array $job): array
+    {
+        // Die LCN-Target-Variable wird nach dem Entsperren nicht zwingend
+        // automatisch aktualisiert. Eine gezielte native Statusabfrage
+        // darf erst nach bestaetigter Reglersperren-Freigabe stattfinden.
+        $now = $this->NowMs();
+        if ($now - (int) ($job['LastReadAtMs'] ?? 0) < 9000) {
+            return $job;
+        }
+        $target = (int) ($job['TargetVariable'] ?? 0);
+        if (!IPS_VariableExists($target) || !IPS_FunctionExists('LCN_RequestRead')) {
+            return $job;
+        }
+        $valueInstance = IPS_GetParent($target);
+        if ($valueInstance <= 0 || !IPS_InstanceExists($valueInstance)) {
+            return $job;
+        }
+        try {
+            $info = IPS_GetInstance($valueInstance);
+            if (strtoupper((string) ($info['ModuleInfo']['ModuleID'] ?? ''))
+                !== strtoupper(self::LCN_VALUE_MODULE_ID)
+                || (int) ($info['ConnectionID'] ?? 0) !== (int) ($job['SendModule'] ?? 0)) {
+                return $job;
+            }
+        } catch (Throwable) {
+            return $job;
+        }
+        $job['LastReadAtMs'] = $now;
+        if (IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 500)) {
+            try {
+                LCN_RequestRead($valueInstance);
+            } catch (Throwable $e) {
+                $this->SendDebug('DirectCooling', 'S1Target-Statusabfrage: ' . $e->getMessage(), 0);
+            } finally {
+                IPS_SemaphoreLeave(self::GLOBAL_LCN_SEND_SEMAPHORE);
+            }
+        }
+        return $job;
     }
 
     private function DirectCoolingFeedbackFresh(int $id, array $job): bool
