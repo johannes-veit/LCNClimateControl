@@ -635,6 +635,26 @@ trait LCNDirectCooling
             if ($this->DirectCoolingFeedbackFresh($unlockId, $job)
                 && (bool) GetValue($unlockId)
                 && $this->NowMs() - (int) ($job['SentAtMs'] ?? 0) >= 500) {
+                $job['Phase'] = 'normal_target_wait';
+                $job['SentAtMs'] = $this->NowMs();
+                $this->YieldCurrentJob($job);
+                return;
+            }
+            if ($this->NowMs() - (int) ($job['SentAtMs'] ?? 0) > 7000) {
+                $this->DirectCoolingFallbackSet($target, 'Reglerfreigabe nicht bestaetigt', 'blocked');
+                $this->FailCurrentJob($job, 'Regler nicht sicher entsperrt: kein automatischer Rueckfall.');
+                return;
+            }
+            $this->YieldCurrentJob($job);
+            return;
+        }
+        if ($phase === 'normal_target_wait') {
+            if (!(bool) GetValue($unlockId)) {
+                $this->DirectCoolingFallbackSet($target, 'Regler erneut gesperrt', 'blocked');
+                $this->FailCurrentJob($job, 'Regler erneut gesperrt; kein automatischer Rueckfall.');
+                return;
+            }
+            if ($this->ReadTarget($target) !== null) {
                 $this->DirectCoolingSetLockState($target, '');
                 $reason = (string) ($job['FallbackReason'] ?? 'Direkte Kuehlung nicht bestaetigt');
                 $this->DirectCoolingFallbackSet($target, $reason);
@@ -659,9 +679,9 @@ trait LCNDirectCooling
                 $this->PushVisualizationMeta();
                 return;
             }
-            if ($this->NowMs() - (int) ($job['SentAtMs'] ?? 0) > 7000) {
-                $this->DirectCoolingFallbackSet($target, 'Reglerfreigabe nicht bestaetigt', 'blocked');
-                $this->FailCurrentJob($job, 'Regler nicht sicher entsperrt: kein automatischer Rueckfall.');
+            if ($this->NowMs() - (int) ($job['SentAtMs'] ?? 0) > 120000) {
+                $this->DirectCoolingFallbackSet($target, 'Nach Freigabe kein gueltiger Heizsollwert', 'blocked');
+                $this->FailCurrentJob($job, 'Regler freigegeben, aber Sollwert unplausibel; kein automatischer Rueckfall.');
                 return;
             }
             $this->YieldCurrentJob($job);
