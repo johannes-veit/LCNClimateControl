@@ -71,6 +71,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterAttributeString('LastHeatingTargets', '{}');
         $this->RegisterAttributeString('CoolingStates', '{}');
         $this->RegisterAttributeString('DirectCoolingLocks', '{}');
+        $this->RegisterAttributeString('CoolingFallbackReasons', '{}');
         $this->RegisterAttributeString('RegisteredTargetMessages', '[]');
         $this->RegisterAttributeString('RegisteredReferences', '[]');
         $this->RegisterAttributeString('LastError', '');
@@ -252,17 +253,10 @@ class LCNClimateControl extends IPSModuleStrict
         }
 
         $this->SetRuntimeRooms($runtimeRooms);
-        if ($this->UsesDirectCooling()) {
-            foreach ($this->DirectCoolingPreflight() as $coolingError) {
-                $valid = false;
-                $this->RecordConfigurationError('Direktkuehlung: ' . $coolingError);
-            }
-            if ($this->GetMode() === self::MODE_COOLING
-                && $this->ReadJsonAttribute('DirectCoolingLocks') === []) {
-                $valid = false;
-                $this->RecordConfigurationError('Direktkuehlung nicht im aktiven Kuehlbetrieb einschalten: erst Heizen herstellen.');
-            }
-        }
+        // Fehlende Direktkuehlungs-Optionen duerfen die produktive Legacy-
+        // Kuehlung nicht deaktivieren. Pro Raum wird erst beim Schaltwunsch
+        // entschieden, ob neue Rueckmeldungen fuer diesen Raum reichen.
+        // Bereits gesperrte Regler bleiben dagegen als harter Schutz erhalten.
         $this->SetBuffer('ConfigurationValid', $valid ? '1' : '0');
 
         $runtimeTargets = [];
@@ -520,10 +514,6 @@ class LCNClimateControl extends IPSModuleStrict
 
     private function RequestMode(int $Mode): void
     {
-        if ($Mode === self::MODE_COOLING && $this->UsesDirectCooling()
-            && (!$this->DirectCoolingSafe() || $this->DirectCoolingPreflight() !== [])) {
-            throw new RuntimeException('Direktkuehlung: externe Freigabe fehlt oder Raumkonfiguration unvollstaendig.');
-        }
         if (!in_array($Mode, [self::MODE_HEATING, self::MODE_COOLING], true)) {
             throw new InvalidArgumentException('Ungültige Betriebsart.');
         }
@@ -653,6 +643,10 @@ class LCNClimateControl extends IPSModuleStrict
 
     private function ProcessJob(array $Job): void
     {
+        if (($Job['Type'] ?? '') === 'direct_recover') {
+            $this->HandleDirectCoolingRecovery($Job);
+            return;
+        }
         if (in_array((string) ($Job['Type'] ?? ''), ['direct_cool', 'direct_release'], true)) {
             $this->HandleDirectCoolingJob($Job);
             return;
@@ -918,6 +912,14 @@ class LCNClimateControl extends IPSModuleStrict
     {
         $targetID = (int) ($Job['TargetVariable'] ?? 0);
 
+        if (($Job['Type'] ?? '') === 'direct_cool' && $this->UsesDirectCooling()) {
+            $this->BeginDirectCoolingRecovery($Job, $Reason);
+            return;
+        }
+        if (($Job['Type'] ?? '') === 'direct_recover') {
+            $this->DirectCoolingFallbackSet($targetID, $Reason, 'blocked');
+        }
+
         if (($Job['Type'] ?? '') === self::JOB_HEAT) {
             $actual = $this->ReadTarget($targetID);
             if ($actual !== null) {
@@ -1049,7 +1051,7 @@ class LCNClimateControl extends IPSModuleStrict
     private function RetargetOrEnqueueCoolingJob(array $Room, bool $State, bool $Previous): void
     {
         if ($this->UsesDirectCooling()) {
-            $this->DirectCoolingEnqueue($Room, $State, $Previous);
+            $this->EnqueueCoolingAutomatically($Room, $State, $Previous);
             return;
         }
         $targetID = (int) $Room['TargetVariable'];
@@ -1114,7 +1116,7 @@ class LCNClimateControl extends IPSModuleStrict
     private function EnqueueCoolingJob(array $Room, bool $State, bool $Previous): void
     {
         if ($this->UsesDirectCooling()) {
-            $this->DirectCoolingEnqueue($Room, $State, $Previous);
+            $this->EnqueueCoolingAutomatically($Room, $State, $Previous);
             return;
         }
         $this->AppendJob([
@@ -1510,6 +1512,7 @@ class LCNClimateControl extends IPSModuleStrict
             'pendingMode' => $this->GetPendingMode(),
             'busy' => $this->IsBusy(),
             'error' => $this->GetVisualizationErrorSummary(),
+            'fallbackNote' => $this->DirectCoolingFallbackSummary(),
             'rows' => $rows
         ];
     }
@@ -1585,7 +1588,8 @@ class LCNClimateControl extends IPSModuleStrict
             'mode' => $this->GetMode(),
             'pendingMode' => $this->GetPendingMode(),
             'busy' => $this->IsBusy(),
-            'error' => $this->GetVisualizationErrorSummary()
+            'error' => $this->GetVisualizationErrorSummary(),
+            'fallbackNote' => $this->DirectCoolingFallbackSummary()
         ]);
     }
 
