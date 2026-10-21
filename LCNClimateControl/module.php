@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 require_once __DIR__ . '/DirectCooling.php';
+require_once __DIR__ . '/CoolingDiscovery.php';
 
 /**
  * LCN Heizung / Kühlung für IP-Symcon 9
@@ -18,6 +19,7 @@ require_once __DIR__ . '/DirectCooling.php';
 class LCNClimateControl extends IPSModuleStrict
 {
     use LCNDirectCooling;
+    use LCNClimateCoolingDiscovery;
 
     private const STATUS_ACTIVE = 102;
     private const STATUS_INACTIVE = 104;
@@ -61,6 +63,8 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterPropertyBoolean('DirectCoolingEnabled', true);
         $this->RegisterPropertyInteger('CoolingSafetyVariable', 0);
         $this->RegisterPropertyString('CoolingRelays', '[]');
+        $this->RegisterPropertyBoolean('AutoCoolingPolarityConfirmed', false);
+        $this->RegisterPropertyBoolean('AutoCoolingOpenRelayOn', true);
         $this->RegisterPropertyInteger('StepWaitMs', 900);
         $this->RegisterPropertyInteger('MaxSteps', 25);
         $this->RegisterPropertyInteger('NoChangeConfirmations', 2);
