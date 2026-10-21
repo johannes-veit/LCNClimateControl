@@ -168,4 +168,32 @@ $n->choose(true);
 check($n->jobs===[] && str_contains($n->summary(),'gestoppt'),
     'configured safety veto must override ongoing legacy fallback');
 $GLOBALS['v'][100]=true;
-echo "PASS: 14 scenarios incl. 11-room parallel decisions and safety gate after legacy fallback\n";
+// 15. Kuehlen AUS am Beginn braucht nie eine Reglersperre.
+$off=new AutoProbe();config($off);$off->choose(false);
+check(count($off->jobs)===1 && $off->jobs[0]['Type']==='cool_down',
+    'cooling OFF must preserve legacy route and never lock controller');
+// 16. Gesicherte Relais-/Reglerzuordnung muss einen Neustart der
+// Laufzeitdiagnose ueberleben; spaeterer Release benutzt gespeicherte
+// Zuordnung, nicht geratenes LCN-Ziel.
+$saved=new AutoProbe();config($saved);
+$reflect=new ReflectionClass($saved);
+$fn=$reflect->getMethod('DirectCoolingSaveLockMapping');
+$fn->invoke($saved,777,[
+    'TargetVariable'=>777,'RelayModule'=>92,'RelayUnit'=>700,
+    'RelayChannel'=>1,'RegulatorIndex'=>2,
+    'UnlockedVariable'=>101,'RelayStatusVariable'=>102,
+    'OpenRelayOn'=>true,'PolarityConfirmed'=>true
+]);
+check(isset($saved->attrs['DirectCoolingLockMappings']['777']),
+    'durable mapping must be saved');
+$job=['TargetVariable'=>777,'SendModule'=>11,'Type'=>'direct_release','Phase'=>'unlock'];
+$get=$reflect->getMethod('DirectCoolingMappingForJob');
+check(($get->invoke($saved,$job)['RelayUnit']??0)===700,
+    'recovery must honor saved mapping');
+// 17. Nach erfolgreicher Entsperrung muss der gespeicherte Mapping-Eintrag
+// geloescht werden.
+$saved->lockState(777,'locked');
+$saved->lockState(777,'');
+check(!isset($saved->attrs['DirectCoolingLockMappings']['777']),
+    'durable mapping must be deleted only after confirmed unlock');
+echo "PASS: 17 fallback, 11-room, idle-room, lock-mapping and recovery scenarios\n";
