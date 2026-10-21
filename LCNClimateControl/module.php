@@ -58,7 +58,7 @@ class LCNClimateControl extends IPSModuleStrict
 
         $this->RegisterPropertyString('Rooms', '[]');
         // Opt-in: bestehender Kuehlbetrieb bleibt bei Updates unveraendert.
-        $this->RegisterPropertyBoolean('DirectCoolingEnabled', false);
+        $this->RegisterPropertyBoolean('DirectCoolingEnabled', true);
         $this->RegisterPropertyInteger('CoolingSafetyVariable', 0);
         $this->RegisterPropertyString('CoolingRelays', '[]');
         $this->RegisterPropertyInteger('StepWaitMs', 900);
@@ -72,6 +72,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterAttributeString('CoolingStates', '{}');
         $this->RegisterAttributeString('DirectCoolingLocks', '{}');
         $this->RegisterAttributeString('CoolingFallbackReasons', '{}');
+        $this->RegisterAttributeString('DirectCoolingRoomHealth', '{}');
         $this->RegisterAttributeString('RegisteredTargetMessages', '[]');
         $this->RegisterAttributeString('RegisteredReferences', '[]');
         $this->RegisterAttributeString('LastError', '');
