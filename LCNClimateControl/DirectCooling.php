@@ -288,6 +288,9 @@ trait LCNDirectCooling
                 ' s. LCN-Zustand bitte vor Ort pruefen.');
             return true;
         }
+        if ($statusID > 0 && in_array($name, ['Relaiszustand', 'Ventil geschlossen'], true)) {
+            $job = $this->DirectCoolingRequestFreshRelay($job, $this->DirectCoolingMappingForJob($job) ?? []);
+        }
         $this->YieldCurrentJob($job);
         return true;
     }
@@ -779,6 +782,7 @@ trait LCNDirectCooling
                 $this->FailCurrentJob($job, 'Relais AUS nicht bestaetigt: Regler bleibt gesperrt, kein Rueckfall.');
                 return;
             }
+            $job = $this->DirectCoolingRequestFreshRelay($job, $m);
             $this->YieldCurrentJob($job);
             return;
         }
@@ -854,6 +858,33 @@ trait LCNDirectCooling
         }
         $this->DirectCoolingFallbackSet($target, 'Unbekannter Freigabezustand', 'blocked');
         $this->FailCurrentJob($job, 'Unbekannter Rueckfallzustand.');
+    }
+
+    private function DirectCoolingRequestFreshRelay(array $job, array $mapping): array
+    {
+        // Der elektrische Relaisstatus kann bereits den Sollzustand haben.
+        // Bei unveraendertem Zustand wird nicht zwingend automatisch eine
+        // neue Rueckmeldung gesendet: Statusabfrage vorsichtig takten.
+        $now = $this->NowMs();
+        if ($now - (int) ($job['LastRelayReadAtMs'] ?? 0) < 9000) {
+            return $job;
+        }
+        $module = (int) ($mapping['RelayModule'] ?? 0);
+        if (!$this->IsOperationalLCNModule($module)
+            || !IPS_FunctionExists('LCN_RequestStatus')) {
+            return $job;
+        }
+        $job['LastRelayReadAtMs'] = $now;
+        if (IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 500)) {
+            try {
+                LCN_RequestStatus($module);
+            } catch (Throwable $e) {
+                $this->SendDebug('DirectCooling', 'Relais-Statusabfrage: ' . $e->getMessage(), 0);
+            } finally {
+                IPS_SemaphoreLeave(self::GLOBAL_LCN_SEND_SEMAPHORE);
+            }
+        }
+        return $job;
     }
 
     private function DirectCoolingRequestFreshTarget(array $job): array
