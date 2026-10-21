@@ -10,7 +10,13 @@ trait LCNDirectCooling
 {
     private function UsesDirectCooling(): bool
     {
-        return $this->ReadPropertyBoolean('DirectCoolingEnabled');
+        // Auch alte gemockte Laufzeiten und migrationsbedingt fehlende
+        // Properties muessen im bewahrten Legacy-Pfad sicher bleiben.
+        try {
+            return (bool) $this->ReadPropertyBoolean('DirectCoolingEnabled');
+        } catch (Throwable) {
+            return false;
+        }
     }
 
     private function DirectCoolingMappings(): array
