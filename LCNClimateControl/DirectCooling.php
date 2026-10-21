@@ -459,6 +459,7 @@ trait LCNDirectCooling
         $legacy = 0;
         $blocked = 0;
         $first = '';
+        $firstBlocked = '';
         foreach ($this->GetRuntimeRooms() as $room) {
             $entry = $all[(string) $room['TargetVariable']] ?? null;
             if (!is_array($entry)) {
@@ -466,6 +467,9 @@ trait LCNDirectCooling
             }
             if (($entry['kind'] ?? '') === 'blocked') {
                 $blocked++;
+                if ($firstBlocked === '') {
+                    $firstBlocked = (string) $room['Name'] . ': ' . (string) ($entry['reason'] ?? '');
+                }
             } else {
                 $legacy++;
             }
@@ -476,7 +480,7 @@ trait LCNDirectCooling
         if ($blocked > 0) {
             return 'Direktkuehlung gestoppt (' . $blocked
                 . ' Raum/Raeume): Reglerzustand nicht sicher. Kein automatischer Rueckfall. '
-                . $first;
+                . $firstBlocked;
         }
         if ($legacy > 0) {
             return 'Neue Kuehlsteuerung nicht verfuegbar (' . $legacy
@@ -503,6 +507,11 @@ trait LCNDirectCooling
     {
         $target = (int) $room['TargetVariable'];
         $locked = $this->DirectCoolingLockState($target);
+        if ($locked === 'uncertain') {
+            $this->DirectCoolingFallbackSet($target, 'Reglerzustand ungewiss', 'blocked');
+            $this->SetRoomError($target, $room['Name'] . ': Reglerzustand ungewiss; keine neue Ventilfahrt.');
+            return;
+        }
         if ($locked !== '') {
             // Bestehenden Direktsperrzustand nur durch Direktlogik steuern;
             // vor Wiederherstellung niemals TS-Tasten an gesperrte Regler senden.
@@ -513,6 +522,17 @@ trait LCNDirectCooling
                 return;
             }
             $this->DirectCoolingEnqueue($room, $state, $previous);
+            return;
+        }
+        $previousFallback = $this->DirectCoolingFallbacks()[(string) $target] ?? null;
+        if (is_array($previousFallback) && ($previousFallback['kind'] ?? '') === 'legacy') {
+            $this->EnqueueLegacyCoolingJob($room, $state, $previous);
+            return;
+        }
+        $safetyID = (int) $this->ReadPropertyInteger('CoolingSafetyVariable');
+        if ($state && $safetyID > 0 && !$this->DirectCoolingSafe()) {
+            $this->DirectCoolingFallbackSet($target, 'Externe Kuehlfreigabe fehlt: Kuehlen EIN gesperrt', 'blocked');
+            $this->SetRoomError($target, $room['Name'] . ': Kuehlfreigabe fehlt, keine Kuehlung eingeschaltet.');
             return;
         }
         $reason = $this->DirectCoolingEligibility($room);
