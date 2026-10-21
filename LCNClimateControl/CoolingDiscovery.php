@@ -147,6 +147,45 @@ trait LCNClimateCoolingDiscovery
         ];
     }
 
+    /**
+     * Read-only diagnostic; reports actual IPS IDs and missing objects.
+     * Does not create variables, switch relays or send LCN commands.
+     */
+    public function CoolingDiscoveryReport(): string
+    {
+        $lines = [
+            'LCNClimateControl – erkannte LCN-Symcon-Zuordnungen (NUR LESEN)',
+            'NC-Stellantrieb: stromlos geschlossen; Relais ON = Spannung nur bei passendem Schliesserkontakt.',
+            'Hinweis: keine Relais-/Reglersperre wird durch diesen Bericht ausgeloest.'
+        ];
+        foreach ($this->GetRuntimeRooms() as $room) {
+            $target = (int) ($room['TargetVariable'] ?? 0);
+            $name = (string) ($room['Name'] ?? 'Raum');
+            $source = (int) ($room['SendModule'] ?? 0);
+            try {
+                $m = $this->DirectCoolingMapping($target);
+                if ($m === null) {
+                    $lines[] = $name . ' / LCN-Instanz #' . $source
+                        . ', S1Target #' . $target
+                        . ': alte A7/A8-Steuerung (native Relais-Rueckmeldung/Polaritaet nicht komplett).';
+                    continue;
+                }
+                $lines[] = $name . ' / LCN-Instanz #' . $source
+                    . ', S1Target #' . $target
+                    . ' -> Relais-Modul #' . (int) ($m['RelayModule'] ?? 0)
+                    . ', Einzelrelais #' . (int) ($m['RelayUnit'] ?? 0)
+                    . '/R' . (int) ($m['RelayChannel'] ?? 0)
+                    . ', Entriegelt #' . (int) ($m['UnlockedVariable'] ?? 0)
+                    . ', Status #' . (int) ($m['RelayStatusVariable'] ?? 0)
+                    . ': ' . ($this->DirectCoolingEligibility($room) === ''
+                        ? 'Direktsteuerung bereit' : 'alte A7/A8-Steuerung');
+            } catch (Throwable $e) {
+                $lines[] = $name . ': Diagnose nicht verfuegbar (' . $e->getMessage() . ').';
+            }
+        }
+        return implode("\n", $lines);
+    }
+
     private function AutoCoolingFindBoolean(int $parent, string $name): int
     {
         $matches = [];
