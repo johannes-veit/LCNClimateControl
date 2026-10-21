@@ -57,6 +57,8 @@ final class AutoProbe {
     public function summary(): string { return $this->DirectCoolingFallbackSummary(); }
     public function recover(array $job): void { $this->HandleDirectCoolingRecovery($job); }
     public function processDirect(array $job): void { $this->HandleDirectCoolingJob($job); }
+    public function release(float $target): void { $this->DirectCoolingEnqueueRelease($this->room, $target); }
+    private function EnqueueHeatJob(array $room, float $target): void { $this->jobs[]=['Type'=>'heat','Desired'=>$target]; }
     private function StoreCoolingState(int $target, bool $state): void { $this->coolingStored[$target]=$state; }
     public function lockState(int $target, string $state): void { $this->DirectCoolingSetLockState($target,$state); }
 }
@@ -234,4 +236,28 @@ $z->processDirect($job);
 check(($z->coolingStored[777]??false)===true
     && $z->jobs===[], 'only confirmed relay ON may store cooling ON');
 $GLOBALS['v'][101]=true;$GLOBALS['v'][102]=false;
-echo "PASS: 18 scenarios incl. simulated full lock/relay state machine\n";
+// 19. Vollstaendige Rueckkehr zur Heizregelung nach direkter Kuehlung.
+$back=new AutoProbe();config($back);$back->lockState(777,'locked');
+$GLOBALS['v'][101]=false;$GLOBALS['v'][102]=true;
+$back->release(22.0);check(count($back->jobs)===1,'release job enqueued');
+$job=$back->jobs[0];$back->jobs=[];
+$back->processDirect($job);
+check($back->jobs[0]['Phase']==='close_wait','release must first de-energize actuator');
+$job=$back->jobs[0];$back->jobs=[];
+$back->now=$job['SentAtMs']+600;$GLOBALS['v'][102]=false;$GLOBALS['updated'][102]=time();
+$back->processDirect($job);
+check($back->jobs[0]['Phase']==='unlock','relay OFF precedes controller release');
+$job=$back->jobs[0];$back->jobs=[];$back->processDirect($job);
+check($back->jobs[0]['Phase']==='unlock_wait','controller unlock pending');
+$job=$back->jobs[0];$back->jobs=[];
+$back->now=$job['SentAtMs']+600;$GLOBALS['v'][101]=true;$GLOBALS['updated'][101]=time();
+$back->processDirect($job);
+check($back->jobs[0]['Phase']==='restore_target_wait','normal S1Target required before heating');
+$job=$back->jobs[0];$back->jobs=[];$GLOBALS['updated'][777]=time();
+$back->processDirect($job);
+check($back->jobs[0]['Type']==='heat' && $back->jobs[0]['Desired']===22.0,
+    'heating target restore must use saved value');
+check(($back->attrs['DirectCoolingLocks']??[])===[],
+    'lock must be released after final feedback confirmation');
+$GLOBALS['v'][101]=true;$GLOBALS['v'][102]=false;
+echo "PASS: 19 scenarios incl. confirmed heating-to-cooling and cooling-to-heating transitions\n";
