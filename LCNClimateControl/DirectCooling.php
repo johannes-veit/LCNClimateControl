@@ -131,7 +131,7 @@ trait LCNDirectCooling
         ]);
     }
 
-    private function DirectCoolingEnqueueRelease(array $room, float $restore): void
+    private function DirectCoolingEnqueueRelease(array $room, ?float $restore): void
     {
         $this->AppendJob([
             'Type' => 'direct_release',
@@ -322,7 +322,7 @@ trait LCNDirectCooling
                     $this->SetBuffer('CurrentJob', '');
                     $this->ClearRoomError($target);
                     $room = $this->FindRoomByTarget($target);
-                    if ($room !== null) {
+                    if ($room !== null && isset($job['RestoreTarget'])) {
                         $this->EnqueueHeatJob($room, (float) $job['RestoreTarget']);
                     }
                     $this->RefreshRuntimeStatus();
