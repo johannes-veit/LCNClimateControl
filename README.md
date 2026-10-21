@@ -282,3 +282,40 @@ Die alte A7/A8-Steuerung ist ein Kompatibilitaetsrueckfall, aber bei
 hohen Raumtemperaturen kein Nachweis geoeffneter Ventile.
 Die unabhaengige mechanische Taupunktsperre bleibt vor realer
 Kuehlwasserversorgung erforderlich.
+
+
+## v0.3.5 Build 20 – Sicherheits- und Regressionstest vor Installation
+
+Die komplette v0.3.4-Heizbedienung, GT8-Verknuepfung, A7/A8-Heizsteuerung
+und die Kachelvisualisierung bleiben unveraendert. 0 neue LCN-Tasten,
+0 neue Symcon-Laufzeitvariablen. Der Stand v0.2.10 bleibt auf Branch
+`backup/v0.2.10-pre-cooling-2026-10-21` wiederherstellbar.
+
+Korrekturen gegenueber 0.3.4:
+- Bei `Nicht kuehlen` erfolgt im entsperrten Zustand KEINE unnoetige
+  direkte Reglersperre; das bestehende A8-Verfahren schliesst den Raum.
+- Nach der ersten geplanten Reglersperre wird die **exakt erkannte** LCN-
+  Zuordnung als internes persistentes Attribut abgelegt. Damit bleibt
+  die Freigabe nach fehlgeschlagener Neusuche oder Modulneustart moeglich.
+  Die interne Kopie wird erst nach bestaetigter Freigabe entfernt.
+- Ein gescheiterter Direktkuehlungs-Versuch fuehrt ausschliesslich nach
+  folgender Folge zur alten Steuerung zurueck:
+  **Relais elektrisch AUS bestaetigt -> Regler freigegeben bestaetigt ->
+  S1Target plausibel und frisch -> alter TS-Befehl.**
+  Sonst kein automatischer Rueckfall; der betreffende Raum zeigt Fehler.
+- Native Statusabfragen `LCN_RequestStatus` am Relaismodul sowie
+  `LCN_RequestRead` an der bestehenden LCN-Value-Instanz helfen
+  bei fehlender oder unveraenderter Rueckmeldung, max. einmal in 9 s
+  je laufendem Auftrag. Keine zusaetzlichen Busobjekte.
+- Der Zeitgrenzfehlertext entspricht der tatsaechlich konfigurierten,
+  von der Raumanzahl abhaengigen Rueckmeldezeit.
+
+Simuliert im PHP-Test: neue Direktsteuerung mit Sperr-/Relaisfeedback,
+komplette Rueckkehr in den Heizbetrieb, alle 11 Raeume, Autowechsel und
+Fehlerfaelle. Github-CI prueft zudem die bestehenden Heiz- und
+Visualisierungsregressionen. Dies ersetzt **keine echte
+LCN-Firmware-Pruefung**.
+
+Mechanischer Taupunktschutz vor Freigabe realen Kuehlwassers erforderlich.
+17 Grad C Mindest-Vorlauf allein ist nicht ausreichend. Der Hinweis
+bleibt in der Kachel; Schutzkette nicht auf Symcon verlaengern.
