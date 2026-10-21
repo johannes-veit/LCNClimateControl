@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+require_once __DIR__ . '/DirectCooling.php';
 
 /**
  * LCN Heizung / Kühlung für IP-Symcon 9
@@ -16,6 +17,8 @@ declare(strict_types=1);
  */
 class LCNClimateControl extends IPSModuleStrict
 {
+    use LCNDirectCooling;
+
     private const STATUS_ACTIVE = 102;
     private const STATUS_INACTIVE = 104;
     private const STATUS_CONFIG_ERROR = 201;
@@ -54,6 +57,10 @@ class LCNClimateControl extends IPSModuleStrict
         parent::Create();
 
         $this->RegisterPropertyString('Rooms', '[]');
+        // Opt-in: bestehender Kuehlbetrieb bleibt bei Updates unveraendert.
+        $this->RegisterPropertyBoolean('DirectCoolingEnabled', false);
+        $this->RegisterPropertyInteger('CoolingSafetyVariable', 0);
+        $this->RegisterPropertyString('CoolingRelays', '[]');
         $this->RegisterPropertyInteger('StepWaitMs', 900);
         $this->RegisterPropertyInteger('MaxSteps', 25);
         $this->RegisterPropertyInteger('NoChangeConfirmations', 2);
@@ -63,11 +70,13 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterAttributeInteger('OperatingMode', self::MODE_HEATING);
         $this->RegisterAttributeString('LastHeatingTargets', '{}');
         $this->RegisterAttributeString('CoolingStates', '{}');
+        $this->RegisterAttributeString('DirectCoolingLocks', '{}');
         $this->RegisterAttributeString('RegisteredTargetMessages', '[]');
         $this->RegisterAttributeString('RegisteredReferences', '[]');
         $this->RegisterAttributeString('LastError', '');
 
         $this->RegisterTimer('Worker', 0, 'LCNC_Worker($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('DirectCoolingGuard', 0, 'LCNC_DirectCoolingWatchdog($_IPS[\'TARGET\']);');
 
         $this->EnsureProfiles();
 
@@ -117,6 +126,7 @@ class LCNClimateControl extends IPSModuleStrict
             $this->EnsureProfiles();
         $this->SetVisualizationType(1);
         $this->SetTimerInterval('Worker', 0);
+        $this->SetTimerInterval('DirectCoolingGuard', $this->UsesDirectCooling() ? 15000 : 0);
         $this->SetBuffer('Queue', '[]');
         $this->SetBuffer('CurrentJob', '');
         $this->SetBuffer('RuntimeRooms', '[]');
@@ -242,6 +252,17 @@ class LCNClimateControl extends IPSModuleStrict
         }
 
         $this->SetRuntimeRooms($runtimeRooms);
+        if ($this->UsesDirectCooling()) {
+            foreach ($this->DirectCoolingPreflight() as $coolingError) {
+                $valid = false;
+                $this->RecordConfigurationError('Direktkuehlung: ' . $coolingError);
+            }
+            if ($this->GetMode() === self::MODE_COOLING
+                && $this->ReadJsonAttribute('DirectCoolingLocks') === []) {
+                $valid = false;
+                $this->RecordConfigurationError('Direktkuehlung nicht im aktiven Kuehlbetrieb einschalten: erst Heizen herstellen.');
+            }
+        }
         $this->SetBuffer('ConfigurationValid', $valid ? '1' : '0');
 
         $runtimeTargets = [];
@@ -499,6 +520,10 @@ class LCNClimateControl extends IPSModuleStrict
 
     private function RequestMode(int $Mode): void
     {
+        if ($Mode === self::MODE_COOLING && $this->UsesDirectCooling()
+            && (!$this->DirectCoolingSafe() || $this->DirectCoolingPreflight() !== [])) {
+            throw new RuntimeException('Direktkuehlung: externe Freigabe fehlt oder Raumkonfiguration unvollstaendig.');
+        }
         if (!in_array($Mode, [self::MODE_HEATING, self::MODE_COOLING], true)) {
             throw new InvalidArgumentException('Ungültige Betriebsart.');
         }
@@ -571,7 +596,11 @@ class LCNClimateControl extends IPSModuleStrict
                     continue;
                 }
                 $this->SetValueIfChanged($this->HeatIdent($room['TargetVariable']), $restore);
-                $this->EnqueueHeatJob($room, $restore);
+                if ($this->UsesDirectCooling() && $this->DirectCoolingLockState((int) $room['TargetVariable']) !== '') {
+                    $this->DirectCoolingEnqueueRelease($room, $restore);
+                } else {
+                    $this->EnqueueHeatJob($room, $restore);
+                }
             }
         }
 
@@ -607,6 +636,9 @@ class LCNClimateControl extends IPSModuleStrict
         }
 
         $targetID = $Room['TargetVariable'];
+        if ($this->UsesDirectCooling() && $this->HasJobForTarget((int) $targetID)) {
+            throw new RuntimeException($Room['Name'] . ': Vorheriger Kuehlbefehl noch nicht bestaetigt.');
+        }
         $this->ClearRoomError($targetID);
         $this->RefreshRuntimeStatus();
         $previous = $this->GetStoredCoolingState($targetID);
@@ -621,6 +653,15 @@ class LCNClimateControl extends IPSModuleStrict
 
     private function ProcessJob(array $Job): void
     {
+        if (in_array((string) ($Job['Type'] ?? ''), ['direct_cool', 'direct_release'], true)) {
+            $this->HandleDirectCoolingJob($Job);
+            return;
+        }
+        if (($Job['Type'] ?? '') === self::JOB_HEAT
+            && $this->DirectCoolingLockState((int) $Job['TargetVariable']) !== '') {
+            $this->FailCurrentJob($Job, 'Heizbefehl blockiert: LCN-Regler noch gesperrt/ungewiss.');
+            return;
+        }
         $targetID = (int) $Job['TargetVariable'];
         $sendModule = (int) ($Job['SendModule'] ?? 0);
 
@@ -1007,6 +1048,10 @@ class LCNClimateControl extends IPSModuleStrict
 
     private function RetargetOrEnqueueCoolingJob(array $Room, bool $State, bool $Previous): void
     {
+        if ($this->UsesDirectCooling()) {
+            $this->DirectCoolingEnqueue($Room, $State, $Previous);
+            return;
+        }
         $targetID = (int) $Room['TargetVariable'];
         $newType = $State ? self::JOB_COOL_UP : self::JOB_COOL_DOWN;
 
@@ -1068,6 +1113,10 @@ class LCNClimateControl extends IPSModuleStrict
 
     private function EnqueueCoolingJob(array $Room, bool $State, bool $Previous): void
     {
+        if ($this->UsesDirectCooling()) {
+            $this->DirectCoolingEnqueue($Room, $State, $Previous);
+            return;
+        }
         $this->AppendJob([
             'Type' => $State ? self::JOB_COOL_UP : self::JOB_COOL_DOWN,
             'Name' => $Room['Name'],
