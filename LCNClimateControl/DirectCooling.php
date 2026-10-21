@@ -111,8 +111,9 @@ trait LCNDirectCooling
                     $errors[] = $room['Name'] . ': Boolean-' . $name . '-Rueckmeldung fehlt.';
                 }
             }
-            if (!array_key_exists('OpenRelayOn', $m)) {
-                $errors[] = $room['Name'] . ': elektrische AUF-Polaritaet nicht hinterlegt.';
+            if (!array_key_exists('OpenRelayOn', $m)
+                || !((bool) ($m['PolarityConfirmed'] ?? false))) {
+                $errors[] = $room['Name'] . ': elektrische AUF-Polaritaet nicht bestaetigt.';
             }
         }
         return $errors;
@@ -389,7 +390,8 @@ trait LCNDirectCooling
         if (!in_array((int) ($m['RegulatorIndex'] ?? -1), [0, 2], true)) {
             return 'LCN-Reglerindex nicht bestaetigt';
         }
-        if (!array_key_exists('OpenRelayOn', $m)) {
+        if (!array_key_exists('OpenRelayOn', $m)
+            || !((bool) ($m['PolarityConfirmed'] ?? false))) {
             return 'Ventilpolaritaet nicht bestaetigt';
         }
         if ((int) ($m['RelayChannel'] ?? 0) < 1
@@ -422,6 +424,19 @@ trait LCNDirectCooling
             if (!IPS_FunctionExists($fn)) {
                 return 'LCN-Funktion ' . $fn . ' nicht vorhanden';
             }
+        }
+        // Keine fremde Reglersperre uebernehmen.
+        $unlockedId = (int) ($m['UnlockedVariable'] ?? 0);
+        try {
+            if (!(bool) GetValue($unlockedId)) {
+                return 'LCN-Regler bereits gesperrt; kein TS-Rueckfall erlaubt';
+            }
+            if (function_exists('IPS_GetParent')
+                && IPS_GetParent($unlockedId) !== IPS_GetParent($target)) {
+                return 'Entriegelt-Rueckmeldung gehoert nicht zum S1Target';
+            }
+        } catch (Throwable) {
+            return 'Entriegelt-Rueckmeldung nicht lesbar';
         }
         return '';
     }
@@ -553,6 +568,13 @@ trait LCNDirectCooling
             return;
         }
         $reason = $this->DirectCoolingEligibility($room);
+        if (str_contains($reason, 'bereits gesperrt')
+            || str_contains($reason, 'gehoert nicht zum S1Target')) {
+            $this->DirectCoolingFallbackSet($target, $reason, 'blocked');
+            $this->SetValueIfChanged($this->CoolIdent($target), $previous);
+            $this->SetRoomError($target, $room['Name'] . ': ' . $reason);
+            return;
+        }
         if ($reason === '') {
             $this->DirectCoolingFallbackSet($target, '');
             $this->DirectCoolingEnqueue($room, $state, $previous);
