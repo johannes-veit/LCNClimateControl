@@ -160,4 +160,12 @@ foreach($m->jobs as $index=>$job){
   check($job['Type']===$expected,'per-room independent selection at '.$index);
 }
 check(str_contains($m->summary(),'bisherige Steuerung aktiv'),'mixed rooms show legacy footer');
-echo "PASS: 13 scenarios incl. all 11 parallel room decisions\n";
+// 14. Safety-Flag wird NACH altem Fallback FALSE: nie erneut Kuehlen EIN.
+$n=new AutoProbe();$n->choose(true); // auto -> bisherige TS-Methode
+check(count($n->jobs)===1 && $n->jobs[0]['Type']==='cool_up','legacy fallback initially');
+$n->jobs=[];$GLOBALS['v'][100]=false;
+$n->choose(true);
+check($n->jobs===[] && str_contains($n->summary(),'gestoppt'),
+    'configured safety veto must override ongoing legacy fallback');
+$GLOBALS['v'][100]=true;
+echo "PASS: 14 scenarios incl. 11-room parallel decisions and safety gate after legacy fallback\n";
