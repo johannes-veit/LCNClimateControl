@@ -1,8 +1,8 @@
 <?php
 declare(strict_types=1);
 const VARIABLETYPE_BOOLEAN = 0;
-$GLOBALS['v'] = [100 => true, 101 => true, 102 => false];
-$GLOBALS['updated'] = [100 => time(), 101 => time(), 102 => time()];
+$GLOBALS['v'] = [100 => true, 101 => true, 102 => false, 777 => 21.0];
+$GLOBALS['updated'] = [100 => time(), 101 => time(), 102 => time(), 777 => time()];
 $GLOBALS['release_ok'] = true;
 function IPS_VariableExists(int $id): bool { return array_key_exists($id, $GLOBALS['v']); }
 function IPS_GetVariable(int $id): array { return ['VariableType' => VARIABLETYPE_BOOLEAN, 'VariableUpdated' => $GLOBALS['updated'][$id] ?? 0]; }
@@ -79,24 +79,38 @@ $GLOBALS['v'][100]=true;
 // 4. Reglerzustand ungewiss -> kein Legacy-Befehl.
 $d=new AutoProbe();config($d);$d->lockState(777,'uncertain');$d->choose(true);
 check($d->jobs===[] && str_contains($d->summary(),'gestoppt'),'uncertain lock fails closed');
-// 5. Nach gescheiterter Direktsteuerung zuerst entriegeln.
+// 5. Nach gescheiterter Direktsteuerung erst RELAIS AUS, dann
+// Regler entriegeln, dann frischen normalen Sollwert nachweisen.
 $e=new AutoProbe();config($e);$e->lockState(777,'uncertain');
-$job=['Type'=>'direct_recover','TargetVariable'=>777,'SendModule'=>11,'Phase'=>'unlock',
+$job=['Type'=>'direct_recover','TargetVariable'=>777,'SendModule'=>11,'Phase'=>'close',
   'FallbackReason'=>'Relais-Timeout','DesiredOpen'=>true,'PreviousCoolingState'=>false];
 $e->recover($job);
-check(count($e->jobs)===1 && $e->jobs[0]['Phase']==='unlock_wait','send release before legacy');
+check(count($e->jobs)===1 && $e->jobs[0]['Phase']==='close_wait','send relay OFF before unlocking');
+$next=$e->jobs[0];$e->jobs=[];
+$e->now=$next['SentAtMs']+600;$GLOBALS['v'][102]=false;$GLOBALS['updated'][102]=time();
+$e->recover($next);
+check(count($e->jobs)===1 && $e->jobs[0]['Phase']==='unlock','relay OFF confirmed first');
+$next=$e->jobs[0];$e->jobs=[];
+$e->recover($next);
+check(count($e->jobs)===1 && $e->jobs[0]['Phase']==='unlock_wait','send unlock after OFF confirmation');
 $next=$e->jobs[0];$e->jobs=[];
 $e->now=$next['SentAtMs']+600;$GLOBALS['v'][101]=true;$GLOBALS['updated'][101]=time();
 $e->recover($next);
-check(count($e->jobs)===1 && $e->jobs[0]['Phase']==='normal_target_wait','must verify normal S1Target after unlock');
+check(count($e->jobs)===1 && $e->jobs[0]['Phase']==='normal_target_wait','normal target must be checked');
 $next=$e->jobs[0]; $e->jobs=[];
+$GLOBALS['updated'][777]=time();
 $e->recover($next);
 check($e->attrs['DirectCoolingLocks']===[],'release clears persistent lock');
-check(count($e->jobs)===1 && $e->jobs[0]['Type']==='cool_up','legacy only after release proof');
+check(count($e->jobs)===1 && $e->jobs[0]['Type']==='cool_up','legacy only after relay+release+target proof');
 // 6. Kein Freigabebefehl: kein Legacy.
 $f=new AutoProbe();config($f);$f->lockState(777,'uncertain');
-$GLOBALS['release_ok']=false;$f->recover($job);
-check($f->jobs===[] && str_contains($f->summary(),'gestoppt'),'release failure blocks');$GLOBALS['release_ok']=true;
+$GLOBALS['release_ok']=false;
+$f->recover($job);
+$phase=$f->jobs[0];$f->jobs=[];$f->now=$phase['SentAtMs']+600;
+$f->recover($phase);$phase=$f->jobs[0];$f->jobs=[];
+$f->recover($phase);
+check($f->jobs===[] && str_contains($f->summary(),'gestoppt'),'release failure blocks');
+$GLOBALS['release_ok']=true;
 // 7. Wiederholte Kuehlaktionen innerhalb einer Betriebsart bleiben im Legacy.
 $a->jobs=[];config($a);$a->choose(false);
 check(count($a->jobs)===1 && $a->jobs[0]['Type']==='cool_down','no repeated direct attempt after legacy');
