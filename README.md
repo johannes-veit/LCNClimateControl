@@ -176,3 +176,8 @@ Die bestehende Visualisierung, der GT8 und die Heizfahrten ueber A7/A8 bleiben g
 Bei expliziter Aktivierung und vollstaendiger Konfiguration pro Raum: Regler 1 sperren, Entsperrt-Feedback pruefen, ausschliesslich das zugeordnete Relais mit 8-stelliger Maske steuern, Relais-Feedback pruefen. Bei Rueckkehr in den Heizbetrieb: Relais schliessen, Regler entsperren, Heizsollwert ueber bestehende TS-Logik wiederherstellen. Fehlendes Feedback stoppt den betroffenen Raum und erfordert Vor-Ort-Pruefung. Im Sperrzustand darf das Modul keinesfalls ohne Wiederherstellung auf 0.2.10 zurueckgesetzt werden.
 
 Details siehe docs/DIREKTKUEHLUNG_ROLLBACK.md. Es ist eine **RC/Testfassung**, kein produktiver Freigabestand: Reglerindex R1/S1, Relaispolaritaet, Zustand nach Neustart und Taupunktsperre muessen an M11 nachgewiesen werden.
+
+
+## 0.3.1-rc1 – Automatische Rueckfallsteuerung (separater Entwicklungsbranch)
+
+Mit aktivierter Option `DirectCoolingEnabled` prueft das Modul bei Wahl von Kuehlen pro Raum, ob native Regler- und Relaisfunktionen, Zuordnungen, Rueckmeldungen sowie die externe Freigabe vorhanden sind. Fehlende Voraussetzung: bisherige A7/A8-Kuehlung und kleine Statusmeldung unten in der Kachel. Scheitert der Direktversuch NACH einer moeglichen Reglersperre, sendet Symcon zuerst die Reglerfreigabe und wartet auf die Rueckmeldung; nur nach positivem Nachweis wird die alte Logik verwendet. Bei nicht bestaetigter Freigabe keine automatische Umschaltung! `main` und das Backup bleiben unveraendert. Die alte Methode ist KEIN Nachweis geoeffneter Kuehlventile bei hohen Raumtemperaturen. 
