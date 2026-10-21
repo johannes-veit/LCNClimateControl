@@ -585,13 +585,15 @@ class LCNClimateControl extends IPSModuleStrict
 
             foreach ($rooms as $room) {
                 $restore = $this->GetLastHeatingTarget($room['TargetVariable']);
-                if ($restore === null) {
-                    continue;
+                $wasDirectLocked = $this->DirectCoolingLockState((int) $room['TargetVariable']) !== '';
+                if ($restore !== null) {
+                    $this->SetValueIfChanged($this->HeatIdent($room['TargetVariable']), $restore);
                 }
-                $this->SetValueIfChanged($this->HeatIdent($room['TargetVariable']), $restore);
-                if ($this->UsesDirectCooling() && $this->DirectCoolingLockState((int) $room['TargetVariable']) !== '') {
+                if ($wasDirectLocked) {
+                    // Reglerfreigabe niemals wegen fehlendem gespeicherten
+                    // Heizsollwert ueberspringen.
                     $this->DirectCoolingEnqueueRelease($room, $restore);
-                } else {
+                } elseif ($restore !== null) {
                     $this->EnqueueHeatJob($room, $restore);
                 }
             }
