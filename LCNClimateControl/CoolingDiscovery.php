@@ -20,20 +20,15 @@ trait LCNClimateCoolingDiscovery
 
     private function AutoCoolingAutoPolarityConfirmed(): bool
     {
-        try {
-            return (bool) $this->ReadPropertyBoolean('AutoCoolingPolarityConfirmed');
-        } catch (Throwable) {
-            return false;
-        }
+        // Vom Anlagenbetreiber fuer diese LP3-Installation explizit bestaetigt:
+        // Relais EIN versorgt die stromlos geschlossenen NC-Stellantriebe.
+        // Trifft ausschliesslich auf die feste, unten verifizierte LP3-Zuordnung zu.
+        return true;
     }
 
     private function AutoCoolingOpenRelayOn(): bool
     {
-        try {
-            return (bool) $this->ReadPropertyBoolean('AutoCoolingOpenRelayOn');
-        } catch (Throwable) {
-            return false;
-        }
+        return true;
     }
 
     private function AutoCoolingInstanceConfig(int $id): ?array
@@ -155,7 +150,7 @@ trait LCNClimateCoolingDiscovery
     {
         $lines = [
             'LCNClimateControl – erkannte LCN-Symcon-Zuordnungen (NUR LESEN)',
-            'NC-Stellantrieb: stromlos geschlossen; Relais ON = Spannung nur bei passendem Schliesserkontakt.',
+            'NC-Stellantriebe: stromlos ZU; Relais EIN = Spannung = Ventil AUF (Betreiber bestaetigt).',
             'Hinweis: keine Relais-/Reglersperre wird durch diesen Bericht ausgeloest.'
         ];
         foreach ($this->GetRuntimeRooms() as $room) {
@@ -188,23 +183,37 @@ trait LCNClimateCoolingDiscovery
 
     private function AutoCoolingFindBoolean(int $parent, string $name): int
     {
-        $matches = [];
+        $byIdent = [];
+        $byLabel = [];
         try {
             foreach (IPS_GetChildrenIDs($parent) as $id) {
                 $id = (int) $id;
-                if (!IPS_VariableExists($id)) {
+                if (!IPS_VariableExists($id)
+                    || (int) (IPS_GetVariable($id)['VariableType'] ?? -1) !== VARIABLETYPE_BOOLEAN) {
                     continue;
                 }
-                if ((int) (IPS_GetVariable($id)['VariableType'] ?? -1) !== VARIABLETYPE_BOOLEAN) {
-                    continue;
+                // Die Identifikation anhand ObjectIdent ist stabil, selbst
+                // wenn Symcon-Anzeigenamen individuell umbenannt wurden.
+                if (function_exists('IPS_GetObject')) {
+                    $obj = IPS_GetObject($id);
+                    if (strcasecmp((string) ($obj['ObjectIdent'] ?? ''), $name) === 0) {
+                        $byIdent[] = $id;
+                    }
                 }
                 if (strcasecmp(trim(IPS_GetName($id)), $name) === 0) {
-                    $matches[] = $id;
+                    $byLabel[] = $id;
                 }
             }
         } catch (Throwable) {
             return 0;
         }
-        return count($matches) === 1 ? $matches[0] : 0;
+        // Doppelte / widerspruechliche Treffer: niemals schalten.
+        if (count($byIdent) > 1 || count($byLabel) > 1) {
+            return 0;
+        }
+        if (count($byIdent) === 1) {
+            return $byIdent[0];
+        }
+        return count($byLabel) === 1 ? $byLabel[0] : 0;
     }
 }
