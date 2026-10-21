@@ -37,7 +37,19 @@ trait LCNDirectCooling
     private function DirectCoolingMapping(int $target): ?array
     {
         $all = $this->DirectCoolingMappings();
-        return $all[$target] ?? null;
+        if (isset($all[$target])) {
+            return $all[$target];
+        }
+        // Native IPS-Autozuordnung nutzt ausschliesslich Hardware-IDs,
+        // Konfiguration und eindeutige Rueckmeldeobjekte.
+        if (!method_exists($this, 'AutoCoolingReadOnlyDiscovery')) {
+            return null;
+        }
+        $room = $this->FindRoomByTarget($target);
+        if ($room === null) {
+            return null;
+        }
+        return $this->AutoCoolingReadOnlyDiscovery($room);
     }
 
     private function DirectCoolingLockState(int $target): string
@@ -60,7 +72,13 @@ trait LCNDirectCooling
     private function DirectCoolingSafe(): bool
     {
         $id = $this->ReadPropertyInteger('CoolingSafetyVariable');
-        if ($id <= 0 || !IPS_VariableExists($id)) {
+        // Optionaler SOFTWARE-Schutzeingang. Taupunkt-Wasserabschaltung
+        // wird unabhaengig ueber einen potentialfreien mechanischen
+        // Taupunktwächter / Kuehlkreisfreigabe realisiert.
+        if ($id === 0) {
+            return true;
+        }
+        if (!IPS_VariableExists($id)) {
             return false;
         }
         try {
@@ -151,17 +169,43 @@ trait LCNDirectCooling
         $electric = $open ? (bool) $m['OpenRelayOn'] : !(bool) $m['OpenRelayOn'];
         $mask = str_repeat('-', 8);
         $mask[$channel - 1] = $electric ? '1' : '0';
-        if (!IPS_FunctionExists('LCN_SetRelay')
-            || !$this->IsOperationalLCNModule($relayModule)) {
+        $unit = (int) ($m['RelayUnit'] ?? 0);
+        if (!$this->IsOperationalLCNModule($relayModule)) {
+            return false;
+        }
+        // Bevorzugt den EINZELRELAIS-Befehl der nativ identifizierten LCN
+        // Unit Instanz. Die manuelle Altkonfiguration bleibt kompatibel
+        // und nutzt weiterhin eine genau einen Kanal veraendernde Maske.
+        if ($unit > 0) {
+            if (!IPS_FunctionExists('LCN_SwitchRelay')
+                || !IPS_InstanceExists($unit)) {
+                return false;
+            }
+            try {
+                $data = IPS_GetInstance($unit);
+                $cfg = json_decode(IPS_GetConfiguration($unit), true);
+                if ((int) ($data['ConnectionID'] ?? 0) !== $relayModule
+                    || (int) ($data['InstanceStatus'] ?? 0) !== 102
+                    || !is_array($cfg)
+                    || (int) ($cfg['Unit'] ?? -1) !== 2
+                    || (int) ($cfg['Channel'] ?? -1) !== $channel) {
+                    return false;
+                }
+            } catch (Throwable) {
+                return false;
+            }
+        } elseif (!IPS_FunctionExists('LCN_SetRelay')) {
             return false;
         }
         if (!IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 2000)) {
             return false;
         }
         try {
-            return (bool) LCN_SetRelay($relayModule, $mask);
+            return $unit > 0
+                ? (bool) LCN_SwitchRelay($unit, $electric)
+                : (bool) LCN_SetRelay($relayModule, $mask);
         } catch (Throwable $e) {
-            $this->SendDebug('DirectCooling', 'LCN_SetRelay: ' . $e->getMessage(), 0);
+            $this->SendDebug('DirectCooling', 'Relaiskommando: ' . $e->getMessage(), 0);
             return false;
         } finally {
             IPS_SemaphoreLeave(self::GLOBAL_LCN_SEND_SEMAPHORE);
@@ -455,7 +499,9 @@ trait LCNDirectCooling
                 return 'Relaiskanal mehrfach konfiguriert';
             }
         }
-        foreach (['LCN_LockTargetValue', 'LCN_ReleaseTargetValue', 'LCN_SetRelay'] as $fn) {
+        $relayFunction = (int) ($m['RelayUnit'] ?? 0) > 0
+            ? 'LCN_SwitchRelay' : 'LCN_SetRelay';
+        foreach (['LCN_LockTargetValue', 'LCN_ReleaseTargetValue', $relayFunction] as $fn) {
             if (!IPS_FunctionExists($fn)) {
                 return 'LCN-Funktion ' . $fn . ' nicht vorhanden';
             }

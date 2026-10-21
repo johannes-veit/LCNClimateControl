@@ -224,3 +224,31 @@ ist keine sichere Hardwareverriegelung.
 Rollback auf den unveraenderten Stand v0.2.10:
 `backup/v0.2.10-pre-cooling-2026-10-21`
 (siehe `docs/DIREKTKUEHLUNG_ROLLBACK.md`).
+
+## 0.3.3 – Automatische LCN-Verknuepfung ohne manuelle 11-fache IDs
+
+- Aus der LP3-Datei bekannte physische Relaiszuordnung M11..M151 -> M92/M192/R1..R6.
+- Sendemodul und S1Target stehen bereits in der bestehenden LCNClimateControl-Raumliste.
+- Das Modul erkennt bei jedem Kuehlzyklus die korrespondierende native Symcon
+  LCN-Unit (Typ Relais = Unit 2), Status, S1Target-Entriegelt, Segment/Gateway.
+- Konfigurationsknopf "LCN-Zuordnungen aus Symcon auslesen" listet alle live
+  Symcon-IDs **nur lesend**. Bekanntes Beispiel aus frueheren Tests:
+  EG Buero LCN-Modul #37617; EG Bad S1Target #21099,
+  Entriegelt #19580. Diese IDs werden zur Vermeidung veralteter
+  Zuordnungen NICHT hartcodiert.
+- Die Stellantriebe sind **NC/stromlos geschlossen**. Daher liegt
+  werkseitig Relais EIN = Ventil AUF als Vorschlag vor. Aber: ein
+  NC-Stellantrieb sagt allein nicht aus, ob der entsprechende Relaiskontakt
+  als Schliesser oder Oeffner verdrahtet wurde. Darum muss der Haken
+  "Stellantriebe/Relaissinn geprueft" einmalig gesetzt werden, bevor ein
+  Direktbefehl freigegeben wird. Ohne Haken bleibt A7/A8 aktiv.
+- Es erfolgt KEINE unkontrollierte Selbsterprobung durch Sperren.
+  Geprueft werden native Instanzen, eindeutige Rueckmeldungen und
+  Rueckfallbedingungen pro Raum.
+- Hardware-Taupunktsicherung geplant in
+  `docs/TAUPUNKTSCHUTZ_KUEHLKREIS.md`:
+  potentialfreier Feuchtesensor-/Taupunktwächter-Schaltkontakt,
+  stromlos schliessende Kuehlkreisfreigabe und hydraulische
+  Mindest-Vorlauftemperatur. Nichts davon wurde vor Ort eingebaut.
+- Im Symcon-Modul selbst lediglich schriftlicher Hinweis. Software-Eingang
+  zur Kuehlfreigabe bleibt optional; falls konfiguriert, wird er geprueft.
