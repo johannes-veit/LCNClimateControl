@@ -492,13 +492,13 @@ trait LCNDirectCooling
             }
         }
         if ($blocked > 0) {
-            return 'Direktkuehlung gestoppt (' . $blocked
-                . ' Raum/Raeume): Reglerzustand nicht sicher. Kein automatischer Rueckfall. '
+            return 'Direktkühlung gestoppt (' . $blocked
+                . ' Raum/Räume): Reglerzustand nicht sicher. Kein automatischer Rueckfall. '
                 . $firstBlocked;
         }
         if ($legacy > 0) {
-            return 'Neue Kuehlsteuerung nicht verfuegbar (' . $legacy
-                . ' Raum/Raeume) – bisherige Steuerung aktiv. ' . $first;
+            return 'Neue Kühlsteuerung nicht verfügbar (' . $legacy
+                . ' Raum/Räume) – bisherige Steuerung aktiv. ' . $first;
         }
         return '';
     }
