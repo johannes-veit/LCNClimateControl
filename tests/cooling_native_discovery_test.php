@@ -37,6 +37,7 @@ function IPS_GetChildrenIDs(int $id): array{
     $out=[];foreach($GLOBALS['variables'] as $v=>$meta){if($meta['Parent']===$id)$out[]=$v;}return $out;
 }
 function IPS_GetName(int $id): string{return $GLOBALS['variables'][$id]['Name'];}
+function IPS_GetObject(int $id): array { return ['ObjectIdent'=>$GLOBALS['variables'][$id]['Ident']??'']; }
 require __DIR__.'/../LCNClimateControl/CoolingDiscovery.php';
 class Probe{
     use LCNClimateCoolingDiscovery;
@@ -52,7 +53,7 @@ check(is_array($m)&&$m['RelayModule']===92&&$m['RelayUnit']===700&&$m['RelayChan
 check($m['UnlockedVariable']===10001&&$m['RelayStatusVariable']===7001,'correct feedback');
 check($m['RegulatorIndex']===2&&$m['OpenRelayOn']===true&&$m['PolarityConfirmed'],'verified S1 regulator & polarity');
 $p->properties['AutoCoolingPolarityConfirmed']=false;
-check($p->go()===null,'unconfirmed polarity never starts direct');
+check($p->go()!==null,'confirmed valve wiring must not require old manual checkbox');
 $p->properties['AutoCoolingPolarityConfirmed']=true;
 $GLOBALS['instances'][701]=$GLOBALS['instances'][700];
 $GLOBALS['configs'][701]=$GLOBALS['configs'][700];
@@ -68,10 +69,16 @@ $GLOBALS['configs'][700]['Unit']=0;
 check($p->go()===null,'output must not be treated as relay');
 $GLOBALS['configs'][700]['Unit']=2;
 $GLOBALS['variables'][7001]['Name']='Unbekannt';
-check($p->go()===null,'unknown feedback name fails closed');
+check($p->go()===null,'unknown feedback name and ident fails closed');
+$GLOBALS['variables'][7001]['Ident']='Status';
+check($p->go()!==null,'technical ident survives renamed relay label');
 $GLOBALS['variables'][7001]['Name']='Status';
+$GLOBALS['variables'][10001]['Name']='Umbenannt';
+$GLOBALS['variables'][10001]['Ident']='Entriegelt';
+check($p->go()!==null,'technical ident survives renamed unlocked label');
+$GLOBALS['variables'][10001]['Name']='Entriegelt';
 $GLOBALS['configs'][11]['Target']=99;
 check($p->go()===null,'unknown source hardware must not be assigned');
 $GLOBALS['configs'][11]['Target']=11;
 check($p->go()!==null,'valid native mapping restored');
-echo "PASS: 10 native hardware-mapping discovery safety cases\n";
+echo "PASS: 12 native hardware-mapping and technical object-ident cases\n";
