@@ -590,16 +590,19 @@ trait LCNDirectCooling
             $this->DirectCoolingEnqueue($room, $state, $previous);
             return;
         }
-        $previousFallback = $this->DirectCoolingFallbacks()[(string) $target] ?? null;
-        if (is_array($previousFallback) && ($previousFallback['kind'] ?? '') === 'legacy') {
-            $this->EnqueueLegacyCoolingJob($room, $state, $previous);
-            return;
-        }
+        // Eine konfigurierte externe Kuehlfreigabe sperrt KUEHLEN EIN
+        // AUSNAHMSLOS, auch wenn dieser Raum bereits in der laufenden
+        // Kuehlsaison auf die bewahrte A7/A8-Variante zurueckgefallen ist.
         $safetyID = (int) $this->ReadPropertyInteger('CoolingSafetyVariable');
         if ($state && $safetyID > 0 && !$this->DirectCoolingSafe()) {
             $this->DirectCoolingFallbackSet($target, 'Externe Kuehlfreigabe fehlt: Kuehlen EIN gesperrt', 'blocked');
             $this->SetValueIfChanged($this->CoolIdent($target), $previous);
             $this->SetRoomError($target, $room['Name'] . ': Kuehlfreigabe fehlt, keine Kuehlung eingeschaltet.');
+            return;
+        }
+        $previousFallback = $this->DirectCoolingFallbacks()[(string) $target] ?? null;
+        if (is_array($previousFallback) && ($previousFallback['kind'] ?? '') === 'legacy') {
+            $this->EnqueueLegacyCoolingJob($room, $state, $previous);
             return;
         }
         $reason = $this->DirectCoolingEligibility($room);
