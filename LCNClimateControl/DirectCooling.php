@@ -63,10 +63,36 @@ trait LCNDirectCooling
         $map = $this->ReadJsonAttribute('DirectCoolingLocks');
         if ($state === '') {
             unset($map[(string) $target]);
+            $saved = $this->ReadJsonAttribute('DirectCoolingLockMappings');
+            unset($saved[(string) $target]);
+            $this->WriteJsonAttribute('DirectCoolingLockMappings', $saved);
         } else {
             $map[(string) $target] = $state;
         }
         $this->WriteJsonAttribute('DirectCoolingLocks', $map);
+    }
+
+    private function DirectCoolingSaveLockMapping(int $target, array $mapping): void
+    {
+        // Persistiert nur bereits eindeutig validierte, native Instanz-IDs.
+        // Nach einem ApplyChanges oder einer fehlgeschlagenen Relais-Suche
+        // muss sich ein eventuell gesperrter Regler weiterhin freigeben lassen.
+        $map = $this->ReadJsonAttribute('DirectCoolingLockMappings');
+        $map[(string) $target] = $mapping;
+        $this->WriteJsonAttribute('DirectCoolingLockMappings', $map);
+    }
+
+    private function DirectCoolingMappingForJob(array $job): ?array
+    {
+        if (is_array($job['Mapping'] ?? null)) {
+            return $job['Mapping'];
+        }
+        $target = (int) ($job['TargetVariable'] ?? 0);
+        $saved = $this->ReadJsonAttribute('DirectCoolingLockMappings');
+        if (is_array($saved[(string) $target] ?? null)) {
+            return $saved[(string) $target];
+        }
+        return $this->DirectCoolingMapping($target);
     }
 
     private function DirectCoolingSafe(): bool
@@ -146,6 +172,7 @@ trait LCNDirectCooling
             'TargetVariable' => $room['TargetVariable'],
             'DesiredOpen' => $open,
             'PreviousCoolingState' => $previous,
+            'Mapping' => $this->DirectCoolingMapping((int) $room['TargetVariable']),
             'Phase' => 'lock'
         ]);
     }
@@ -158,6 +185,8 @@ trait LCNDirectCooling
             'SendModule' => $room['SendModule'],
             'TargetVariable' => $room['TargetVariable'],
             'RestoreTarget' => $restore,
+            'Mapping' => $this->DirectCoolingMapping((int) $room['TargetVariable'])
+                ?? ($this->ReadJsonAttribute('DirectCoolingLockMappings')[(string) $room['TargetVariable']] ?? null),
             'Phase' => 'close'
         ]);
     }
@@ -254,7 +283,9 @@ trait LCNDirectCooling
             return true;
         }
         if ($this->NowMs() - (int) ($job['SentAtMs'] ?? 0) > $this->DirectCoolingTimeoutMs()) {
-            $this->FailCurrentJob($job, $name . ': keine bestaetigte Rueckmeldung innerhalb 7 s. LCN-Zustand bitte vor Ort pruefen.');
+            $this->FailCurrentJob($job, $name . ': keine frische Rueckmeldung innerhalb ' .
+                (int) ceil($this->DirectCoolingTimeoutMs() / 1000) .
+                ' s. LCN-Zustand bitte vor Ort pruefen.');
             return true;
         }
         $this->YieldCurrentJob($job);
@@ -264,7 +295,7 @@ trait LCNDirectCooling
     private function HandleDirectCoolingJob(array $job): void
     {
         $target = (int) $job['TargetVariable'];
-        $m = $this->DirectCoolingMapping($target);
+        $m = $this->DirectCoolingMappingForJob($job);
         if ($m === null || !$this->IsOperationalLCNModule((int) $job['SendModule'])) {
             $this->FailCurrentJob($job, 'Relais-/Modul-Zuordnung nicht mehr gueltig.');
             return;
@@ -291,6 +322,7 @@ trait LCNDirectCooling
                     $this->YieldCurrentJob($job);
                     return;
                 }
+                $this->DirectCoolingSaveLockMapping($target, $m);
                 $this->DirectCoolingSetLockState($target, 'uncertain');
                 if (!$this->DirectCoolingControllerCommand($job, $m, true)) {
                     $this->FailCurrentJob($job, 'Reglersperre nicht gesendet; Ventil unveraendert.');
@@ -626,7 +658,8 @@ trait LCNDirectCooling
         if ($locked !== '') {
             // Bestehenden Direktsperrzustand nur durch Direktlogik steuern;
             // vor Wiederherstellung niemals TS-Tasten an gesperrte Regler senden.
-            $m = $this->DirectCoolingMapping($target);
+            $m = $this->DirectCoolingMapping($target)
+                ?? ($this->ReadJsonAttribute('DirectCoolingLockMappings')[(string) $target] ?? null);
             if ($m === null) {
                 $this->DirectCoolingFallbackSet($target, 'LCN-Regler gesperrt, Zuordnung fehlt', 'blocked');
                 $this->SetValueIfChanged($this->CoolIdent($target), $previous);
@@ -661,7 +694,14 @@ trait LCNDirectCooling
         }
         if ($reason === '') {
             $this->DirectCoolingFallbackSet($target, '');
-            $this->DirectCoolingEnqueue($room, $state, $previous);
+            if ($state) {
+                $this->DirectCoolingEnqueue($room, true, $previous);
+            } else {
+                // Bereits AUS und noch nicht durch dieses Modul gesperrt:
+                // keine unnoetige Reglersperre fuer 11 Raeume am Kuehlstart.
+                // Der bestehende TS-Schliessweg bleibt identisch zu v0.2.10.
+                $this->EnqueueLegacyCoolingJob($room, false, $previous);
+            }
             return;
         }
         $this->DirectCoolingFallbackSet($target, $reason);
@@ -676,7 +716,7 @@ trait LCNDirectCooling
     private function BeginDirectCoolingRecovery(array $job, string $reason): void
     {
         $target = (int) ($job['TargetVariable'] ?? 0);
-        $m = $this->DirectCoolingMapping($target);
+        $m = $this->DirectCoolingMappingForJob($job);
         if ($m === null || !in_array((int) ($m['RegulatorIndex'] ?? -1), [0, 2], true)) {
             $this->DirectCoolingFallbackSet($target, $reason . ' (Reglerfreigabe nicht moeglich)', 'blocked');
             $job['Type'] = 'direct_recover';
@@ -695,7 +735,7 @@ trait LCNDirectCooling
     private function HandleDirectCoolingRecovery(array $job): void
     {
         $target = (int) $job['TargetVariable'];
-        $m = $this->DirectCoolingMapping($target);
+        $m = $this->DirectCoolingMappingForJob($job);
         $phase = (string) ($job['Phase'] ?? '');
         $unlockId = (int) ($m['UnlockedVariable'] ?? 0);
         if ($m === null || !IPS_VariableExists($unlockId)) {
