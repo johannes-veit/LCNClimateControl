@@ -344,14 +344,19 @@ trait LCNDirectCooling
             || $this->DirectCoolingSafe()) {
             return;
         }
+        // Die optionale Direktsteuerung darf niemals alte TS-Kuehlauftraege
+        // der anderen Raeume abbrechen. Ohne tatsaechliche Reglersperre
+        // ist die gesamte Schutzroutine inaktiv.
+        if ($this->ReadJsonAttribute('DirectCoolingLocks') === []) {
+            return;
+        }
         if (!IPS_SemaphoreEnter('LCNC_' . $this->InstanceID, 1000)) {
             return;
         }
         try {
-            // Bei Freigabeverlust kein weiteres Oeffnen zulassen.
-            $this->SetBuffer('Queue', '[]');
-            $this->SetBuffer('CurrentJob', '');
-            $this->ClearPendingMode();
+            // Alte TS-Kuehlauftraege sowie Rueckkehr-nach-Heizen-Jobs
+            // bleiben bestehen. Die direkte Kuehlung prueft ihre Freigabe
+            // vor jedem einzelnen Oeffnungs-Schaltbefehl erneut.
             foreach ($this->GetRuntimeRooms() as $room) {
                 $target = (int) $room['TargetVariable'];
                 $m = $this->DirectCoolingMapping($target);
