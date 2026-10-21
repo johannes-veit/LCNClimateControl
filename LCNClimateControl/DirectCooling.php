@@ -509,6 +509,7 @@ trait LCNDirectCooling
         $locked = $this->DirectCoolingLockState($target);
         if ($locked === 'uncertain') {
             $this->DirectCoolingFallbackSet($target, 'Reglerzustand ungewiss', 'blocked');
+            $this->SetValueIfChanged($this->CoolIdent($target), $previous);
             $this->SetRoomError($target, $room['Name'] . ': Reglerzustand ungewiss; keine neue Ventilfahrt.');
             return;
         }
@@ -518,6 +519,7 @@ trait LCNDirectCooling
             $m = $this->DirectCoolingMapping($target);
             if ($m === null) {
                 $this->DirectCoolingFallbackSet($target, 'LCN-Regler gesperrt, Zuordnung fehlt', 'blocked');
+                $this->SetValueIfChanged($this->CoolIdent($target), $previous);
                 $this->SetRoomError($target, $room['Name'] . ': Regler gesperrt; manueller Eingriff erforderlich.');
                 return;
             }
@@ -532,6 +534,7 @@ trait LCNDirectCooling
         $safetyID = (int) $this->ReadPropertyInteger('CoolingSafetyVariable');
         if ($state && $safetyID > 0 && !$this->DirectCoolingSafe()) {
             $this->DirectCoolingFallbackSet($target, 'Externe Kuehlfreigabe fehlt: Kuehlen EIN gesperrt', 'blocked');
+            $this->SetValueIfChanged($this->CoolIdent($target), $previous);
             $this->SetRoomError($target, $room['Name'] . ': Kuehlfreigabe fehlt, keine Kuehlung eingeschaltet.');
             return;
         }
