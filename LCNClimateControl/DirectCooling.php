@@ -327,6 +327,24 @@ trait LCNDirectCooling
             if ($phase === 'unlock_wait') {
                 if ($unlocked && $this->DirectCoolingFeedbackFresh($unlockID, $job)
                     && $this->NowMs() - (int) ($job['SentAtMs'] ?? 0) >= 500) {
+                    $job['Phase'] = 'restore_target_wait';
+                    $job['SentAtMs'] = $this->NowMs();
+                    $this->YieldCurrentJob($job);
+                    return;
+                }
+                $this->DirectCoolingWait($job, 'unlock_wait', 'Regler freigegeben', $unlocked, true, $unlockID);
+                return;
+            }
+            if ($phase === 'restore_target_wait') {
+                if (!$unlocked) {
+                    $this->FailCurrentJob($job, 'LCN-Regler wurde unerwartet erneut gesperrt; Heizfahrt blockiert.');
+                    return;
+                }
+                // Eine bestaetigte Bool-Freigabe allein reicht bei FW 1F0715
+                // nicht aus: erst wieder ein PLAUSIBLER, frisch gelesener
+                // S1Target belegt die Rueckkehr zum normalen Regelbetrieb.
+                if ($this->ReadTarget($target) !== null
+                    && $this->DirectCoolingFeedbackFresh($target, $job)) {
                     $this->DirectCoolingSetLockState($target, '');
                     $this->SetBuffer('CurrentJob', '');
                     $this->ClearRoomError($target);
@@ -338,7 +356,11 @@ trait LCNDirectCooling
                     $this->PushVisualizationRowByTarget($target);
                     return;
                 }
-                $this->DirectCoolingWait($job, 'unlock_wait', 'Regler freigegeben', $unlocked, true, $unlockID);
+                if ($this->NowMs() - (int) ($job['SentAtMs'] ?? 0) > 120000) {
+                    $this->FailCurrentJob($job, 'Regler entriegelt, aber kein normaler S1Target bestaetigt. LCN-PRO pruefen.');
+                    return;
+                }
+                $this->YieldCurrentJob($job);
                 return;
             }
         }
