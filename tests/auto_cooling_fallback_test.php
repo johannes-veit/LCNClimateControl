@@ -1,8 +1,8 @@
 <?php
 declare(strict_types=1);
 const VARIABLETYPE_BOOLEAN = 0;
-$GLOBALS['v'] = [100 => true, 101 => true, 102 => false];
-$GLOBALS['updated'] = [100 => time(), 101 => time(), 102 => time()];
+$GLOBALS['v'] = [100 => true, 101 => true, 102 => false, 777 => 21.0];
+$GLOBALS['updated'] = [100 => time(), 101 => time(), 102 => time(), 777 => time()];
 $GLOBALS['release_ok'] = true;
 function IPS_VariableExists(int $id): bool { return array_key_exists($id, $GLOBALS['v']); }
 function IPS_GetVariable(int $id): array { return ['VariableType' => VARIABLETYPE_BOOLEAN, 'VariableUpdated' => $GLOBALS['updated'][$id] ?? 0]; }
@@ -25,6 +25,7 @@ final class AutoProbe {
     public array $jobs = [];
     public array $buffers = [];
     public array $errors = [];
+    public array $coolingStored = [];
     public array $room = ['Name'=>'EG Buero','SendModule'=>11,'TargetVariable'=>777,'Table'=>'A','UpKey'=>7,'DownKey'=>8];
     public int $now = 10000;
     private function ReadPropertyBoolean(string $name): bool { return (bool) ($this->properties[$name] ?? false); }
@@ -55,6 +56,10 @@ final class AutoProbe {
     public function chooseRoom(array $room, bool $on): void { $this->EnqueueCoolingAutomatically($room,$on,false); }
     public function summary(): string { return $this->DirectCoolingFallbackSummary(); }
     public function recover(array $job): void { $this->HandleDirectCoolingRecovery($job); }
+    public function processDirect(array $job): void { $this->HandleDirectCoolingJob($job); }
+    public function release(float $target): void { $this->DirectCoolingEnqueueRelease($this->room, $target); }
+    private function EnqueueHeatJob(array $room, float $target): void { $this->jobs[]=['Type'=>'heat','Desired'=>$target]; }
+    private function StoreCoolingState(int $target, bool $state): void { $this->coolingStored[$target]=$state; }
     public function lockState(int $target, string $state): void { $this->DirectCoolingSetLockState($target,$state); }
 }
 function check(bool $condition, string $message): void { if (!$condition) throw new RuntimeException($message); }
@@ -79,24 +84,38 @@ $GLOBALS['v'][100]=true;
 // 4. Reglerzustand ungewiss -> kein Legacy-Befehl.
 $d=new AutoProbe();config($d);$d->lockState(777,'uncertain');$d->choose(true);
 check($d->jobs===[] && str_contains($d->summary(),'gestoppt'),'uncertain lock fails closed');
-// 5. Nach gescheiterter Direktsteuerung zuerst entriegeln.
+// 5. Nach gescheiterter Direktsteuerung erst RELAIS AUS, dann
+// Regler entriegeln, dann frischen normalen Sollwert nachweisen.
 $e=new AutoProbe();config($e);$e->lockState(777,'uncertain');
-$job=['Type'=>'direct_recover','TargetVariable'=>777,'SendModule'=>11,'Phase'=>'unlock',
+$job=['Type'=>'direct_recover','TargetVariable'=>777,'SendModule'=>11,'Phase'=>'close',
   'FallbackReason'=>'Relais-Timeout','DesiredOpen'=>true,'PreviousCoolingState'=>false];
 $e->recover($job);
-check(count($e->jobs)===1 && $e->jobs[0]['Phase']==='unlock_wait','send release before legacy');
+check(count($e->jobs)===1 && $e->jobs[0]['Phase']==='close_wait','send relay OFF before unlocking');
+$next=$e->jobs[0];$e->jobs=[];
+$e->now=$next['SentAtMs']+600;$GLOBALS['v'][102]=false;$GLOBALS['updated'][102]=time();
+$e->recover($next);
+check(count($e->jobs)===1 && $e->jobs[0]['Phase']==='unlock','relay OFF confirmed first');
+$next=$e->jobs[0];$e->jobs=[];
+$e->recover($next);
+check(count($e->jobs)===1 && $e->jobs[0]['Phase']==='unlock_wait','send unlock after OFF confirmation');
 $next=$e->jobs[0];$e->jobs=[];
 $e->now=$next['SentAtMs']+600;$GLOBALS['v'][101]=true;$GLOBALS['updated'][101]=time();
 $e->recover($next);
-check(count($e->jobs)===1 && $e->jobs[0]['Phase']==='normal_target_wait','must verify normal S1Target after unlock');
+check(count($e->jobs)===1 && $e->jobs[0]['Phase']==='normal_target_wait','normal target must be checked');
 $next=$e->jobs[0]; $e->jobs=[];
+$GLOBALS['updated'][777]=time();
 $e->recover($next);
 check($e->attrs['DirectCoolingLocks']===[],'release clears persistent lock');
-check(count($e->jobs)===1 && $e->jobs[0]['Type']==='cool_up','legacy only after release proof');
+check(count($e->jobs)===1 && $e->jobs[0]['Type']==='cool_up','legacy only after relay+release+target proof');
 // 6. Kein Freigabebefehl: kein Legacy.
 $f=new AutoProbe();config($f);$f->lockState(777,'uncertain');
-$GLOBALS['release_ok']=false;$f->recover($job);
-check($f->jobs===[] && str_contains($f->summary(),'gestoppt'),'release failure blocks');$GLOBALS['release_ok']=true;
+$GLOBALS['release_ok']=false;
+$f->recover($job);
+$phase=$f->jobs[0];$f->jobs=[];$f->now=$phase['SentAtMs']+600;
+$f->recover($phase);$phase=$f->jobs[0];$f->jobs=[];
+$f->recover($phase);
+check($f->jobs===[] && str_contains($f->summary(),'gestoppt'),'release failure blocks');
+$GLOBALS['release_ok']=true;
 // 7. Wiederholte Kuehlaktionen innerhalb einer Betriebsart bleiben im Legacy.
 $a->jobs=[];config($a);$a->choose(false);
 check(count($a->jobs)===1 && $a->jobs[0]['Type']==='cool_down','no repeated direct attempt after legacy');
@@ -168,4 +187,77 @@ $n->choose(true);
 check($n->jobs===[] && str_contains($n->summary(),'gestoppt'),
     'configured safety veto must override ongoing legacy fallback');
 $GLOBALS['v'][100]=true;
-echo "PASS: 14 scenarios incl. 11-room parallel decisions and safety gate after legacy fallback\n";
+// 15. Kuehlen AUS am Beginn braucht nie eine Reglersperre.
+$off=new AutoProbe();config($off);$off->choose(false);
+check(count($off->jobs)===1 && $off->jobs[0]['Type']==='cool_down',
+    'cooling OFF must preserve legacy route and never lock controller');
+// 16. Gesicherte Relais-/Reglerzuordnung muss einen Neustart der
+// Laufzeitdiagnose ueberleben; spaeterer Release benutzt gespeicherte
+// Zuordnung, nicht geratenes LCN-Ziel.
+$saved=new AutoProbe();config($saved);
+$reflect=new ReflectionClass($saved);
+$fn=$reflect->getMethod('DirectCoolingSaveLockMapping');
+$fn->invoke($saved,777,[
+    'TargetVariable'=>777,'RelayModule'=>92,'RelayUnit'=>700,
+    'RelayChannel'=>1,'RegulatorIndex'=>2,
+    'UnlockedVariable'=>101,'RelayStatusVariable'=>102,
+    'OpenRelayOn'=>true,'PolarityConfirmed'=>true
+]);
+check(isset($saved->attrs['DirectCoolingLockMappings']['777']),
+    'durable mapping must be saved');
+$job=['TargetVariable'=>777,'SendModule'=>11,'Type'=>'direct_release','Phase'=>'unlock'];
+$get=$reflect->getMethod('DirectCoolingMappingForJob');
+check(($get->invoke($saved,$job)['RelayUnit']??0)===700,
+    'recovery must honor saved mapping');
+// 17. Nach erfolgreicher Entsperrung muss der gespeicherte Mapping-Eintrag
+// geloescht werden.
+$saved->lockState(777,'locked');
+$saved->lockState(777,'');
+check(!isset($saved->attrs['DirectCoolingLockMappings']['777']),
+    'durable mapping must be deleted only after confirmed unlock');
+// 18. Vollstaendige neue Direktschaltung EIN ueber den echten PHP
+// Zustandsautomaten (ohne Hardware): lock -> feedback -> relay -> feedback.
+$z=new AutoProbe();config($z);
+$GLOBALS['v'][101]=true;$GLOBALS['v'][102]=false;
+$z->choose(true);$job=$z->jobs[0];$z->jobs=[];
+$z->processDirect($job);
+check(count($z->jobs)===1 && $z->jobs[0]['Phase']==='lock_wait',
+    'direct phase must first send controller lock');
+$job=$z->jobs[0];$z->jobs=[];$z->now=$job['SentAtMs']+600;
+$GLOBALS['v'][101]=false;$GLOBALS['updated'][101]=time();
+$z->processDirect($job);
+check($z->attrs['DirectCoolingLocks']['777']==='locked'
+    && $z->jobs[0]['Phase']==='relay','lock feedback must precede relay');
+$job=$z->jobs[0];$z->jobs=[];$z->processDirect($job);
+check($z->jobs[0]['Phase']==='relay_wait','relay switch must await feedback');
+$job=$z->jobs[0];$z->jobs=[];$z->now=$job['SentAtMs']+600;
+$GLOBALS['v'][102]=true;$GLOBALS['updated'][102]=time();
+$z->processDirect($job);
+check(($z->coolingStored[777]??false)===true
+    && $z->jobs===[], 'only confirmed relay ON may store cooling ON');
+$GLOBALS['v'][101]=true;$GLOBALS['v'][102]=false;
+// 19. Vollstaendige Rueckkehr zur Heizregelung nach direkter Kuehlung.
+$back=new AutoProbe();config($back);$back->lockState(777,'locked');
+$GLOBALS['v'][101]=false;$GLOBALS['v'][102]=true;
+$back->release(22.0);check(count($back->jobs)===1,'release job enqueued');
+$job=$back->jobs[0];$back->jobs=[];
+$back->processDirect($job);
+check($back->jobs[0]['Phase']==='close_wait','release must first de-energize actuator');
+$job=$back->jobs[0];$back->jobs=[];
+$back->now=$job['SentAtMs']+600;$GLOBALS['v'][102]=false;$GLOBALS['updated'][102]=time();
+$back->processDirect($job);
+check($back->jobs[0]['Phase']==='unlock','relay OFF precedes controller release');
+$job=$back->jobs[0];$back->jobs=[];$back->processDirect($job);
+check($back->jobs[0]['Phase']==='unlock_wait','controller unlock pending');
+$job=$back->jobs[0];$back->jobs=[];
+$back->now=$job['SentAtMs']+600;$GLOBALS['v'][101]=true;$GLOBALS['updated'][101]=time();
+$back->processDirect($job);
+check($back->jobs[0]['Phase']==='restore_target_wait','normal S1Target required before heating');
+$job=$back->jobs[0];$back->jobs=[];$GLOBALS['updated'][777]=time();
+$back->processDirect($job);
+check($back->jobs[0]['Type']==='heat' && $back->jobs[0]['Desired']===22.0,
+    'heating target restore must use saved value');
+check(($back->attrs['DirectCoolingLocks']??[])===[],
+    'lock must be released after final feedback confirmation');
+$GLOBALS['v'][101]=true;$GLOBALS['v'][102]=false;
+echo "PASS: 19 scenarios incl. confirmed heating-to-cooling and cooling-to-heating transitions\n";

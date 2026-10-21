@@ -75,6 +75,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterAttributeString('LastHeatingTargets', '{}');
         $this->RegisterAttributeString('CoolingStates', '{}');
         $this->RegisterAttributeString('DirectCoolingLocks', '{}');
+        $this->RegisterAttributeString('DirectCoolingLockMappings', '{}');
         $this->RegisterAttributeString('CoolingFallbackReasons', '{}');
         $this->RegisterAttributeString('DirectCoolingRoomHealth', '{}');
         $this->RegisterAttributeString('RegisteredTargetMessages', '[]');
