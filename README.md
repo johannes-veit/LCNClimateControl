@@ -1,6 +1,6 @@
 # LCN Climate Control für IP-Symcon 9
 
-Version **0.2.10**
+Version **0.3.0-rc1 (Entwicklungsbranch, Direktkuehlung AUS)**
 
 GitHub-fertige Modulbibliothek für eine bestehende LCN-Fußbodenheizung mit GT8/GUS-Regelung.
 
@@ -167,3 +167,12 @@ Räume nicht mehr.
 - PHP-/Node-Regressionstests und gemockte IP-Symcon-Laufzeit für Heizen → Kühlen → Heizen sind im GitHub-Workflow enthalten.
 - Bekannte Grenzen: Die S1Target-basierte Endlagenerkennung beweist keine mechanische Ventilstellung; reale SymBox-/GT8-Tests bleiben nötig.
 
+
+
+## Direktkuehlung (separate Testversion 0.3.0-rc1)
+
+Die bestehende Visualisierung, der GT8 und die Heizfahrten ueber A7/A8 bleiben gleich. Die neue Funktion ist **standardmaessig AUS** (DirectCoolingEnabled=false): Somit arbeitet das Modul bis zur expliziten Freigabe exakt wie v0.2.10.
+
+Bei expliziter Aktivierung und vollstaendiger Konfiguration pro Raum: Regler 1 sperren, Entsperrt-Feedback pruefen, ausschliesslich das zugeordnete Relais mit 8-stelliger Maske steuern, Relais-Feedback pruefen. Bei Rueckkehr in den Heizbetrieb: Relais schliessen, Regler entsperren, Heizsollwert ueber bestehende TS-Logik wiederherstellen. Fehlendes Feedback stoppt den betroffenen Raum und erfordert Vor-Ort-Pruefung. Im Sperrzustand darf das Modul keinesfalls ohne Wiederherstellung auf 0.2.10 zurueckgesetzt werden.
+
+Details siehe docs/DIREKTKUEHLUNG_ROLLBACK.md. Es ist eine **RC/Testfassung**, kein produktiver Freigabestand: Reglerindex R1/S1, Relaispolaritaet, Zustand nach Neustart und Taupunktsperre muessen an M11 nachgewiesen werden.
