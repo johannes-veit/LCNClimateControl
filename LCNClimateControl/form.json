@@ -120,7 +120,7 @@
     },
     {
       "type": "ExpansionPanel",
-      "caption": "Direkte Kuehlung (TEST / standardmaessig AUS)",
+      "caption": "Automatische Direktkuehlung (optional, sicherer Rueckfall)",
       "expanded": false,
       "items": [
         {
@@ -138,7 +138,7 @@
         },
         {
           "type": "Label",
-          "caption": "Die Freigabevariable ersetzt KEINE hardwareseitige Taupunktabschaltung. Ohne vollstaendige Zuordnungen und Rueckmeldungen werden keine Direktbefehle freigegeben."
+          "caption": "Symcon prueft bei Kuehlen pro Raum LCN-Funktionen und Rueckmeldungen. Ohne neue Konfiguration bleibt die alte TS-Kuehlung mit Hinweis aktiv. Bei Direktfehlern: alte Methode erst nach bestaetigter Reglerfreigabe. Bei unklarer Freigabe STOP. Hardware-Taupunktschutz weiterhin erforderlich."
         },
         {
           "type": "List",
