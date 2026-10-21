@@ -181,3 +181,46 @@ Details siehe docs/DIREKTKUEHLUNG_ROLLBACK.md. Es ist eine **RC/Testfassung**, k
 ## 0.3.1-rc1 – Automatische Rueckfallsteuerung (separater Entwicklungsbranch)
 
 Mit aktivierter Option `DirectCoolingEnabled` prueft das Modul bei Wahl von Kuehlen pro Raum, ob native Regler- und Relaisfunktionen, Zuordnungen, Rueckmeldungen sowie die externe Freigabe vorhanden sind. Fehlende Voraussetzung: bisherige A7/A8-Kuehlung und kleine Statusmeldung unten in der Kachel. Scheitert der Direktversuch NACH einer moeglichen Reglersperre, sendet Symcon zuerst die Reglerfreigabe und wartet auf die Rueckmeldung; nur nach positivem Nachweis wird die alte Logik verwendet. Bei nicht bestaetigter Freigabe keine automatische Umschaltung! `main` und das Backup bleiben unveraendert. Die alte Methode ist KEIN Nachweis geoeffneter Kuehlventile bei hohen Raumtemperaturen. 
+
+## 0.3.2 – Automatische Erkennung je Raum (aktuelle Version)
+
+Das Modul kann unmittelbar ueber das Update installiert werden. In einer
+bestehenden Installation mit unveraenderten Symcon-/LCN-Einstellungen nutzt
+es weiterhin die klassische Kuehlung mit A7/A8. Heizregelung, GT8,
+Kachelbedienung, Raumobjekte und gespeicherte Solltemperaturen bleiben erhalten.
+
+Bei jeder erneuten Auswahl von Kuehlen evaluiert das Modul **jeden Raum
+separat**. Direkte Sperr-/Relaissteuerung wird nur aktiviert, wenn ALLE
+folgenden Voraussetzungen nachweisbar sind:
+- die native LCN-Sendereglerinstanz und die native Relais-Splitterinstanz
+  sind korrekt in Symcon verbunden und erreichbar;
+- der passende Reglerindex sowie native Boolean-Variable "Entriegelt"
+  und die Boolean-Rueckmeldung des EINZELNEN Relais sind hinterlegt;
+- die EIN/AUS-Ventilpolaritaet wurde ausdruecklich bestaetigt;
+- eine externe Boolean-Kuehlfreigabe liegt vor und ist TRUE;
+- der Heizregler meldet vor dem ersten Sperrversuch "Entriegelt".
+Erst nach erfolgreichem Sperrbefehl und bestaetigtem Zustand wird ein
+Einzelrelaiskanal geschaltet und dessen Rueckmeldung ueberprueft.
+
+**Ohne diese Voraussetzungen erfolgt niemals ein probeweises Sperren.**
+Stattdessen laeuft der bisherige A7/A8-Kuehlbetrieb inklusive einer
+kleinen Fussnote in der Kachel. Nach einem Direktsteuerungsfehler wird
+erst nach bestaetigter Reglerfreigabe und normalem S1Target automatisch
+zur alten Methode zurueckgekehrt. Bei unklarer Freigabe stoppt der Raum.
+
+LCN-PRO selbst stellt seine interne Option "Reglersperre erlaubt" nicht
+ueber die dokumentierte Symcon-API bereit. Eine Aenderung dieser
+Konfiguration kann daher **nicht allein** eine automatische Freischaltung
+bewirken: die einmalige eindeutige Verbindung der 11 Relaiskanaele
+samt Rueckmeldeobjekten und der Sicherheitsfreigabe in Symcon ist weiterhin
+notwendig. Danach erfolgt die Zuordnung bei jedem neuen Kuehlzyklus
+automatisch ohne weitere Eingriffe.
+
+**Taupunktschutz:** 17 Grad Mindestwasser allein schuetzt nicht gegen
+Kondensation. Die Kuehlhydraulik braucht einen eigenstaendigen
+sicherheitsgerichteten Taupunkt-/Kondensatschutz; ein Symcon-Bool allein
+ist keine sichere Hardwareverriegelung.
+
+Rollback auf den unveraenderten Stand v0.2.10:
+`backup/v0.2.10-pre-cooling-2026-10-21`
+(siehe `docs/DIREKTKUEHLUNG_ROLLBACK.md`).
