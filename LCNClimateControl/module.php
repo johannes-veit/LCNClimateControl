@@ -1141,7 +1141,8 @@ class LCNClimateControl extends IPSModuleStrict
             return;
         }
 
-        $Job['Phase'] = self::PHASE_SEND;
+        $Job['Phase'] = ($Job['Type'] ?? '') === 'direct_cool' ? 'lock'
+            : (($Job['Type'] ?? '') === 'direct_release' ? 'close' : self::PHASE_SEND);
         $Job['Steps'] = 0;
         $Job['NoChange'] = 0;
         $Job['SentAtMs'] = 0;
