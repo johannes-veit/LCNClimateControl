@@ -159,7 +159,7 @@ trait LCNClimateCoolingDiscovery
                 if ((int) (IPS_GetVariable($id)['VariableType'] ?? -1) !== VARIABLETYPE_BOOLEAN) {
                     continue;
                 }
-                if (mb_strtolower(trim(IPS_GetName($id))) === mb_strtolower($name)) {
+                if (strcasecmp(trim(IPS_GetName($id)), $name) === 0) {
                     $matches[] = $id;
                 }
             }
