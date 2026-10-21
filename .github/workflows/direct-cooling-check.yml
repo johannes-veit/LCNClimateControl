@@ -17,5 +17,7 @@ jobs:
         run: python3 -c "import json, pathlib; [json.loads(p.read_text()) for p in pathlib.Path('.').rglob('*.json')]; print('JSON OK')"
       - name: Relay isolation model test
         run: php tests/direct_cooling_masks.php
+      - name: Automatic fallback and recovery scenarios
+        run: php tests/auto_cooling_fallback_test.php
       - name: Assert opt-in default off
         run: grep -q "RegisterPropertyBoolean('DirectCoolingEnabled', false)" LCNClimateControl/module.php
