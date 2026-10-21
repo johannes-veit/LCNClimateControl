@@ -191,9 +191,11 @@ trait LCNDirectCooling
         }
     }
 
-    private function DirectCoolingWait(array $job, string $next, string $name, bool $actual, bool $expected): bool
+    private function DirectCoolingWait(array $job, string $next, string $name, bool $actual, bool $expected, int $statusID = 0): bool
     {
-        if ($actual === $expected && $this->NowMs() - (int) ($job['SentAtMs'] ?? 0) >= 500) {
+        if ($actual === $expected
+            && ($statusID <= 0 || $this->DirectCoolingFeedbackFresh($statusID, $job))
+            && $this->NowMs() - (int) ($job['SentAtMs'] ?? 0) >= 500) {
             $job['Phase'] = $next;
             $this->YieldCurrentJob($job);
             return true;
@@ -243,14 +245,15 @@ trait LCNDirectCooling
                 }
                 $job['Phase'] = 'lock_wait';
                 $job['SentAtMs'] = $this->NowMs();
+                $job['SentAtEpoch'] = time();
                 $this->YieldCurrentJob($job);
                 return;
             }
             if ($phase === 'lock_wait') {
-                if (!$unlocked) {
+                if (!$unlocked && $this->DirectCoolingFeedbackFresh($unlockID, $job)) {
                     $this->DirectCoolingSetLockState($target, 'locked');
                 }
-                $this->DirectCoolingWait($job, 'relay', 'Reglersperre', $unlocked, false);
+                $this->DirectCoolingWait($job, 'relay', 'Reglersperre', $unlocked, false, $unlockID);
                 return;
             }
             if ($phase === 'relay') {
@@ -264,12 +267,14 @@ trait LCNDirectCooling
                 }
                 $job['Phase'] = 'relay_wait';
                 $job['SentAtMs'] = $this->NowMs();
+                $job['SentAtEpoch'] = time();
                 $this->YieldCurrentJob($job);
                 return;
             }
             if ($phase === 'relay_wait') {
                 $want = $open ? (bool) $m['OpenRelayOn'] : !(bool) $m['OpenRelayOn'];
-                if ($electric === $want && $this->NowMs() - (int) ($job['SentAtMs'] ?? 0) >= 500) {
+                if ($electric === $want && $this->DirectCoolingFeedbackFresh($statusID, $job)
+                    && $this->NowMs() - (int) ($job['SentAtMs'] ?? 0) >= 500) {
                     $this->StoreCoolingState($target, $open);
                     $this->SetValueIfChanged($this->CoolIdent($target), $open);
                     $this->SetBuffer('CurrentJob', '');
@@ -279,7 +284,7 @@ trait LCNDirectCooling
                     $this->PushVisualizationMeta();
                     return;
                 }
-                $this->DirectCoolingWait($job, 'relay_wait', 'Relaiszustand', $electric, $want);
+                $this->DirectCoolingWait($job, 'relay_wait', 'Relaiszustand', $electric, $want, $statusID);
                 return;
             }
         } elseif ($type === 'direct_release') {
@@ -290,12 +295,13 @@ trait LCNDirectCooling
                 }
                 $job['Phase'] = 'close_wait';
                 $job['SentAtMs'] = $this->NowMs();
+                $job['SentAtEpoch'] = time();
                 $this->YieldCurrentJob($job);
                 return;
             }
             if ($phase === 'close_wait') {
                 $want = !(bool) $m['OpenRelayOn'];
-                $this->DirectCoolingWait($job, 'unlock', 'Ventil geschlossen', $electric, $want);
+                $this->DirectCoolingWait($job, 'unlock', 'Ventil geschlossen', $electric, $want, $statusID);
                 return;
             }
             if ($phase === 'unlock') {
@@ -305,11 +311,13 @@ trait LCNDirectCooling
                 }
                 $job['Phase'] = 'unlock_wait';
                 $job['SentAtMs'] = $this->NowMs();
+                $job['SentAtEpoch'] = time();
                 $this->YieldCurrentJob($job);
                 return;
             }
             if ($phase === 'unlock_wait') {
-                if ($unlocked && $this->NowMs() - (int) ($job['SentAtMs'] ?? 0) >= 500) {
+                if ($unlocked && $this->DirectCoolingFeedbackFresh($unlockID, $job)
+                    && $this->NowMs() - (int) ($job['SentAtMs'] ?? 0) >= 500) {
                     $this->DirectCoolingSetLockState($target, '');
                     $this->SetBuffer('CurrentJob', '');
                     $this->ClearRoomError($target);
@@ -321,7 +329,7 @@ trait LCNDirectCooling
                     $this->PushVisualizationRowByTarget($target);
                     return;
                 }
-                $this->DirectCoolingWait($job, 'unlock_wait', 'Regler freigegeben', $unlocked, true);
+                $this->DirectCoolingWait($job, 'unlock_wait', 'Regler freigegeben', $unlocked, true, $unlockID);
                 return;
             }
         }
@@ -528,7 +536,8 @@ trait LCNDirectCooling
         $m = $this->DirectCoolingMapping($target);
         if ($m === null || !in_array((int) ($m['RegulatorIndex'] ?? -1), [0, 2], true)) {
             $this->DirectCoolingFallbackSet($target, $reason . ' (Reglerfreigabe nicht moeglich)', 'blocked');
-            $this->FailCurrentJob($job + ['Type' => 'direct_recover'], 'Kein automatischer Rueckfall: Reglerfreigabe nicht pruefbar.');
+            $job['Type'] = 'direct_recover';
+            $this->FailCurrentJob($job, 'Kein automatischer Rueckfall: Reglerfreigabe nicht pruefbar.');
             return;
         }
         $this->DirectCoolingSetLockState($target, 'uncertain');
@@ -559,6 +568,7 @@ trait LCNDirectCooling
             }
             $job['Phase'] = 'unlock_wait';
             $job['SentAtMs'] = $this->NowMs();
+            $job['SentAtEpoch'] = time();
             $this->YieldCurrentJob($job);
             return;
         }
@@ -571,14 +581,20 @@ trait LCNDirectCooling
                 $this->DirectCoolingFallbackSet($target, $reason);
                 $this->SetBuffer('CurrentJob', '');
                 $room = $this->FindRoomByTarget($target);
-                if ($room !== null && $this->GetMode() === self::MODE_COOLING) {
+                if ($room !== null && $this->GetMode() === self::MODE_COOLING
+                    && (!(bool) ($job['DesiredOpen'] ?? false) || $this->DirectCoolingSafe())) {
                     $this->EnqueueLegacyCoolingJob(
                         $room,
                         (bool) ($job['DesiredOpen'] ?? false),
                         (bool) ($job['PreviousCoolingState'] ?? false)
                     );
                 }
-                $this->ClearRoomError($target);
+                if ((bool) ($job['DesiredOpen'] ?? false) && !$this->DirectCoolingSafe()) {
+                    $this->DirectCoolingFallbackSet($target, 'Externe Kuehlfreigabe verloren: Kuehlung blockiert', 'blocked');
+                    $this->SetRoomError($target, 'Kuehlfreigabe fehlt; keine Ersatzsteuerung gestartet.');
+                } else {
+                    $this->ClearRoomError($target);
+                }
                 $this->RefreshRuntimeStatus();
                 $this->PushVisualizationRowByTarget($target);
                 $this->PushVisualizationMeta();
