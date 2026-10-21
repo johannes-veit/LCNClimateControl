@@ -426,6 +426,20 @@ trait LCNDirectCooling
         return '';
     }
 
+    private function ResetDirectCoolingSession(): void
+    {
+        // Nur vollstaendig entsperrte Raeume duerfen beim neuen Kuehlzyklus
+        // einen erneuten Direktversuch erhalten.
+        $map = $this->DirectCoolingFallbacks();
+        foreach ($this->GetRuntimeRooms() as $room) {
+            $target = (int) $room['TargetVariable'];
+            if ($this->DirectCoolingLockState($target) === '') {
+                unset($map[(string) $target]);
+            }
+        }
+        $this->WriteJsonAttribute('CoolingFallbackReasons', $map);
+    }
+
     private function DirectCoolingFallbacks(): array
     {
         try {
