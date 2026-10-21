@@ -192,6 +192,14 @@ trait LCNDirectCooling
         }
     }
 
+    private function DirectCoolingTimeoutMs(): int
+    {
+        // 11 Raeume teilen sich einen kooperativen 250-ms-Worker.
+        // Starre 7 s haetten bei paralleler Umschaltung falsch-positive
+        // Timeouts erzeugt.
+        return min(30000, max(8000, 5000 + count($this->GetRuntimeRooms()) * 1500));
+    }
+
     private function DirectCoolingWait(array $job, string $next, string $name, bool $actual, bool $expected, int $statusID = 0): bool
     {
         if ($actual === $expected
@@ -201,7 +209,7 @@ trait LCNDirectCooling
             $this->YieldCurrentJob($job);
             return true;
         }
-        if ($this->NowMs() - (int) ($job['SentAtMs'] ?? 0) > 7000) {
+        if ($this->NowMs() - (int) ($job['SentAtMs'] ?? 0) > $this->DirectCoolingTimeoutMs()) {
             $this->FailCurrentJob($job, $name . ': keine bestaetigte Rueckmeldung innerhalb 7 s. LCN-Zustand bitte vor Ort pruefen.');
             return true;
         }
@@ -645,7 +653,7 @@ trait LCNDirectCooling
                 $this->YieldCurrentJob($job);
                 return;
             }
-            if ($this->NowMs() - (int) ($job['SentAtMs'] ?? 0) > 7000) {
+            if ($this->NowMs() - (int) ($job['SentAtMs'] ?? 0) > $this->DirectCoolingTimeoutMs()) {
                 $this->DirectCoolingFallbackSet($target, 'Reglerfreigabe nicht bestaetigt', 'blocked');
                 $this->FailCurrentJob($job, 'Regler nicht sicher entsperrt: kein automatischer Rueckfall.');
                 return;
