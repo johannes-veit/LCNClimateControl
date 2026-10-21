@@ -315,6 +315,11 @@
       "type": "Button",
       "caption": "Fehlerstatus quittieren",
       "onClick": "LCNC_ClearError($id);"
+    },
+    {
+      "type": "Button",
+      "caption": "LCN-Zuordnungen aus Symcon auslesen (nur Diagnose)",
+      "onClick": "echo LCNC_CoolingDiscoveryReport($id);"
     }
   ],
   "status": [
