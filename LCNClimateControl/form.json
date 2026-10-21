@@ -2,7 +2,7 @@
   "elements": [
     {
       "type": "Label",
-      "caption": "Eine Instanz steuert alle Raeume. Heizbetrieb: LCN bleibt Master, Symcon sendet nur die vorhandenen TS-Tasten. Direkte Kuehlung ist eine zusaetzliche, standardmaessig deaktivierte Testfunktion mit zwingenden Rueckmeldungen und externer Freigabe."
+      "caption": "Heizen bleibt wie bisher ueber LCN/GT8 und A7/A8 geregelt. Bei Kuehlen prueft das Modul je Raum die Option der Direktschaltung. Fehlen Bestaetigungen, bleibt die bisherige Steuerung aktiv. Es werden keine neuen LCN-Tasten oder Schwellwerte benoetigt."
     },
     {
       "type": "List",
@@ -120,13 +120,13 @@
     },
     {
       "type": "ExpansionPanel",
-      "caption": "Automatische Direktkuehlung (optional, sicherer Rueckfall)",
+      "caption": "Automatische Kuehlsteuerung (raumweise, bisherige Steuerung als Rueckfall)",
       "expanded": false,
       "items": [
         {
           "type": "CheckBox",
           "name": "DirectCoolingEnabled",
-          "caption": "Direkte Relaiskuehlung aktivieren (nur nach Inbetriebnahmepruefung)"
+          "caption": "Automatisch neue Steuerung pruefen (fehlende Zuordnungen = bisheriger Betrieb)"
         },
         {
           "type": "SelectVariable",
@@ -138,7 +138,7 @@
         },
         {
           "type": "Label",
-          "caption": "Symcon prueft bei Kuehlen pro Raum LCN-Funktionen und Rueckmeldungen. Ohne neue Konfiguration bleibt die alte TS-Kuehlung mit Hinweis aktiv. Bei Direktfehlern: alte Methode erst nach bestaetigter Reglerfreigabe. Bei unklarer Freigabe STOP. Hardware-Taupunktschutz weiterhin erforderlich."
+          "caption": "Ohne Zuordnung oder ohne verifizierte LCN-Rueckmeldungen laeuft der bisherige Kuehlbetrieb pro Raum unveraendert. Neue Relaissteuerung nur mit bestaetigtem Reglerindex, Ventilpolaritaet und externer Kuehlfreigabe. Die Software kann LCN-PRO-Konfigurationsaenderungen NICHT unmittelbar auslesen; neue Funktionsfaehigkeit wird beim naechsten Kuehlzyklus durch Rueckmeldung geprueft."
         },
         {
           "type": "List",
@@ -232,9 +232,18 @@
               }
             },
             {
-              "caption": "Relais EIN = AUF",
+              "caption": "Relais EIN = Ventil AUF",
               "name": "OpenRelayOn",
               "width": "125px",
+              "add": false,
+              "edit": {
+                "type": "CheckBox"
+              }
+            },
+            {
+              "caption": "Polaritaet vor Ort bestaetigt",
+              "name": "PolarityConfirmed",
+              "width": "160px",
               "add": false,
               "edit": {
                 "type": "CheckBox"
