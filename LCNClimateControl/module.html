@@ -260,6 +260,13 @@ input[type="range"]:disabled { cursor: default; opacity: .56; }
     font-size: 11px;
     line-height: 1.35;
 }
+.fallback-note {
+    margin-top: 7px;
+    font-size: 10px;
+    line-height: 1.35;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+}
 .warning {
     margin-top: 8px;
     color: #b87400;
@@ -322,6 +329,7 @@ let ui = {
     modeCool: null,
     table: null,
     note: null,
+    fallbackNote: null,
     error: null,
     warning: null,
     rows: new Map()
@@ -348,6 +356,7 @@ function normalizeState(input) {
         pendingMode: null,
         busy: false,
         error: '',
+        fallbackNote: '',
         rows: []
     };
     if (!input || typeof input !== 'object') return base;
@@ -909,6 +918,11 @@ function patchMode() {
 }
 
 function patchMeta() {
+    if (ui.fallbackNote) {
+        const message = Number(state.mode) === 1 ? String(state.fallbackNote || '') : '';
+        ui.fallbackNote.hidden = message.length === 0;
+        ui.fallbackNote.textContent = message;
+    }
     if (ui.note) {
         ui.note.hidden = Number(state.mode) !== 1;
     }
@@ -971,6 +985,13 @@ function renderStructure() {
     content.appendChild(note);
     ui.note = note;
 
+    const fallbackNote = document.createElement('div');
+    fallbackNote.className = 'fallback-note';
+    fallbackNote.hidden = true;
+    fallbackNote.setAttribute('role', 'status');
+    content.appendChild(fallbackNote);
+    ui.fallbackNote = fallbackNote;
+
     const error = document.createElement('div');
     error.className = 'error';
     error.hidden = true;
@@ -1010,6 +1031,7 @@ function applyMessage(message) {
             : Number(message.pendingMode);
         state.busy = Boolean(message.busy);
         state.error = message.error || '';
+        state.fallbackNote = message.fallbackNote || '';
 
         const nextMode = Number(state.mode) === 1 ? 1 : 0;
         if (renderedMode !== nextMode) renderStructure();
