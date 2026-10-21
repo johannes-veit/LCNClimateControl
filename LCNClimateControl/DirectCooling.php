@@ -728,7 +728,7 @@ trait LCNDirectCooling
         $this->DirectCoolingSetLockState($target, 'uncertain');
         $this->DirectCoolingFallbackSet($target, $reason . ' – Reglerfreigabe wird geprueft', 'blocked');
         $job['Type'] = 'direct_recover';
-        $job['Phase'] = 'unlock';
+        $job['Phase'] = 'close';
         $job['FallbackReason'] = $reason;
         $this->YieldCurrentJob($job);
         $this->PushVisualizationMeta();
@@ -743,6 +743,43 @@ trait LCNDirectCooling
         if ($m === null || !IPS_VariableExists($unlockId)) {
             $this->DirectCoolingFallbackSet($target, 'Rueckmeldevariable zur Reglerfreigabe fehlt', 'blocked');
             $this->FailCurrentJob($job, 'Automatischer Rueckfall blockiert: Entriegelt-Rueckmeldung fehlt.');
+            return;
+        }
+        if ($phase === 'close') {
+            // Ein zuvor unbestaetigter Direktschaltbefehl koennte das
+            // Ventil noch bestromen. Vor dem Legacy-Rueckfall zuerst
+            // Relais AUS senden und diesen elektrischen Zustand bestaetigen.
+            if (!$this->DirectCoolingRelaySet($m, false)) {
+                $this->DirectCoolingFallbackSet($target, 'Relais konnte vor Rueckfall nicht abgeschaltet werden', 'blocked');
+                $this->FailCurrentJob($job, 'Kein Rueckfall: Relais AUS konnte nicht gesendet werden.');
+                return;
+            }
+            $job['Phase'] = 'close_wait';
+            $job['SentAtMs'] = $this->NowMs();
+            $job['SentAtEpoch'] = time();
+            $this->YieldCurrentJob($job);
+            return;
+        }
+        if ($phase === 'close_wait') {
+            $statusID = (int) ($m['RelayStatusVariable'] ?? 0);
+            if (!IPS_VariableExists($statusID)) {
+                $this->FailCurrentJob($job, 'Relaisrueckmeldung fehlt: kein automatischer Rueckfall.');
+                return;
+            }
+            $want = !(bool) ($m['OpenRelayOn'] ?? true);
+            if ($this->DirectCoolingFeedbackFresh($statusID, $job)
+                && (bool) GetValue($statusID) === $want
+                && $this->NowMs() - (int) ($job['SentAtMs'] ?? 0) >= 500) {
+                $job['Phase'] = 'unlock';
+                $this->YieldCurrentJob($job);
+                return;
+            }
+            if ($this->NowMs() - (int) ($job['SentAtMs'] ?? 0) > $this->DirectCoolingTimeoutMs()) {
+                $this->DirectCoolingFallbackSet($target, 'Relais AUS nicht bestaetigt', 'blocked');
+                $this->FailCurrentJob($job, 'Relais AUS nicht bestaetigt: Regler bleibt gesperrt, kein Rueckfall.');
+                return;
+            }
+            $this->YieldCurrentJob($job);
             return;
         }
         if ($phase === 'unlock') {
@@ -780,7 +817,8 @@ trait LCNDirectCooling
                 $this->FailCurrentJob($job, 'Regler erneut gesperrt; kein automatischer Rueckfall.');
                 return;
             }
-            if ($this->ReadTarget($target) !== null) {
+            if ($this->ReadTarget($target) !== null
+                && $this->DirectCoolingFeedbackFresh($target, $job)) {
                 $this->DirectCoolingSetLockState($target, '');
                 $reason = (string) ($job['FallbackReason'] ?? 'Direkte Kuehlung nicht bestaetigt');
                 $this->DirectCoolingFallbackSet($target, $reason);
