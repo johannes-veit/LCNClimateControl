@@ -553,6 +553,9 @@ class LCNClimateControl extends IPSModuleStrict
         $this->SetQueue([]);
 
         if ($Mode === self::MODE_COOLING) {
+            if ($this->UsesDirectCooling()) {
+                $this->ResetDirectCoolingSession();
+            }
             // Beim Wechsel in die Kühlung zählt der zuletzt gewünschte Heizwert.
             // Während einer gerade laufenden Heizfahrt enthält die sichtbare
             // Heat-Variable bereits das Benutzerziel und nicht den Zwischenwert.
