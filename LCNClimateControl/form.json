@@ -2,7 +2,7 @@
   "elements": [
     {
       "type": "Label",
-      "caption": "Eine Instanz steuert alle Räume. LCN bleibt Master: Symcon sendet ausschließlich die vorhandenen KURZ-Tastenbefehle A7/A8 (oder je Raum abweichend konfiguriert). Direkte LCN-Sollwert- oder Relaisbefehle werden nicht verwendet."
+      "caption": "Eine Instanz steuert alle Raeume. Heizbetrieb: LCN bleibt Master, Symcon sendet nur die vorhandenen TS-Tasten. Direkte Kuehlung ist eine zusaetzliche, standardmaessig deaktivierte Testfunktion mit zwingenden Rueckmeldungen und externer Freigabe."
     },
     {
       "type": "List",
@@ -119,6 +119,132 @@
       ]
     },
     {
+      "type": "ExpansionPanel",
+      "caption": "Direkte Kuehlung (TEST / standardmaessig AUS)",
+      "expanded": false,
+      "items": [
+        {
+          "type": "CheckBox",
+          "name": "DirectCoolingEnabled",
+          "caption": "Direkte Relaiskuehlung aktivieren (nur nach Inbetriebnahmepruefung)"
+        },
+        {
+          "type": "SelectVariable",
+          "name": "CoolingSafetyVariable",
+          "caption": "Externe Kuehlfreigabe Boolean (TRUE = sicher/freigegeben)",
+          "validVariableTypes": [
+            0
+          ]
+        },
+        {
+          "type": "Label",
+          "caption": "Die Freigabevariable ersetzt KEINE hardwareseitige Taupunktabschaltung. Ohne vollstaendige Zuordnungen und Rueckmeldungen werden keine Direktbefehle freigegeben."
+        },
+        {
+          "type": "List",
+          "name": "CoolingRelays",
+          "caption": "Eine Zuordnung je Raum (S1Target-ID aus Raeume-Liste)",
+          "rowCount": 11,
+          "add": true,
+          "delete": true,
+          "changeOrder": true,
+          "columns": [
+            {
+              "caption": "S1Target-ID",
+              "name": "TargetVariable",
+              "width": "105px",
+              "add": 0,
+              "edit": {
+                "type": "SelectVariable",
+                "validVariableTypes": [
+                  2
+                ]
+              }
+            },
+            {
+              "caption": "Relais-LCN-Modul",
+              "name": "RelayModule",
+              "width": "170px",
+              "add": 0,
+              "edit": {
+                "type": "SelectInstance",
+                "validModules": [
+                  "{0E31FED6-E465-4621-95D4-AAF2683C41EC}"
+                ]
+              }
+            },
+            {
+              "caption": "Relais R1-R8",
+              "name": "RelayChannel",
+              "width": "110px",
+              "add": 0,
+              "edit": {
+                "type": "NumberSpinner",
+                "minimum": 1,
+                "maximum": 8
+              }
+            },
+            {
+              "caption": "Regler Index R1=0/S1=2",
+              "name": "RegulatorIndex",
+              "width": "120px",
+              "add": -1,
+              "edit": {
+                "type": "Select",
+                "options": [
+                  {
+                    "caption": "Ungeprueft",
+                    "value": -1
+                  },
+                  {
+                    "caption": "R1 (0)",
+                    "value": 0
+                  },
+                  {
+                    "caption": "S1 (2)",
+                    "value": 2
+                  }
+                ]
+              }
+            },
+            {
+              "caption": "Entriegelt Bool",
+              "name": "UnlockedVariable",
+              "width": "170px",
+              "add": 0,
+              "edit": {
+                "type": "SelectVariable",
+                "validVariableTypes": [
+                  0
+                ]
+              }
+            },
+            {
+              "caption": "Relaisstatus Bool",
+              "name": "RelayStatusVariable",
+              "width": "170px",
+              "add": 0,
+              "edit": {
+                "type": "SelectVariable",
+                "validVariableTypes": [
+                  0
+                ]
+              }
+            },
+            {
+              "caption": "Relais EIN = AUF",
+              "name": "OpenRelayOn",
+              "width": "125px",
+              "add": false,
+              "edit": {
+                "type": "CheckBox"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "type": "Label",
       "caption": "S1Target: In der nativen Symcon-Instanz „LCN Variable / LCN Wert“ des jeweiligen neuen LCN-Moduls ausschließlich S1Target aktivieren und hier die Float-Variable „Zieltemperatur S1“ auswählen. Die zusätzlich erzeugte Boolean-Variable „Entriegelt“ nicht auswählen."
     },
@@ -157,7 +283,7 @@
     },
     {
       "type": "Label",
-      "caption": "Heizen: Symcon-Bedienbereich 18–24 °C, LCN-Grenzen bleiben unverändert und können am GT8 weiter vollständig genutzt werden. Kühlen: AN fährt mit +1-°C-Tastenbefehlen bis zur oberen LCN-Endlage (Ventil offen), AUS mit -1-°C-Tastenbefehlen bis zur unteren Endlage (Ventil geschlossen)."
+      "caption": "Heizen: Bedienbereich 18-24 Grad C und A7/A8 wie bisher. Kuehlen: Standard (Direkt-Aus) wie 0.2.10; Direkt-Ein nutzt bestaetigte LCN-Reglersperre und Relaisrueckmeldung. Bei Rueckmeldungsfehlern STOP und manuelle Pruefung."
     }
   ],
   "actions": [
