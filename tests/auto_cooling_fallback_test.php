@@ -38,6 +38,7 @@ final class AutoProbe {
     private function GetRuntimeRooms(): array { return [$this->room]; }
     private function GetMode(): int { return self::MODE_COOLING; }
     private function NowMs(): int { return $this->now; }
+    private function ReadTarget(int $id): ?float { return $id===777 ? 21.0 : null; }
     private function SetBuffer(string $name, string $value): void { $this->buffers[$name]=$value; }
     private function SetRoomError(int $target, string $message): void { $this->errors[$target]=$message; }
     private function ClearRoomError(int $target): void { unset($this->errors[$target]); }
@@ -59,7 +60,7 @@ function config(AutoProbe $p): void {
     $p->properties['CoolingRelays'] = json_encode([[
         'TargetVariable'=>777,'RelayModule'=>92,'RelayChannel'=>1,
         'RegulatorIndex'=>2,'UnlockedVariable'=>101,'RelayStatusVariable'=>102,
-        'OpenRelayOn'=>true
+        'OpenRelayOn'=>true,'PolarityConfirmed'=>true
     ]]);
 }
 // 1. Kein Mapping -> alte Steuerung und kleine Meldung.
@@ -85,6 +86,9 @@ check(count($e->jobs)===1 && $e->jobs[0]['Phase']==='unlock_wait','send release 
 $next=$e->jobs[0];$e->jobs=[];
 $e->now=$next['SentAtMs']+600;$GLOBALS['v'][101]=true;$GLOBALS['updated'][101]=time();
 $e->recover($next);
+check(count($e->jobs)===1 && $e->jobs[0]['Phase']==='normal_target_wait','must verify normal S1Target after unlock');
+$next=$e->jobs[0]; $e->jobs=[];
+$e->recover($next);
 check($e->attrs['DirectCoolingLocks']===[],'release clears persistent lock');
 check(count($e->jobs)===1 && $e->jobs[0]['Type']==='cool_up','legacy only after release proof');
 // 6. Kein Freigabebefehl: kein Legacy.
@@ -94,4 +98,16 @@ check($f->jobs===[] && str_contains($f->summary(),'gestoppt'),'release failure b
 // 7. Wiederholte Kuehlaktionen innerhalb einer Betriebsart bleiben im Legacy.
 $a->jobs=[];config($a);$a->choose(false);
 check(count($a->jobs)===1 && $a->jobs[0]['Type']==='cool_down','no repeated direct attempt after legacy');
-echo "PASS: 7 automatic fallback, guard and recovery scenarios\n";
+// 8. Im realen LCN darf die neue Methode nicht einen bereits gesperrten Regler uebernehmen.
+$g=new AutoProbe();config($g);$GLOBALS['v'][101]=false;$g->choose(true);
+check($g->jobs===[] && str_contains($g->summary(),'gestoppt'),'externally locked controller blocks fallback');
+$GLOBALS['v'][101]=true;
+// 9. Ohne Polaritetsbestaetigung: herkoemmliche TS-Kuehlung.
+$h=new AutoProbe();config($h);
+$settings=json_decode($h->properties['CoolingRelays'],true);unset($settings[0]['PolarityConfirmed']);
+$h->properties['CoolingRelays']=json_encode($settings);$h->choose(true);
+check(count($h->jobs)===1 && $h->jobs[0]['Type']==='cool_up','unconfirmed polarity means legacy');
+// 10. Bei bestaetigtem Regler-Sperrzustand keine alte TS-Fahrt.
+$i=new AutoProbe();config($i);$i->lockState(777,'uncertain');$i->choose(false);
+check($i->jobs===[],'blocked state remains blocked for cooling OFF');
+echo "PASS: 10 automatic fallback, guard and recovery scenarios\n";
