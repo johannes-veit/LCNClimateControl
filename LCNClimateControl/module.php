@@ -116,7 +116,7 @@ class LCNClimateControl extends IPSModuleStrict
 
                 foreach ($existingJobs as $existingJob) {
                     $type = (string) ($existingJob['RetargetType'] ?? $existingJob['Type'] ?? '');
-                    if (in_array($type, [self::JOB_COOL_UP, self::JOB_COOL_DOWN], true)) {
+                    if (in_array($type, [self::JOB_COOL_UP, self::JOB_COOL_DOWN, 'direct_cool', 'direct_release'], true)) {
                         $interruptedCoolingJobs[(int) ($existingJob['TargetVariable'] ?? 0)] =
                             (string) ($existingJob['Name'] ?? 'Raum');
                     }
@@ -466,7 +466,7 @@ class LCNClimateControl extends IPSModuleStrict
 
                     foreach ($jobs as $job) {
                         $type = (string) ($job['RetargetType'] ?? $job['Type'] ?? '');
-                        if (in_array($type, [self::JOB_COOL_UP, self::JOB_COOL_DOWN], true)) {
+                        if (in_array($type, [self::JOB_COOL_UP, self::JOB_COOL_DOWN, 'direct_cool', 'direct_release'], true)) {
                             $affectedCooling[(int) ($job['TargetVariable'] ?? 0)] =
                                 (string) ($job['Name'] ?? 'Raum');
                         }
