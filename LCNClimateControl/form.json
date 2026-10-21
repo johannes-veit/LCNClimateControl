@@ -2,7 +2,7 @@
   "elements": [
     {
       "type": "Label",
-      "caption": "Heizen bleibt wie bisher ueber LCN/GT8 und A7/A8 geregelt. Bei Kuehlen prueft das Modul je Raum die Option der Direktschaltung. Fehlen Bestaetigungen, bleibt die bisherige Steuerung aktiv. Es werden keine neuen LCN-Tasten oder Schwellwerte benoetigt."
+      "caption": "Heizbetrieb unverändert, GT8 A7/A8 unverändert. Bei Kühlen erfolgt pro Raum automatische, passive Erkennung der nativen LCN-Relaise und Regler-Rückmeldungen. Fehlt eine Voraussetzung, bleibt die bisherige A7/A8-Kühlsteuerung aktiv. Keine elf manuell einzutragenden Symcon-IDs nötig."
     },
     {
       "type": "List",
@@ -120,7 +120,7 @@
     },
     {
       "type": "ExpansionPanel",
-      "caption": "Automatische Kuehlsteuerung (raumweise, bisherige Steuerung als Rueckfall)",
+      "caption": "LCN-Kuehlung: Automatische Erkennung (optional)",
       "expanded": false,
       "items": [
         {
@@ -129,21 +129,31 @@
           "caption": "Automatisch neue Steuerung pruefen (fehlende Zuordnungen = bisheriger Betrieb)"
         },
         {
+          "type": "CheckBox",
+          "name": "AutoCoolingPolarityConfirmed",
+          "caption": "Stellantriebe/Relaissinn geprüft – automatische Relaiserkennung freigeben"
+        },
+        {
+          "type": "CheckBox",
+          "name": "AutoCoolingOpenRelayOn",
+          "caption": "Elektrisch Relais EIN = Ventil AUF (nur nach Prüfung aktivieren)"
+        },
+        {
           "type": "SelectVariable",
           "name": "CoolingSafetyVariable",
-          "caption": "Externe Kuehlfreigabe Boolean (TRUE = sicher/freigegeben)",
+          "caption": "Optionale externe Freigabe (Boolean, leer=kein Software-Gate; Hardware-Taupunktwächter separat)",
           "validVariableTypes": [
             0
           ]
         },
         {
           "type": "Label",
-          "caption": "Ohne Zuordnung oder ohne verifizierte LCN-Rueckmeldungen laeuft der bisherige Kuehlbetrieb pro Raum unveraendert. Neue Relaissteuerung nur mit bestaetigtem Reglerindex, Ventilpolaritaet und externer Kuehlfreigabe. Die Software kann LCN-PRO-Konfigurationsaenderungen NICHT unmittelbar auslesen; neue Funktionsfaehigkeit wird beim naechsten Kuehlzyklus durch Rueckmeldung geprueft."
+          "caption": "LCN-Modulnummern M11..M151 sowie M92/M192 und Relaiskanal werden automatisch anhand deiner LP3-Zuordnungen und den nativen Symcon-Eigenschaften Segment/Target/Unit/Channel ermittelt. Die 11 einzelnen Relaiszuordnungen sind NICHT notwendig, sofern die nativen LCN-Unit-Instanzen und Rückmeldungen bereits existieren. Ohne eindeutige Zuordnung arbeitet jeder Raum unverändert mit A7/A8. Software-Taupunktsignal optional; unabhängig wirkender hardwareseitiger Taupunkt-/Kondensationsschutz bleibt Voraussetzung vor Einspeisen von Kühlwasser. Eine reine 17-°C-Grenze reicht nicht."
         },
         {
           "type": "List",
           "name": "CoolingRelays",
-          "caption": "Eine Zuordnung je Raum (S1Target-ID aus Raeume-Liste)",
+          "caption": "Manuelle Zuordnung (normalerweise leer lassen – wird automatisch erkannt)",
           "rowCount": 11,
           "add": true,
           "delete": true,
