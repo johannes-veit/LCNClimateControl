@@ -252,3 +252,33 @@ Rollback auf den unveraenderten Stand v0.2.10:
   Mindest-Vorlauftemperatur. Nichts davon wurde vor Ort eingebaut.
 - Im Symcon-Modul selbst lediglich schriftlicher Hinweis. Software-Eingang
   zur Kuehlfreigabe bleibt optional; falls konfiguriert, wird er geprueft.
+
+
+## v0.3.4 Build 19 – NC-Relais und Rueckmeldungen automatisch
+
+Vom Anlagenbetreiber verifiziert: Relais EIN legt Spannung am
+NC-Stellantrieb an; Ventil oeffnet. Daher braucht die automatische
+LCN-Erkennung **keinen zusaetzlichen Polaritaetshaken**. Dies gilt fuer die
+in der LP3 analysierten elf Raum/Relais-Zuordnungen.
+
+Der bestehende Raum-Eintrag in der Symcon-Modulinstanz liefert bereits
+`SendModule` sowie `S1Target`. Der neue Discovery-Code liest zugehoerige
+native Symcon-Instanzen auf der laufenden SymBox **nur lesend**:
+LCN Hardware-Target, Segment, gleiche Gateway-Verbindung, Relais-Unit
+(Unit=2, Channel=1..8), Float-S1Target, Boolean-Entriegelt,
+Boolean-Relais-Status. Zuerst wird der stabile technische ObjectIdent,
+erst dann der Anzeigename verwendet. Mehrfachtreffer oder fehlende
+Statusvariablen -> alte A7/A8-Kuehlung, ohne Reglersperre.
+
+**Wichtig:** Aus einem GitHub-Quellcode-Backup oder einer .lp3-Datei
+sind aktuelle Symcon-Instanz-IDs der laufenden SymBox nicht auslesbar.
+Das Modul ermittelt sie in seiner eigenen lokalen Runtime; ich habe
+von hier keinen direkten Live-Zugriff auf die SymBox.
+
+Per Knopf `LCN-Zuordnungen aus Symcon auslesen (nur Diagnose)`
+kann der aktuelle Live-Zuordnungsstand ohne Stellbefehl ausgegeben werden.
+
+Die alte A7/A8-Steuerung ist ein Kompatibilitaetsrueckfall, aber bei
+hohen Raumtemperaturen kein Nachweis geoeffneter Ventile.
+Die unabhaengige mechanische Taupunktsperre bleibt vor realer
+Kuehlwasserversorgung erforderlich.

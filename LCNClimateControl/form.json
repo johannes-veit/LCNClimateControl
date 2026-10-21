@@ -129,16 +129,6 @@
           "caption": "Automatisch neue Steuerung pruefen (fehlende Zuordnungen = bisheriger Betrieb)"
         },
         {
-          "type": "CheckBox",
-          "name": "AutoCoolingPolarityConfirmed",
-          "caption": "Stellantriebe/Relaissinn geprüft – automatische Relaiserkennung freigeben"
-        },
-        {
-          "type": "CheckBox",
-          "name": "AutoCoolingOpenRelayOn",
-          "caption": "Elektrisch Relais EIN = Ventil AUF (nur nach Prüfung aktivieren)"
-        },
-        {
           "type": "SelectVariable",
           "name": "CoolingSafetyVariable",
           "caption": "Optionale externe Freigabe (Boolean, leer=kein Software-Gate; Hardware-Taupunktwächter separat)",
@@ -148,7 +138,7 @@
         },
         {
           "type": "Label",
-          "caption": "LCN-Modulnummern M11..M151 sowie M92/M192 und Relaiskanal werden automatisch anhand deiner LP3-Zuordnungen und den nativen Symcon-Eigenschaften Segment/Target/Unit/Channel ermittelt. Die 11 einzelnen Relaiszuordnungen sind NICHT notwendig, sofern die nativen LCN-Unit-Instanzen und Rückmeldungen bereits existieren. Ohne eindeutige Zuordnung arbeitet jeder Raum unverändert mit A7/A8. Software-Taupunktsignal optional; unabhängig wirkender hardwareseitiger Taupunkt-/Kondensationsschutz bleibt Voraussetzung vor Einspeisen von Kühlwasser. Eine reine 17-°C-Grenze reicht nicht."
+          "caption": "Bekannt und bestätigt: NC-Stellantriebe (stromlos ZU), Relais EIN versorgt den Antrieb (Ventil AUF). Die Symcon-Relaisinstanz, der einzelne Kanal sowie Status und Entriegelt werden automatisch anhand nativer LCN-IDs/Verbindungen gesucht. Keine manuelle 11-Raum-Zuordnung nötig. Fehlt eine native Instanz oder Rückmeldung, bleibt der betroffene Raum auf der bisherigen A7/A8-Steuerung. Physischer Taupunktwächter gehört in die Kühlwasserfreigabe."
         },
         {
           "type": "List",
