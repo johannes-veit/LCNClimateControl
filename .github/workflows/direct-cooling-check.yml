@@ -1,0 +1,21 @@
+name: Direct cooling - PHP/JSON syntax and mask tests
+on:
+  push:
+    branches:
+      - feature/cooling-direct-relays-v0.3.0
+  pull_request:
+    branches:
+      - main
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: PHP syntax
+        run: find . -name '*.php' -print0 | xargs -0 -n1 php -l
+      - name: JSON syntax
+        run: python3 -c "import json, pathlib; [json.loads(p.read_text()) for p in pathlib.Path('.').rglob('*.json')]; print('JSON OK')"
+      - name: Relay isolation model test
+        run: php tests/direct_cooling_masks.php
+      - name: Assert opt-in default off
+        run: grep -q "RegisterPropertyBoolean('DirectCoolingEnabled', false)" LCNClimateControl/module.php
