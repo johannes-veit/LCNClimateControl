@@ -35,7 +35,8 @@ final class AutoProbe {
     private function IsOperationalLCNModule(int $id): bool { return in_array($id, [11, 92], true); }
     private function AppendJob(array $job): void { $this->jobs[]=$job; }
     private function YieldCurrentJob(array $job): void { $this->jobs[]=$job; }
-    private function GetRuntimeRooms(): array { return [$this->room]; }
+    public array $rooms = [];
+    private function GetRuntimeRooms(): array { return $this->rooms !== [] ? $this->rooms : [$this->room]; }
     private function GetMode(): int { return self::MODE_COOLING; }
     private function NowMs(): int { return $this->now; }
     private function ReadTarget(int $id): ?float { return $id===777 ? 21.0 : null; }
@@ -51,6 +52,7 @@ final class AutoProbe {
     private function SendDebug(string $name, string $text, int $format): void {}
     private function FailCurrentJob(array $job, string $reason): void { $this->errors[(int)($job['TargetVariable']??0)]=$reason; }
     public function choose(bool $on, bool $previous=false): void { $this->EnqueueCoolingAutomatically($this->room,$on,$previous); }
+    public function chooseRoom(array $room, bool $on): void { $this->EnqueueCoolingAutomatically($room,$on,false); }
     public function summary(): string { return $this->DirectCoolingFallbackSummary(); }
     public function recover(array $job): void { $this->HandleDirectCoolingRecovery($job); }
     public function lockState(int $target, string $state): void { $this->DirectCoolingSetLockState($target,$state); }
@@ -110,4 +112,19 @@ check(count($h->jobs)===1 && $h->jobs[0]['Type']==='cool_up','unconfirmed polari
 // 10. Bei bestaetigtem Regler-Sperrzustand keine alte TS-Fahrt.
 $i=new AutoProbe();config($i);$i->lockState(777,'uncertain');$i->choose(false);
 check($i->jobs===[],'blocked state remains blocked for cooling OFF');
-echo "PASS: 10 automatic fallback, guard and recovery scenarios\n";
+// 11. Der Direktkuehlungs-Watchdog darf laufende Alt-Kuehlung bei
+// fehlender neuer Sicherheitseingabe NICHT unterbrechen.
+$j=new AutoProbe();$j->properties['CoolingSafetyVariable']=0;$j->choose(true);
+$before=$j->jobs;$j->DirectCoolingWatchdog();
+check($j->jobs===$before && $j->buffers===[],'watchdog must not touch legacy jobs');
+// 12. Parallele Raeume: M11 direkt, M21 ohne Mapping alt.
+$k=new AutoProbe();config($k);
+$k->rooms=[$k->room, [
+    'Name'=>'EG Kueche', 'SendModule'=>21, 'TargetVariable'=>778,
+    'Table'=>'A','UpKey'=>7,'DownKey'=>8
+]];
+$k->choose(true);
+$k->chooseRoom($k->rooms[1],true);
+check(count($k->jobs)===2 && $k->jobs[0]['Type']==='direct_cool'
+    && $k->jobs[1]['Type']==='cool_up','independent paths in parallel rooms');
+echo "PASS: 12 automatic fallback, watchdog isolation and two-room scenarios\n";
