@@ -639,24 +639,90 @@ class LCNClimateControl extends IPSModuleStrict
 
     private function RequestCoolingState(array $Room, bool $State): void
     {
-        if ($this->GetMode() !== self::MODE_COOLING) {
-            throw new RuntimeException('Kühlung ist nur im Kühlbetrieb bedienbar.');
+        $targetID = (int) $Room['TargetVariable'];
+        // Auch im HEIZBETRIEB darf die Kuehlvorwahl eingestellt werden.
+        // Keine LCN-Befehle, keine Reglersperren, keine Heizungsveraenderung.
+        if ($this->GetMode() === self::MODE_HEATING) {
+            $this->StoreCoolingState($targetID, $State);
+            $this->SetValueIfChanged($this->CoolIdent($targetID), $State);
+            $this->ClearRoomError($targetID);
+            $this->RefreshRuntimeStatus();
+            $this->PushVisualizationRow($Room);
+            $this->PushVisualizationMeta();
+            return;
         }
 
-        $targetID = $Room['TargetVariable'];
-        if ($this->UsesDirectCooling() && $this->HasJobForTarget((int) $targetID)) {
-            throw new RuntimeException($Room['Name'] . ': Vorheriger Kuehlbefehl noch nicht bestaetigt.');
+        // Keine bereits gesendeten WAIT-/Reglersperrkommandos manipulieren.
+        // Stattdessen den neuesten Benutzerwunsch fuer diesen Raum merken.
+        if ($this->HasJobForTarget($targetID)) {
+            $this->SetPendingCoolingRequest($targetID, $State);
+            $this->SetValueIfChanged($this->CoolIdent($targetID), $State);
+            $this->PushVisualizationRow($Room);
+            $this->PushVisualizationMeta();
+            return;
         }
+
+        $previous = $this->GetStoredCoolingState($targetID);
         $this->ClearRoomError($targetID);
         $this->RefreshRuntimeStatus();
-        $previous = $this->GetStoredCoolingState($targetID);
-
-        // Optimistische Bedienanzeige; bei Fehler wird auf previous zurückgestellt.
         $this->SetValueIfChanged($this->CoolIdent($targetID), $State);
         $this->RetargetOrEnqueueCoolingJob($Room, $State, $previous);
         $this->StartWorkerIfNeeded();
         $this->PushVisualizationRow($Room);
         $this->PushVisualizationMeta();
+    }
+
+    private function GetPendingCoolingRequests(): array
+    {
+        $map = json_decode($this->GetBuffer('CoolingPendingRequests'), true);
+        return is_array($map) ? $map : [];
+    }
+
+    private function SetPendingCoolingRequest(int $targetID, bool $state): void
+    {
+        $map = $this->GetPendingCoolingRequests();
+        $map[(string) $targetID] = $state;
+        $this->SetBuffer('CoolingPendingRequests',
+            json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}');
+    }
+
+    private function ConsumePendingCoolingRequest(int $targetID): ?bool
+    {
+        $map = $this->GetPendingCoolingRequests();
+        $key = (string) $targetID;
+        if (!array_key_exists($key, $map)) {
+            return null;
+        }
+        $wanted = (bool) $map[$key];
+        unset($map[$key]);
+        $this->SetBuffer('CoolingPendingRequests',
+            json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}');
+        return $wanted;
+    }
+
+    // Only schedule the new desire after the earlier LCN job was confirmed.
+    private function ApplyPendingCoolingRequest(int $targetID): void
+    {
+        if ($this->GetMode() !== self::MODE_COOLING
+            || $this->GetPendingMode() !== null
+            || $this->HasJobForTarget($targetID)) {
+            return;
+        }
+        $wanted = $this->ConsumePendingCoolingRequest($targetID);
+        if ($wanted === null) {
+            return;
+        }
+        $room = $this->FindRoomByTarget($targetID);
+        if ($room === null) {
+            return;
+        }
+        $actual = $this->GetStoredCoolingState($targetID);
+        $this->SetValueIfChanged($this->CoolIdent($targetID), $wanted);
+        if ($wanted !== $actual) {
+            $this->RetargetOrEnqueueCoolingJob($room, $wanted, $actual);
+            $this->StartWorkerIfNeeded();
+        }
+        $this->PushVisualizationRow($room);
     }
 
     private function ProcessJob(array $Job): void
