@@ -109,6 +109,8 @@ trait LCNClimateChatGPTDiagnostic
             'Symcon-Modulinstanz: #' . $this->InstanceID,
             'Betriebsart: ' . ($mode === self::MODE_HEATING ? 'HEIZEN' : 'KUEHLEN'),
             'DirectCoolingEnabled: ' . ($this->UsesDirectCooling() ? 'JA' : 'NEIN'),
+            'M11-Sperrtest: ' . (string) ($this->M11ProbeSession()['phase'] ?? 'nicht gestartet')
+                . ' | ' . (string) ($this->M11ProbeSession()['message'] ?? 'Keine Testfahrt.'),
             'Auftrag laeuft: ' . ($isBusy ? 'JA' : 'NEIN'),
             'Queue: ' . count($queue) . ' Eintraege'
                 . (is_array($currentJob)
