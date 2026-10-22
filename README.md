@@ -1,50 +1,86 @@
-# LCN Climate Control für IP-Symcon 9
+# LCN Climate Control – IP-Symcon 9
 
-Version **0.3.0-rc1 (Entwicklungsbranch, Direktkuehlung AUS)**
+**Stand: v0.3.22 Build 38 – HEIZEN produktiv, native KÜHLEN-Freigabe weiterhin gesperrt.**
 
-GitHub-fertige Modulbibliothek für eine bestehende LCN-Fußbodenheizung mit GT8/GUS-Regelung.
+## Einfache Architektur
 
-## Grundprinzip
+**HEIZEN (unveraendert):**
+- LCN-Regler 1 und GT8 bleiben Master. Symcon schickt die bewaehrten
+  kurzen A7/A8-Tastenbefehle in kleinen, bestaetigten Schritten.
+- Die echte `S1Target`-Floatvariable bleibt die einzige
+  Quelle fuer den Heizsollwert. Keine direkten Relaisbefehle beim Heizen.
 
-LCN bleibt vollständig Master. Das Modul setzt **keine Relais und keine LCN-Reglersollwerte direkt**. Es sendet ausschließlich die gleichen virtuellen LCN-KURZ-Tastenbefehle, die am GT8 verwendet werden:
+**KÜHLEN (noch nicht freigegeben):**
+1. Raumregler per nativer LCN-Boolean-Standardaktion sperren:
+   `RequestAction(S1TargetLock-ID, true)`.
+2. Erst nach bestaetigter Sperre genau **ein** zugeordnetes
+   Ventilrelais auf AUF schalten.
+3. Bei Kuehlende erst Relais sicher auf ZU, dann
+   `RequestAction(S1TargetLock-ID, false)` und danach
+   regulären Heizsollwert bestaetigen.
+4. Unklare Rueckmeldung => **STOP** statt Raten oder endloses Wiederholen.
 
-- standardmäßig **A7 KURZ** = Regler-Sollwert +1 °C = Ventil Richtung AUF
-- standardmäßig **A8 KURZ** = Regler-Sollwert -1 °C = Ventil Richtung ZU
+Dafuer bleiben die vorhandenen elf S1-Sperr-Booleans,
+die bereits ermittelten M92/M192-Relais und die native
+Symcon-Funktion `RequestAction` ausreichend.
+**Kein Regler 2, keine 55 Tasten, keine weiteren
+Konfigurationsvariablen und keine Umprogrammierung der GT8.**
 
-Der tatsächlich erreichte Sollwert kommt ausschließlich aus der nativen Symcon-LCN-Variable **S1Target / Zieltemperatur S1 (Float)**.
+## Was von den echten Tests bewiesen ist
 
-## Betriebsarten
+- Die bis v0.3.20 fuer M11 genutzten Aufrufe
+  `LCN_LockTargetValue(#37617,2)` und
+  `LCN_ReleaseTargetValue(#37617,2)` lieferten beide **FALSE**.
+  Deshalb werden sie nicht mehr fuer die kuenftige direkte
+  Kuehlsteuerung verwendet.
+- `RequestAction(#46746,false)` lieferte dagegen **TRUE**;
+  die LCN-Value-Instanz #19003 ist die vorhandene
+  Standardaktion. Das ist nur ein erfolgreich angenommener
+  FREIGABE-Aufruf, noch kein echter Sperrbeweis.
+- Bei allen elf LCN-Modulen wurde die Option
+  "Sperrung zulassen" laut Betreiber in LCN-PRO aktiviert;
+  Symcon kann diese Konfigurationsoption nicht auslesen.
+- Der neu vorbereitete, nur ausdruecklich aufrufbare
+  M11-Einzeltest sperrt und gibt den Regler ueber dieselbe
+  Standardaktion wieder frei; dabei werden unabhaengige
+  frische Statusrueckmeldungen gefordert.
+- Bis dieser Test bestanden ist, bleibt produktive
+  Direktkuehlung blockiert. Auch ein bestandener M11-Test
+  allein ist KEINE Freigabe der anderen zehn Regler.
+- Eine vom Symcon-System unabhaengige Taupunkt- und
+  Kuehlwasserverriegelung bleibt Voraussetzung
+  fuer echten Kuehlwasserbetrieb.
 
-### Heizen
-- pro Raum Isttemperatur als Link auf die vorhandene GUS-Temperatur
-- Solltemperatur in Symcon: **18 bis 24 °C in 1-°C-Schritten**
-- am GT8 bleibt der komplette in LCN-PRO programmierte Sollwertbereich nutzbar
-- ein GT8-Eingriff wird von Symcon übernommen; während eines Symcon-Auftrags hat ein unerwarteter GT8-/LCN-Eingriff Vorrang und beendet den Raumauftrag
+## Reduzierte Bedienung
 
-### Kühlen
-LCN weiß nicht, ob Heiz- oder Kühlwasser fließt. Die Umschaltung der Hydraulik erfolgt weiterhin manuell.
+Das Modulkonfigurationsfenster zeigt nur sieben wichtige
+Aktionen (Abbruch, Fehler quittieren, Sperrstatus,
+Sperrvormerkungen pruefen, EINMALIGER M11-RequestAction-Test,
+M11-Teststatus, M11-Not-Freigabe).
+Die sechs ueberholten Diagnose-/Sperrtest-Knoepfe wurden
+ausgeblendet; ihre historischen Berichte/Methoden sind fuer
+Rueckwaertskompatibilitaet zunaechst erhalten.
+Keine neue sichtbare Symcon-Variable.
 
-Pro Raum gibt es nur:
-- **Kühlen**: A7 schrittweise bis zur bestätigten oberen LCN-Regler-Endlage → Ventil geöffnet
-- **Nicht kühlen**: A8 schrittweise bis zur bestätigten unteren LCN-Regler-Endlage → Ventil geschlossen
+Alle Busbefehle des Climate-Moduls sind mit der bereits
+vorhandenen gemeinsamen Sendesperre und **750 ms Abstand**
+koordiniert. Die nativen S1-Instanzen haben bereits ihren
+bestehenden 120-s-Abfragezyklus; es wird kein zusaetzlicher
+globaler LCN-Status-Polling-Timer eingefuehrt.
 
-Die Endlagen werden **nicht berechnet**. Nach jedem Tastendruck wird auf S1Target gewartet. Bleibt S1Target trotz Nachlese unverändert, wird der gleiche Befehl nochmals bestätigt. Erst nach mehreren bestätigten unveränderten Schritten gilt die LCN-Endlage als erreicht.
+Quellen:
+- https://www.symcon.de/de/service/dokumentation/befehlsreferenz/variablenzugriff/requestaction/
+- https://www.symcon.de/de/service/dokumentation/modulreferenz/geraete/lcn/lcn-requestread/
+- https://community.symcon.de/t/lcn-reglersperre-bei-offenem-fenster/133348
+- https://community.symcon.de/t/lcn-staendige-timeouts/134067
 
-## Umschaltung Heizen/Kühlen
+## Ueberlieferte Dokumentation
 
-Beim Wechsel **Heizen → Kühlen** wird für jeden Raum zuerst der echte aktuelle S1Target-Wert dauerhaft als letzter Heizsollwert gespeichert. Anschließend werden die gespeicherten Kühlzustände nacheinander angefahren.
-
-Beim Wechsel **Kühlen → Heizen** werden die gespeicherten Heizsollwerte nacheinander über A7/A8 wiederhergestellt.
-
-Ein Neustart oder `ApplyChanges()` sendet **keinen einzigen LCN-Befehl**.
-
-## Vorbereitung in Symcon
-
-Für jedes neue LCN-Modul (Firmwaregeneration mit Variablen 1–12):
-1. unter dem entsprechenden LCN-Modul eine Instanz **LCN Variable / LCN Wert** anlegen,
-2. unter „Neue Module“ **S1Target** aktivieren,
-3. als Rückmeldung die dabei erzeugte **Float-Variable „Zieltemperatur S1“** verwenden,
-4. die zusätzlich erzeugte Boolean-Variable „Entriegelt“ nicht auswählen.
+Die folgenden Abschnitte enthalten teils historische
+Betriebsablaeufe frueherer Versionen. Bei Widerspruechen
+gilt ausschliesslich der oben genannte aktuelle Stand.
+Insbesondere wird Kuehlung derzeit **nicht** automatisch
+freigegeben oder als getestete Funktion bezeichnet.
 
 ## Installation über GitHub
 
