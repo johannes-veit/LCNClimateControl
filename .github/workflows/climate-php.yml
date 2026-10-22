@@ -1,0 +1,24 @@
+name: Climate PHP Regression
+on:
+  push:
+    paths:
+      - 'LCNClimateControl/**'
+      - 'tests/**'
+      - 'library.json'
+      - '.github/workflows/climate-php.yml'
+  workflow_dispatch:
+
+jobs:
+  lint-and-lock-recovery:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+      - name: PHP syntax checks
+        run: |
+          find LCNClimateControl tests -name '*.php' -print0 | xargs -0 -n1 php -l
+      - name: Lock recovery simulation
+        run: php tests/test_lock_recovery.php
