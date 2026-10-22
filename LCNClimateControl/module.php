@@ -734,7 +734,8 @@ class LCNClimateControl extends IPSModuleStrict
             $this->HandleDirectCoolingRecovery($Job);
             return;
         }
-        if (in_array((string) ($Job['Type'] ?? ''), ['direct_cool', 'direct_release'], true)) {
+        if (in_array((string) ($Job['Type'] ?? ''),
+            ['direct_cool', 'direct_release', 'direct_emergency_close'], true)) {
             $this->HandleDirectCoolingJob($Job);
             return;
         }
@@ -1246,7 +1247,9 @@ class LCNClimateControl extends IPSModuleStrict
         }
 
         $Job['Phase'] = ($Job['Type'] ?? '') === 'direct_cool' ? 'lock'
-            : (($Job['Type'] ?? '') === 'direct_release' ? 'close' : self::PHASE_SEND);
+            : (in_array(($Job['Type'] ?? ''),
+                ['direct_release', 'direct_emergency_close'], true)
+                ? 'close' : self::PHASE_SEND);
         $Job['Steps'] = 0;
         $Job['NoChange'] = 0;
         $Job['SentAtMs'] = 0;
