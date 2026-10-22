@@ -568,6 +568,16 @@ class LCNClimateControl extends IPSModuleStrict
         if (!in_array($Mode, [self::MODE_HEATING, self::MODE_COOLING], true)) {
             throw new InvalidArgumentException('Ungültige Betriebsart.');
         }
+        // A failed real native lock/release test must NOT result in eleven
+        // blind automatic cooling attempts. Keep ordinary heating running.
+        if ($Mode === self::MODE_COOLING && $this->UsesDirectCooling()
+            && (string) ($this->M11ProbeSession()['phase'] ?? '') === 'failed_safe') {
+            throw new RuntimeException(
+                'KÜHLEN derzeit gesperrt: M11-Sperrtest fehlgeschlagen; '
+                . 'native LCN-Sperr-/Freigabefunktionen antworten FALSE. '
+                . 'Zuerst R1/S1-Schnittstelle und LCN-Verbindung prüfen.'
+            );
+        }
 
         $currentMode = $this->GetMode();
         $pendingMode = $this->GetPendingMode();
