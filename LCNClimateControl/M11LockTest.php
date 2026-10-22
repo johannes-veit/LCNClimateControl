@@ -219,7 +219,25 @@ trait LCNClimateM11LockTest
             $detail = 'LCN-Moduladresse nicht M11.';
             return false;
         }
-        $fn = $lock ? 'LCN_LockTargetValue' : 'LCN_ReleaseTargetValue';
+        $viaAction = (string) ($p['commandPath'] ?? '') === 'RequestAction';
+        $fn = $viaAction ? 'RequestAction'
+            : ($lock ? 'LCN_LockTargetValue' : 'LCN_ReleaseTargetValue');
+        $lockId = (int) ($p['lockID'] ?? 0);
+        $parent = (int) ($p['valueInstance'] ?? 0);
+        if ($viaAction) {
+            // Never pass a different Boolean or an arbitrary variable action.
+            // The lock Boolean belongs to the M11 LCN Value instance.
+            if ($lockId <= 0 || !IPS_VariableExists($lockId)
+                || $parent <= 0 || !IPS_InstanceExists($parent)
+                || IPS_GetParent($lockId) !== $parent
+                || (int) (IPS_GetInstance($parent)['ConnectionID'] ?? 0) !== $sender
+                || (int) (IPS_GetVariable($lockId)['VariableType'] ?? -1) !== VARIABLETYPE_BOOLEAN
+                || (int) (IPS_GetVariable($lockId)['VariableAction'] ?? 0) !== $parent
+                || (string) (IPS_GetObject($lockId)['ObjectIdent'] ?? '') !== 'S1TargetLock') {
+                $detail = 'ABBRUCH: native M11-S1TargetLock Standardaktion nicht identisch.';
+                return false;
+            }
+        }
         if (!IPS_FunctionExists($fn)) {
             $detail = $fn . ' fehlt.';
             return false;
@@ -229,11 +247,18 @@ trait LCNClimateM11LockTest
             return false;
         }
         try {
-            $ok = $lock
-                ? (bool) LCN_LockTargetValue($sender, 2)
-                : (bool) LCN_ReleaseTargetValue($sender, 2);
-            $detail = $fn . '(#' . $sender . ', 2) hat '
-                . ($ok ? 'TRUE' : 'FALSE') . ' zurueckgegeben.';
+            if ($viaAction) {
+                $ok = (bool) RequestAction($lockId, $lock);
+                $detail = 'RequestAction(#' . $lockId . ', '
+                    . ($lock ? 'true=SPERREN' : 'false=FREIGEBEN')
+                    . ') hat ' . ($ok ? 'TRUE' : 'FALSE') . ' zurueckgegeben.';
+            } else {
+                $ok = $lock
+                    ? (bool) LCN_LockTargetValue($sender, 2)
+                    : (bool) LCN_ReleaseTargetValue($sender, 2);
+                $detail = $fn . '(#' . $sender . ', 2) hat '
+                    . ($ok ? 'TRUE' : 'FALSE') . ' zurueckgegeben.';
+            }
             return $ok;
         } catch (Throwable $e) {
             $detail = $fn . ' Exception: ' . $e->getMessage();
@@ -438,7 +463,8 @@ trait LCNClimateM11LockTest
         $lock = (int) ($p['lockID'] ?? 0);
         $actual = (int) ($p['target'] ?? 0);
         $status = 'M11-Sperrtest: ' . (string) ($p['phase'] ?? 'unbekannt')
-            . "\n" . (string) ($p['message'] ?? '');
+            . "\n" . (string) ($p['message'] ?? '')
+            . "\nBefehlspfad: " . (string) ($p['commandPath'] ?? 'LCN-Funktion (Altbericht)');
         foreach ([$lock, $actual] as $id) {
             if (IPS_VariableExists($id)) {
                 $shown = $id === $lock
