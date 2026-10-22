@@ -851,3 +851,58 @@ TRUE lieferten und die aktuelle Sperr-/Freigabe-Rueckmeldung
 einschliesslich S1-Sollwert nachgewiesen ist. Gibt eine API FALSE
 zurueck, aber eine Statusvariable meldet "frei", ist das
 failed_safe und **keine bewiesene erfolgreiche Testfahrt**.
+
+
+## v0.3.20 Build 36 – globales, kooperatives LCN-Bus-Timing
+
+Praxis-Hinweis des Anlagenbetreibers vom 22.10.2026: Mehrere
+LCN-Kommandos muessen zeitlich versetzt werden, weil zu dicht
+gesendete Befehle eine Ueberlast erzeugen koennen und einzelne
+Kommandos bzw. Rueckmeldungen verlorengehen.
+
+Daher wird jetzt nach JEDEM aktiven LCN-Aufruf des Climate-Moduls
+fuer **750 ms** die bereits bestehende instanzuebergreifende
+Sendesperre `LCN_BUS_SEND_GLOBAL` gehalten:
+- Vorhandene TS-Kurztasten (Heiz-Sollwert A7/A8),
+- direkte native S1-Lock/Release-Aufrufe (Test und spaeter Betrieb),
+- genau ein Relais Rn mittels LCN_SwitchRelay bzw. LCN_SetRelay,
+- aktive LCN_RequestRead- und LCN_RequestStatus-Abfragen,
+- die manuellen rotierenden Zweier-Batches fuer S1-Statusupdates.
+
+Dadurch kann das naechste Climate-LCN-Kommando erst gesendet
+werden, nachdem der vorangegangene Aufruf beendet und
+die 750-ms-Wartezeit abgelaufen ist. Dies gilt auch nach
+FALSE-Rueckgaben/Exceptions, um Burst-Schleifen zu verhindern.
+Technische Umsetzung: neues Trait `TrafficPacing.php`,
+`ReleaseLCNBusSlot()`, `IPS_Sleep(750)` im gesicherten
+`finally` vor dem Freigeben des globalen Semaphors.
+
+Die Bus-Sperrwartezeit fuer aktive M11-Kommandos wurde auf
+2500 ms, fuer M11-Rueckfragen auf 1500 ms und fuer die beiden
+Recovery-Statusabfragen auf 2000 ms angepasst, sodass 750-ms-
+Cool-downs nicht voreilig als belegter Bus behandelt werden.
+Keine neuen Variablen, keine Relais- oder Sollwertaenderungen
+durch das Update, keine Wiederholung bereits abgeschlossener
+Auftraege. Der laufende/abgeschlossene M11-Test und seine
+`failed_safe`-Vormerkung bleiben unveraendert.
+
+**Wichtig:** Diese Taktung gilt nur fuer Kommandos aus
+LCN Climate Control beziehungsweise weitere Module, die
+freiwillig exakt dasselbe Symcon-Semaphor nutzen. Andere
+LCN-Instanzen, LCN-PRO, lokale GT8-Tasten sowie sonstige
+Busmaster sind dadurch NICHT automatisch synchronisiert.
+750 ms ist ein konservativer Startwert, kein vom LCN-Hersteller
+bestaetigter Garantiewert.
+
+Die beiden vorherigen nativen M11-Sperr-/Freigabe-Aufrufe
+gaben bereits `FALSE` zurueck. Pacing behebt diese
+API-Fehlfunktion nicht automatisch. Vor erneuter direkter
+Kuehlung bleibt die genaue native R1/S1-Schnittstellenpruefung
+erforderlich. `RequestAction()` an der nativen Sperrvariable
+ist ein alternativer, noch nicht praktisch bestaetigter Ansatz;
+er wird absichtlich nicht automatisch ausgeloest.
+
+Regressionstest `test_m11_lock_probe.php` prueft die beiden
+750-ms-Sendeschleusen ohne reale Wartezeit durch einen
+`IPS_Sleep`-Mock. Ein Live-Test am LCN-Bus und ein GitHub-CI-
+Ergebnis muessen separat bestaetigt werden.
