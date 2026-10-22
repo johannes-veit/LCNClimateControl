@@ -587,3 +587,41 @@ Die Abfrage bearbeitet jetzt maximal zwei LCN-Value-Instanzen pro Aufruf und set
 Die LP3-Auswertung belegt die elf Regler und M92/M192-Relaiszuordnung. Der herstellerspezifische Parameter 'Reglersperrung erlaubt' ist nicht sicher dekodiert. Interne Sperr-Vormerkungen 'uncertain' werden nicht aufgrund eines alten passiven Snapshots geloescht. Vor einer Freigabe bleibt ein bestaetigter aktueller Funktionstest erforderlich.
 
 Offline-Regression und echter SymBox-/Bus-Funktionstest stehen noch aus.
+
+
+## v0.3.15 Build 31 – alte 'uncertain'-Vormerkungen kontrolliert bereinigen
+
+Nach bestaetigter LCN-Bus-Leseabfrage vom 22.10.2026 meldeten OG Ankleide/HWR
+(S1Target #58217, S1TargetLock #24239, Relaisstatus #24994) und OG Flur
+(S1Target #15371, S1TargetLock #31648, Relaisstatus #49744) freie Regler,
+plausible 21,0-Grad-Sollwerte und Relais AUS. Trotzdem blieben in der
+Modulinstanz #17597 zwei alte persistente 'uncertain'-Vormerkungen bestehen.
+
+Neuer Button in der Instanzkonfiguration:
+**Interne Reglersperr-Vormerkungen prüfen und bereinigen (nur Software, keine LCN-Befehle)**
+
+Die Aktion laeuft NUR im ruhenden HEIZBETRIEB und nur fuer Marker vom Typ
+'uncertain'. Fuer jeden Raum werden die gespeicherte Zuordnung mit der
+aktuellen nativen Discovery (Sender, Regler S1, Unit, Relaiskanal und
+Rueckmelde-IDs), S1TargetLock FALSE, Einzelrelais AUS (NC-Ventil),
+gespeicherter Kuehlzustand AUS sowie plausibler Float-S1Target ueberprueft.
+Alle drei Rueckmeldungen muessen innerhalb der vergangenen 180 Sekunden
+aktualisiert worden sein, hoechstens 120 Sekunden auseinanderliegen und
+duerfen nicht vor dem letzten gespeicherten Fehlerintrag liegen.
+Bei erfolgreicher Pruefung werden nur die alten internen Sperr- und
+Fallback-Vermerke des konkreten Raums entfernt und der Diagnosebericht
+sofort neu geschrieben. Beim ersten Fehler bleibt die Vormerkung bestehen;
+der Button zeigt den konkreten Grund an.
+
+KEINE LCN-Kommandos, KEIN Relaisbefehl, KEINE Sollwertverstellung, KEINE
+automatische Heiz-/Kuehlmodus-Aenderung. Echte LCN-PRO-Sperrerlaubnis,
+Reglersperr-Funktionstest und mechanischer Taupunktschutz bleiben
+unabhaengige offene Sicherheitsvoraussetzungen fuer reale Kuehlung.
+
+Auch korrigiert: Die rotierende LCN-Statusabfrage sendet am letzten
+Durchlauf bei elf Raeumen nur noch eine Anfrage (11-11 statt 11-12),
+und Zeilenumbrueche werden in der Ausgabe korrekt dargestellt.
+
+Quellcode- und Strukturpruefung bestanden; vollstaendige automatische
+PHP-Regressionssimulation und Hardwaretest stehen weiterhin aus.
+
