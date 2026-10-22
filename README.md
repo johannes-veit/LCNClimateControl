@@ -833,3 +833,21 @@ Regressionstest test_native_interface_audit.php prueft, dass native
 R1/S1-Objekte und Konfiguration korrekt auslesbar sind und keine
 vertraulichen Gateway-Felder ausgegeben werden. LCN-Live-Funktionstest
 wurde nicht durchgefuehrt.
+
+
+**Zusaetzliche Sicherheitskorrektur im selben Release:** Sobald der
+persistierte M11-Funktionstest die Phase failed_safe hat und
+DirectCoolingEnabled=true ist, verweigert RequestMode den
+Moduswechsel auf KUEHLEN. Die bis dahin funktionierende
+Heizsteuerung bleibt unveraendert; kein blindes Anfahren aller
+11 Raumregler und keine automatische Umschaltung in den alten
+A7/A8-Kuehlweg nach fehlgeschlagenem native Lock.
+Diese Sperre wird nicht durch eine Leseabfrage aufgeloest;
+zuerst muss die native LCN-Schnittstelle nachweisbar funktionieren.
+
+Der M11-Sperrtest selbst bewertet jetzt einen Durchlauf nur dann als
+passed, wenn die native Sperr- UND die native Freigabe-API
+TRUE lieferten und die aktuelle Sperr-/Freigabe-Rueckmeldung
+einschliesslich S1-Sollwert nachgewiesen ist. Gibt eine API FALSE
+zurueck, aber eine Statusvariable meldet "frei", ist das
+failed_safe und **keine bewiesene erfolgreiche Testfahrt**.
