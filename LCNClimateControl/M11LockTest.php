@@ -10,7 +10,11 @@ trait LCNClimateM11LockTest
 {
     private function M11ProbeSession(): array
     {
-        return $this->ReadJsonAttribute('M11ProbeSession');
+        try {
+            return $this->ReadJsonAttribute('M11ProbeSession');
+        } catch (Throwable) {
+            return [];
+        }
     }
 
     private function M11ProbeActive(): bool
@@ -255,7 +259,7 @@ trait LCNClimateM11LockTest
                 if (IPS_VariableExists($lockId)
                     && !(bool) GetValue($lockId)
                     && (int) (IPS_GetVariable($lockId)['VariableUpdated'] ?? 0)
-                        >= (int) ($p['releaseSent'] ?? PHP_INT_MAX)) {
+                        > (int) ($p['releaseSent'] ?? PHP_INT_MAX)) {
                     $this->M11ProbeSetPhase($p, 'target_wait', 'S1-Freigabe bestaetigt; Sollwert wird geprueft.');
                 } elseif (time() - (int) ($p['releaseSent'] ?? 0) >= 10) {
                     if ((int) ($p['tries'] ?? 0) < 3) {
@@ -273,10 +277,10 @@ trait LCNClimateM11LockTest
                 if (IPS_VariableExists($lockId)
                     && !(bool) GetValue($lockId)
                     && (int) (IPS_GetVariable($lockId)['VariableUpdated'] ?? 0)
-                        >= (int) ($p['releaseSent'] ?? PHP_INT_MAX)
+                        > (int) ($p['releaseSent'] ?? PHP_INT_MAX)
                     && $actual !== null && IPS_VariableExists($target)
                     && (int) (IPS_GetVariable($target)['VariableUpdated'] ?? 0)
-                        >= (int) ($p['releaseSent'] ?? PHP_INT_MAX)) {
+                        > (int) ($p['releaseSent'] ?? PHP_INT_MAX)) {
                     $this->DirectCoolingSetLockState($target, '');
                     if ((bool) ($p['lockConfirmed'] ?? false)) {
                         $this->M11ProbeSetPhase($p, 'passed',
