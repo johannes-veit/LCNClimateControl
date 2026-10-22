@@ -25,6 +25,8 @@ jobs:
         run: php tests/chatgpt_diagnostic_test.php
       - name: OG Flur and Ankleide cooling toggles – real module regression
         run: php tests/cooling_room_toggle_test.php
+      - name: Read-only reconciliation of uncertain LCN regulator locks
+        run: php tests/cooling_uncertain_reconcile_test.php
       - name: Assert safe automatic fallback enabled
         run: |
           grep -q "RegisterPropertyBoolean('DirectCoolingEnabled', true)" LCNClimateControl/module.php

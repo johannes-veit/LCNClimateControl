@@ -78,6 +78,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterAttributeString('CoolingStates', '{}');
         $this->RegisterAttributeString('DirectCoolingLocks', '{}');
         $this->RegisterAttributeString('DirectCoolingLockMappings', '{}');
+        $this->RegisterAttributeString('DirectCoolingReconcile', '{}');
         $this->RegisterAttributeString('CoolingFallbackReasons', '{}');
         $this->RegisterAttributeString('DirectCoolingRoomHealth', '{}');
         $this->RegisterAttributeString('RegisteredTargetMessages', '[]');
@@ -144,6 +145,9 @@ class LCNClimateControl extends IPSModuleStrict
         $this->SetBuffer('PendingMode', '');
         $this->SetBuffer('RoomErrors', '{}');
         $this->SetBuffer('CoolingPendingRequests', '{}');
+        // Ein neuer Modulstand muss zwei NEUE Busmessungen verlangen.
+        // Die alten DirectCoolingLocks bleiben unveraendert erhalten.
+        $this->WriteAttributeString('DirectCoolingReconcile', '{}');
         $this->SetBuffer('ConfigurationValid', '1');
         $this->SetBuffer('ConfigurationErrors', '[]');
 

@@ -556,3 +556,50 @@ nach Abschluss der vorherigen Bewegung wirksam werden; bei
 Sperrfehler nur NC-Relais AUS, kein blindes Entsperren.
 Die physische Taupunkt-Abschaltung im Kuehlkreis ist unabhaengig
 von dieser Bedienkorrektur weiterhin erforderlich.
+
+
+## v0.3.13 Build 28 – Gesperrte Vormerkung sicher automatisch aufloesen
+
+Livebericht vom 22.10.2026 19:40:50:
+- OG Ankleide / HWR: S1TargetLock #24239 meldet AUS (frei), Relais
+  M192/R1 #24994 meldet AUS, Soll 21.0 °C; trotzdem interner
+  `DirectCoolingLocks[58217]=uncertain`.
+- OG Flur: S1TargetLock #31648 meldet AUS (frei), Relais
+  M192/R5 #49744 meldet AUS, Soll 21.0 °C; interner
+  `DirectCoolingLocks[15371]=uncertain`.
+- Die anderen neun Räume zeigen eine eindeutige native Zuordnung.
+  Ein funktionierender REGELSPERR-Befehl ist durch die bereit-Meldung
+  nicht nachgewiesen.
+
+Diese Version verhindert, dass ein fehlgeschlagener Sperrversuch den
+Raum dauerhaft blockiert, obwohl die LCN-Hardware nachweislich wieder
+frei ist. Eine Rückmeldung, die nur aus einem alten Cache stammt,
+reicht zum Aufheben der Sicherheitsblockade **ausdrücklich nicht**.
+
+Bei `KUEHLEN` und `uncertain` in einem ruhenden, stromlos geschlossenen
+Raum erfolgt ab jetzt im vorhandenen 15-Sekunden-Watchdog
+ein read-only Wiederherstellungsverfahren:
+1. Nur native LCN-Value-Instanz (`LCN_RequestRead`) und Relaismodul
+   (`LCN_RequestStatus`) lesen. Keine TS-, Lock-/Release- oder
+   Relais-Schaltbefehle.
+2. **Zwei voneinander unabhängige frische Antworten** erhalten:
+   S1TargetLock = freigegeben, NC-Relais = AUS und S1Target plausibel.
+   Zeitstempel müssen jeweils NACH der entsprechenden Leseanfrage
+   liegen und im zweiten Durchlauf neu sein.
+3. Erst dann internes `uncertain` entfernen und den Raum für den
+   **aktuellen Kühlzyklus ausschließlich auf alte A7/A8-Steuerung**
+   zurücksetzen. Kein automatischer erneuter Direktsperrversuch.
+4. Bei fehlender/früherer Antwort, gesperrtem Regler, aktivem
+   Relais oder fehlender Zuordnung bleibt die Blockade unverändert.
+
+Die Funktion ändert keine Heizsollwerte, Schaltzustände oder
+Symcon-Objekte. Sie verwendet ein internes Attribut, keine zusätzliche
+Symcon-Variable. Nach einem `ApplyChanges` müssen die beiden
+Lesebestätigungen erneut erfolgen; gespeicherte Sperr-Vormerkungen
+werden durch das Update nicht gelöscht.
+
+**LCN-PRO:** Falls sich der Regler bei einem künftigen Kühlversuch
+weiterhin nicht sperren lässt, am jeweiligen LCN-Sendemodul
+`Regler-Sperrung erlaubt` prüfen. Der Wert kann nicht allein
+aus `S1TargetLock=FREI` abgeleitet werden. Ohne unabhängigen
+Taupunktschutz weiterhin kein Kühlwasser einschalten.
