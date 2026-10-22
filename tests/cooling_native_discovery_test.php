@@ -38,10 +38,47 @@ function IPS_GetChildrenIDs(int $id): array{
 }
 function IPS_GetName(int $id): string{return $GLOBALS['variables'][$id]['Name'];}
 function IPS_GetObject(int $id): array { return ['ObjectIdent'=>$GLOBALS['variables'][$id]['Ident']??'']; }
+$GLOBALS['created'] = [];
+$GLOBALS['commands'] = [];
+function IPS_SemaphoreEnter(string $name, int $timeout): bool{return true;}
+function IPS_SemaphoreLeave(string $name):void{}
+function IPS_CreateInstance(string $guid):int{
+    $id=701+count($GLOBALS['created']);
+    $GLOBALS['instances'][$id]=['ConnectionID'=>0,'InstanceStatus'=>102,'ModuleInfo'=>['ModuleID'=>$guid]];
+    $GLOBALS['configs'][$id]=['Unit'=>0,'Channel'=>0];
+    $GLOBALS['created'][]=$id;
+    return $id;
+}
+function IPS_ConnectInstance(int $id,int $parent):bool{$GLOBALS['instances'][$id]['ConnectionID']=$parent;return true;}
+function IPS_SetProperty(int $id,string $name,mixed $value):bool{$GLOBALS['configs'][$id][$name]=$value;return true;}
+function IPS_SetParent(int $id,int $parent):bool{return true;}
+function IPS_SetName(int $id,string $name):bool{return true;}
+function IPS_ApplyChanges(int $id):bool{
+    // The native LCN Unit creates its Boolean Status child when configured.
+    if ((int) ($GLOBALS['configs'][$id]['Unit']??-1)===2) {
+        $v=$id*10+1;
+        $GLOBALS['variables'][$v]=['VariableType'=>0,'Parent'=>$id,
+            'Name'=>'Status','Ident'=>'Status'];
+    }
+    return true;
+}
+function IPS_DeleteInstance(int $id):bool{unset($GLOBALS['instances'][$id],$GLOBALS['configs'][$id]);return true;}
 require __DIR__.'/../LCNClimateControl/CoolingDiscovery.php';
 class Probe{
     use LCNClimateCoolingDiscovery;
     public const LCN_VALUE_MODULE_ID=VALUE;
+    public const MODE_HEATING=0;
+    public int $InstanceID=900;
+    public int $mode=0;
+    public bool $busy=false;
+    public array $locks=[];
+    public function GetMode():int{return $this->mode;}
+    public function IsBusy():bool{return $this->busy;}
+    public function ReadJsonAttribute(string $key):array{return $this->locks; }
+    public function GetRuntimeRooms():array{
+        return [['Name'=>'EG Buero','SendModule'=>11,'TargetVariable'=>10000]];
+    }
+    public function setup():string{return $this->PrepareCoolingRelayUnits();}
     public array $properties=['AutoCoolingPolarityConfirmed'=>true,'AutoCoolingOpenRelayOn'=>true];
     public function ReadPropertyBoolean(string $key): bool{return (bool)($this->properties[$key]??false);}
     private function IsOperationalLCNModule(int $id):bool{return IPS_InstanceExists($id)&&IPS_GetInstance($id)['InstanceStatus']===102;}
@@ -103,4 +140,27 @@ unset($GLOBALS['variables'][10001]['Ident']);
 check(str_contains($p->reason(),'Entriegelt'), 'missing unlock feedback diagnostic');
 $GLOBALS['variables'][10001]['Name']='Entriegelt';
 check($p->go()!==null, 'read-only diagnostic leaves good discovery working');
-echo "PASS: 18 native discovery and detailed failure-cause tests\n";
+// One-click setup: no switch commands, strictly idempotent and gated.
+unset($GLOBALS['instances'][700],$GLOBALS['configs'][700]);
+$p->mode=1;
+check(str_contains($p->setup(),'ABBRUCH')&&$GLOBALS['created']===[],
+    'cooling-mode setup must be blocked');
+$p->mode=0;$p->busy=true;
+check(str_contains($p->setup(),'ABBRUCH')&&$GLOBALS['created']===[],
+    'busy setup must be blocked');
+$p->busy=false;$p->locks=['10000'=>'locked'];
+check(str_contains($p->setup(),'ABBRUCH')&&$GLOBALS['created']===[],
+    'locked-controller setup must be blocked');
+$p->locks=[];
+$out=$p->setup();
+check(count($GLOBALS['created'])===1 && $GLOBALS['instances'][701]['ConnectionID']===92
+    && $GLOBALS['configs'][701]['Unit']===2
+    && $GLOBALS['configs'][701]['Channel']===1,
+    'missing relay Unit must be linked to exactly its own module+channel');
+check(str_contains($out,'neue Symcon-Unit #701')&&$p->go()!==null,
+    'new Unit must be discoverable afterwards');
+$p->setup();
+check(count($GLOBALS['created'])===1,
+    'second setup must not create duplicates');
+check($GLOBALS['commands']===[], 'setup may not emit a bus switch command');
+echo "PASS: 24 native discovery and safe, idempotent unit-provisioning tests\n";
