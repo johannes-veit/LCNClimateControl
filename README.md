@@ -576,3 +576,14 @@ keine Aenderung an GT8, Heiz-Sollwerten oder S1Target-Pruefung.
 Quellcodekontrolle durchgefuehrt; ein echter Test an der SymBox/LCN-Hardware
 ist weiterhin erforderlich. Die mechanische Taupunktsicherung ist fuer
 reale Kuehlung weiterhin unverzichtbar.
+
+
+## v0.3.14 Build 30 – LCN-Statusabfrage gegen Timeouts begrenzt
+
+Die vorherige Aktion hat bis zu elf synchrone LCN_RequestRead-Aufrufe ausgefuehrt. Bei stockendem LCN-Server konnte die Bedienoberflaeche mit einer Zeitueberschreitung reagieren.
+
+Die Abfrage bearbeitet jetzt maximal zwei LCN-Value-Instanzen pro Aufruf und setzt beim naechsten Klick an der naechsten Instanz fort. Lese-Fehler eines Raums werden getrennt ausgegeben. Keine Reglersperren, Freigaben oder Relaisschaltungen. Ein blockierender einzelner nativer LCN-Aufruf kann weiterhin verzögern.
+
+Die LP3-Auswertung belegt die elf Regler und M92/M192-Relaiszuordnung. Der herstellerspezifische Parameter 'Reglersperrung erlaubt' ist nicht sicher dekodiert. Interne Sperr-Vormerkungen 'uncertain' werden nicht aufgrund eines alten passiven Snapshots geloescht. Vor einer Freigabe bleibt ein bestaetigter aktueller Funktionstest erforderlich.
+
+Offline-Regression und echter SymBox-/Bus-Funktionstest stehen noch aus.
