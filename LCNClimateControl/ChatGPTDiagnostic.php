@@ -129,7 +129,8 @@ trait LCNClimateChatGPTDiagnostic
                 $locked = $this->AutoCoolingLockFeedbackForRoom($room);
 
                 $directReady = $this->UsesDirectCooling() && $eligibility === '' && $mapping !== null;
-                $isBlocked = $persisted === 'uncertain' || $fallbackKind === 'blocked';
+                $isBlocked = $persisted === 'uncertain' || $fallbackKind === 'blocked'
+                    || str_contains($eligibility, 'bereits gesperrt');
                 $route = $isBlocked ? 'GESTOPPT/PRUEFEN'
                     : ($persisted !== '' ? 'DIREKT / REGLER ' . strtoupper($persisted)
                     : ($fallbackKind === 'legacy' ? 'ALTE A7/A8 (Rueckfall)'
@@ -199,7 +200,7 @@ trait LCNClimateChatGPTDiagnostic
         $lines[] = '--- ZUSAMMENFASSUNG ---';
         $lines[] = 'Direkt moeglich/aktiv: ' . $ready . '; alte Steuerung: ' . $legacy
             . '; blockiert/Pruefung: ' . $blocked
-            . '; aktuell als gesperrt gemeldet: ' . $lockedCount . '.';
+            . '; zuletzt als gesperrt gemeldet: ' . $lockedCount . '.';
         $lastError = trim((string) $this->ReadAttributeString('LastError'));
         if ($lastError !== '') {
             $lines[] = 'Modulfehler: ' . $lastError;
