@@ -14,6 +14,9 @@ trait LCNClimateLockRecovery
         }
 
         try {
+            if ($this->M11ProbeActive()) {
+                return 'ABBRUCH: M11-Test/Freigabe laeuft; keine Sperrvormerkungen bereinigen.';
+            }
             if ($this->GetMode() !== 0
                 || $this->IsBusy()
                 || $this->GetPendingMode() !== null
