@@ -7,6 +7,7 @@ require_once __DIR__ . '/ChatGPTDiagnostic.php';
 require_once __DIR__ . '/LockRecovery.php';
 require_once __DIR__ . '/M11LockTest.php';
 require_once __DIR__ . '/NativeInterfaceAudit.php';
+require_once __DIR__ . '/TrafficPacing.php';
 
 /**
  * LCN Heizung / Kühlung für IP-Symcon 9
@@ -30,6 +31,7 @@ class LCNClimateControl extends IPSModuleStrict
     use LCNClimateLockRecovery;
     use LCNClimateM11LockTest;
     use LCNClimateNativeInterfaceAudit;
+    use LCNClimateTrafficPacing;
 
     private const STATUS_ACTIVE = 102;
     private const STATUS_INACTIVE = 104;
@@ -1367,7 +1369,7 @@ class LCNClimateControl extends IPSModuleStrict
             $this->SendDebug('TS', 'LCN_SendCommand: ' . $e->getMessage(), 0);
             return false;
         } finally {
-            IPS_SemaphoreLeave(self::GLOBAL_LCN_SEND_SEMAPHORE);
+            $this->ReleaseLCNBusSlot();
         }
     }
 
