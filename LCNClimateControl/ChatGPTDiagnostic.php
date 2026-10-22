@@ -150,7 +150,7 @@ trait LCNClimateChatGPTDiagnostic
                 $route = $isBlocked ? 'GESTOPPT/PRUEFEN'
                     : ($persisted !== '' ? 'DIREKT / REGLER ' . strtoupper($persisted)
                     : ($fallbackKind === 'legacy' ? 'ALTE A7/A8 (Rueckfall)'
-                    : ($directReady ? 'DIREKT BEREIT (noch kein Funktionstest)'
+                    : ($directReady ? 'DIREKT VORBEREITET (Reglersperre noch nicht nachgewiesen)'
                     : 'ALTE A7/A8')));
                 if ($isBlocked) {
                     $blocked++;
@@ -221,7 +221,7 @@ trait LCNClimateChatGPTDiagnostic
         }
         $lines[] = '';
         $lines[] = '--- ZUSAMMENFASSUNG ---';
-        $lines[] = 'Direkt moeglich/aktiv: ' . $ready . '; alte Steuerung: ' . $legacy
+        $lines[] = 'Direkt technisch zugeordnet (KEIN Funktionstest): ' . $ready . '; alte Steuerung: ' . $legacy
             . '; blockiert/Pruefung: ' . $blocked
             . '; zuletzt als gesperrt gemeldet: ' . $lockedCount . '.';
         $lastError = trim((string) $this->ReadAttributeString('LastError'));
