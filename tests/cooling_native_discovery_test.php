@@ -32,6 +32,7 @@ function IPS_GetInstanceListByModuleID(string $guid): array{
 }
 function IPS_VariableExists(int $id): bool{return isset($GLOBALS['variables'][$id]);}
 function IPS_GetVariable(int $id): array{return $GLOBALS['variables'][$id];}
+function GetValue(int $id): bool{return (bool)($GLOBALS['variableValues'][$id]??false);}
 function IPS_GetParent(int $id): int{return $GLOBALS['variables'][$id]['Parent']??0;}
 function IPS_GetChildrenIDs(int $id): array{
     $out=[];foreach($GLOBALS['variables'] as $v=>$meta){if($meta['Parent']===$id)$out[]=$v;}return $out;
@@ -42,6 +43,9 @@ $GLOBALS['created'] = [];
 $GLOBALS['commands'] = [];
 function IPS_SemaphoreEnter(string $name, int $timeout): bool{return true;}
 function IPS_SemaphoreLeave(string $name):void{}
+function IPS_FunctionExists(string $name):bool{return $name==='LCN_RequestRead';}
+function LCN_RequestRead(int $id):bool{$GLOBALS['readRequests'][]=$id;return true;}
+function IPS_Sleep(int $milliseconds):bool{return true;}
 function IPS_CreateInstance(string $guid):int{
     $id=701+count($GLOBALS['created']);
     $GLOBALS['instances'][$id]=['ConnectionID'=>0,'InstanceStatus'=>102,'ModuleInfo'=>['ModuleID'=>$guid]];
@@ -84,6 +88,8 @@ class Probe{
     private function IsOperationalLCNModule(int $id):bool{return IPS_InstanceExists($id)&&IPS_GetInstance($id)['InstanceStatus']===102;}
     public function go():?array{return $this->AutoCoolingReadOnlyDiscovery(['SendModule'=>11,'TargetVariable'=>10000]);}
     public function reason():string{return $this->AutoCoolingDiscoveryReason(['SendModule'=>11,'TargetVariable'=>10000]);}
+    public function lockReport():string{return $this->CoolingLockStatusReport();}
+    public function readLocks():string{return $this->RequestCoolingLockRead();}
 }
 function check(bool $ok,string $message):void{if(!$ok)throw new RuntimeException($message);}
 $p=new Probe();$m=$p->go();
@@ -165,4 +171,33 @@ $p->setup();
 check(count($GLOBALS['created'])===1,
     'second setup must not create duplicates');
 check($GLOBALS['commands']===[], 'setup may not emit a bus switch command');
-echo "PASS: native S1TargetLock recognition, 11-relay discovery and idempotent provisioning tests\n";
+// Live-Status-Abbildung ohne Sperrbefehl: TRUE=gesperrt, FALSE=freigegeben.
+$GLOBALS['readRequests']=[];
+$GLOBALS['variableValues'][10001]=false;
+$GLOBALS['variables'][10001]['VariableUpdated']=time();
+$lockText=$p->lockReport();
+check(str_contains($lockText,'FREIGEGEBEN') &&
+    str_contains($lockText,'NICHT AUSBLESBAR'),
+    'current lock status must not claim programmable LCN lock permission');
+$GLOBALS['variableValues'][10001]=true;
+check(str_contains($p->lockReport(),'GESPERRT'),
+    'native S1TargetLock=true means controller locked');
+$GLOBALS['variables'][10001]['VariableUpdated']=0;
+check(str_contains($p->lockReport(),'NICHT BESTAETIGT'),
+    'never infer lock state from uninitialized bool');
+$GLOBALS['variables'][10001]['VariableUpdated']=time()-400;
+check(str_contains($p->lockReport(),'Rueckmeldung veraltet'),
+    'warn when live feedback is older than 5 minutes');
+$GLOBALS['variables'][10001]['VariableUpdated']=time();
+$GLOBALS['variableValues'][10001]=false;
+check($GLOBALS['readRequests']===[], 'status report cannot emit any bus commands');
+$result=$p->readLocks();
+check(count($GLOBALS['readRequests'])===1
+    && $GLOBALS['readRequests'][0]===800
+    && str_contains($result,'1 reine Leseanfragen'),
+    'request native LCN Value only, never sender/relay switching');
+$p->busy=true;
+check(str_contains($p->readLocks(),'ABBRUCH')
+    && count($GLOBALS['readRequests'])===1,'do not query bus amid active jobs');
+$p->busy=false;
+echo "PASS: native LCN unit setup, S1TargetLock snapshots, freshness and read-only bus queries\n";
