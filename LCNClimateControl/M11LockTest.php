@@ -353,7 +353,10 @@ trait LCNClimateM11LockTest
             . "\n" . (string) ($p['message'] ?? '');
         foreach ([$lock, $actual] as $id) {
             if (IPS_VariableExists($id)) {
-                $status .= "\n#" . $id . ': ' . (string) GetValue($id)
+                $shown = $id === $lock
+                    ? ((bool) GetValue($id) ? 'GESPERRT' : 'FREIGEGEBEN')
+                    : number_format((float) GetValue($id), 1, ',', '') . ' Grad C';
+                $status .= "\n#" . $id . ': ' . $shown
                     . ' / aktualisiert ' . date('H:i:s',
                         (int) (IPS_GetVariable($id)['VariableUpdated'] ?? 0));
             }
