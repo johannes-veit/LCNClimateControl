@@ -131,9 +131,12 @@ $h=new AutoProbe();config($h);
 $settings=json_decode($h->properties['CoolingRelays'],true);unset($settings[0]['PolarityConfirmed']);
 $h->properties['CoolingRelays']=json_encode($settings);$h->choose(true);
 check(count($h->jobs)===1 && $h->jobs[0]['Type']==='cool_up','unconfirmed polarity means legacy');
-// 10. Bei bestaetigtem Regler-Sperrzustand keine alte TS-Fahrt.
+// 10. Bei ungewissem Reglerzustand wird KEINE alte A7/A8-Fahrt
+// gestartet: nur der sichere Einzelrelais-AUS-Auftrag darf erfolgen.
 $i=new AutoProbe();config($i);$i->lockState(777,'uncertain');$i->choose(false);
-check($i->jobs===[],'blocked state remains blocked for cooling OFF');
+check(count($i->jobs)===1
+    && $i->jobs[0]['Type']==='direct_emergency_close',
+    'uncertain lock must allow only verified native relay OFF, never legacy TS');
 // 11. Der Direktkuehlungs-Watchdog darf laufende Alt-Kuehlung bei
 // fehlender neuer Sicherheitseingabe NICHT unterbrechen.
 $j=new AutoProbe();$j->properties['CoolingSafetyVariable']=0;$j->choose(true);
