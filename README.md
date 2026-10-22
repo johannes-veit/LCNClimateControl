@@ -958,3 +958,19 @@ RequestAction-Aufrufe wurden als Mocktests hinzugefügt.
 Kein realer Sperr- oder Freigabebefehl wurde vom Entwickler
 an die Busanlage gesendet. Ein tatsächlich bestandener
 CI-Lauf und der reale M11-Sperrtest stehen noch aus.
+
+
+**Verstaerkte Live-Rueckmeldepruefung:** `RequestAction` kann die
+Variable bereits im Rahmen der Aktion aktualisieren. Das ist allein
+kein Beweis einer Bus-Rueckmeldung. Der M11-Action-Test fordert
+deshalb nach jeder Aktion getrennt `LCN_RequestRead(#19003)`
+an und verlangt eine erfolgreiche Statusanforderung sowie eine
+anschliessend frische `S1TargetLock`-Rueckmeldung (und nach dem
+Entsperren auch einen frischen plausiblen S1Target-Wert).
+Bleibt die Rueckmeldung aus, wird der Sperrtest NICHT als
+bestanden gewertet und der Freigabeversuch hat Vorrang.
+Auch diese beiden Leseaufrufe verwenden die 750-ms-Sendesperre.
+
+Der vorhandene Benutzer-Test `RequestAction(#46746, false) = TRUE`
+belegt nur den angenommenen Freigabeversuch im Zustand FREI.
+Der physische TRUE/FALSE-Rundlauf ist damit noch nicht getestet.
