@@ -222,6 +222,18 @@ trait LCNClimateChatGPTDiagnostic
             $this->SetValue('ChatGPTDiagnostic', $content);
         } catch (Throwable $e) {
             $this->SendDebug('ChatGPTDiagnostic', $e->getMessage(), 0);
+            // Fehler niemals nur im Symcon-Debug verstecken: Die
+            // kopierbare Variable soll auch bei einer Diagnose-Ausnahme
+            // eine brauchbare Rueckmeldung enthalten.
+            try {
+                $this->SetValue('ChatGPTDiagnostic',
+                    'LCNClimateControl – SENDEN AN CHATGPT' . "\n"
+                    . 'DIAGNOSEFEHLER: ' . $e->getMessage() . "\n"
+                    . 'Keine LCN-Befehle durch diese Diagnose gesendet.'
+                );
+            } catch (Throwable $writeError) {
+                $this->SendDebug('ChatGPTDiagnostic-Write', $writeError->getMessage(), 0);
+            }
         }
     }
 }
