@@ -143,6 +143,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->SetBuffer('RuntimeRooms', '[]');
         $this->SetBuffer('PendingMode', '');
         $this->SetBuffer('RoomErrors', '{}');
+        $this->SetBuffer('CoolingPendingRequests', '{}');
         $this->SetBuffer('ConfigurationValid', '1');
         $this->SetBuffer('ConfigurationErrors', '[]');
 
@@ -482,6 +483,7 @@ class LCNClimateControl extends IPSModuleStrict
 
                 $this->SetBuffer('Queue', '[]');
                 $this->SetBuffer('CurrentJob', '');
+                $this->SetBuffer('CoolingPendingRequests', '{}');
                 $this->ClearPendingMode();
                 $this->SetTimerInterval('Worker', 0);
                 $this->SyncAllHeatingDisplayFromLCN();
@@ -563,6 +565,7 @@ class LCNClimateControl extends IPSModuleStrict
 
         $rooms = $this->GetRuntimeRooms();
         $this->ClearPendingMode();
+        $this->SetBuffer('CoolingPendingRequests', '{}');
         $this->SetQueue([]);
 
         if ($Mode === self::MODE_COOLING) {
@@ -987,6 +990,7 @@ class LCNClimateControl extends IPSModuleStrict
 
         $this->SetBuffer('CurrentJob', '');
         $this->ClearRoomError($targetID);
+        $this->ApplyPendingCoolingRequest($targetID);
         $this->RefreshRuntimeStatus();
         $this->PushVisualizationRowByTarget($targetID);
         $this->PushVisualizationMeta();
@@ -997,6 +1001,14 @@ class LCNClimateControl extends IPSModuleStrict
         $targetID = (int) ($Job['TargetVariable'] ?? 0);
 
         if (($Job['Type'] ?? '') === 'direct_cool' && $this->UsesDirectCooling()) {
+            $pending = $this->GetPendingCoolingRequests();
+            $key = (string) $targetID;
+            if (array_key_exists($key, $pending)) {
+                // Falls inzwischen AUS gewuenscht: im Rueckfall NIE
+                // einen inzwischen ueberholten Einschaltauftrag fortsetzen.
+                $Job['DesiredOpen'] = (bool) $pending[$key];
+                $this->ConsumePendingCoolingRequest($targetID);
+            }
             $this->BeginDirectCoolingRecovery($Job, $Reason);
             return;
         }
@@ -1027,6 +1039,12 @@ class LCNClimateControl extends IPSModuleStrict
         // Ein einzelner Raumfehler darf niemals die komplette Heiz-/Kühlung
         // aller übrigen Räume stoppen. Nur dieser Job wird beendet.
         $this->SetBuffer('CurrentJob', '');
+        if (in_array((string) ($Job['Type'] ?? ''), ['direct_recover','direct_release'], true)) {
+            // Kein weiterer Auftrag bei unklarer Reglerfreigabe.
+            $this->ConsumePendingCoolingRequest($targetID);
+        } elseif ($this->DirectCoolingLockState($targetID) === '') {
+            $this->ApplyPendingCoolingRequest($targetID);
+        }
         $this->RefreshRuntimeStatus();
 
         if ($this->GetQueue() === [] && $this->GetPendingMode() === null) {
