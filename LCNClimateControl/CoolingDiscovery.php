@@ -143,6 +143,142 @@ trait LCNClimateCoolingDiscovery
     }
 
     /**
+     * Explain the first missing link in native discovery. 100% read-only,
+     * uses only configuration and variables already installed in Symcon.
+     * Never create foreign objects or alter a controller/relay state.
+     */
+    private function AutoCoolingDiscoveryReason(array $room): string
+    {
+        try {
+            $sender = (int) ($room['SendModule'] ?? 0);
+            $target = (int) ($room['TargetVariable'] ?? 0);
+            $cfg = $this->AutoCoolingInstanceConfig($sender);
+            if ($cfg === null) {
+                return 'LCN-Sendemodul #' . $sender . ' existiert nicht oder hat keine lesbare Konfiguration';
+            }
+            $hardware = (int) ($cfg['Target'] ?? -1);
+            $segment = (int) ($cfg['Segment'] ?? -1);
+            if (!isset(self::AUTO_COOLING_PHYSICAL_RELAYS[$hardware])) {
+                return 'Symcon-Sendemodul #' . $sender . ' hat Target=' . $hardware
+                    . ', Segment=' . $segment . '; keine eindeutige LP3-Raumzuordnung';
+            }
+            [$relayNo, $channel] = self::AUTO_COOLING_PHYSICAL_RELAYS[$hardware];
+            $gateway = (int) (IPS_GetInstance($sender)['ConnectionID'] ?? 0);
+            if ($gateway <= 0) {
+                return 'LCN-Sendemodul #' . $sender . ' hat keine gueltige Gateway-Verbindung';
+            }
+            $sameTarget = [];
+            $matches = [];
+            foreach (IPS_GetInstanceListByModuleID(self::AUTO_LCN_MODULE_GUID) as $id) {
+                $id = (int) $id;
+                $c = $this->AutoCoolingInstanceConfig($id);
+                if ($c === null || (int) ($c['Target'] ?? -1) !== $relayNo) {
+                    continue;
+                }
+                $ic = IPS_GetInstance($id);
+                $is = (int) ($c['Segment'] ?? -1);
+                $ig = (int) ($ic['ConnectionID'] ?? 0);
+                $sameTarget[] = '#' . $id . '(Segment=' . $is . ',Gateway=#' . $ig . ')';
+                if ($is === $segment && $ig === $gateway
+                    && $this->IsOperationalLCNModule($id)) {
+                    $matches[] = $id;
+                }
+            }
+            if (count($matches) !== 1) {
+                return 'Relaismodul M' . $relayNo . ' im Segment ' . $segment
+                    . ' / Gateway #' . $gateway . ': ' . count($matches)
+                    . ' passende Symcon-Instanzen; Fundstellen '
+                    . ($sameTarget === [] ? 'KEINE' : implode(', ', $sameTarget));
+            }
+            $relayModule = $matches[0];
+            $units = [];
+            $matchesUnit = [];
+            foreach (IPS_GetInstanceListByModuleID(self::AUTO_LCN_UNIT_GUID) as $id) {
+                $id = (int) $id;
+                $c = $this->AutoCoolingInstanceConfig($id);
+                if ($c === null) {
+                    continue;
+                }
+                $instance = IPS_GetInstance($id);
+                if ((int) ($instance['ConnectionID'] ?? 0) !== $relayModule) {
+                    continue;
+                }
+                $unitType = (int) ($c['Unit'] ?? -1);
+                $unitChannel = (int) ($c['Channel'] ?? -1);
+                $units[] = '#' . $id . '(Unit=' . $unitType . ',Channel='
+                    . $unitChannel . ',Status=' . (int) ($instance['InstanceStatus'] ?? 0) . ')';
+                if ($unitType === 2 && $unitChannel === $channel
+                    && (int) ($instance['InstanceStatus'] ?? 0) === 102) {
+                    $matchesUnit[] = $id;
+                }
+            }
+            if (count($matchesUnit) !== 1) {
+                return 'M' . $relayNo . '/R' . $channel . ': ' . count($matchesUnit)
+                    . ' eindeutig passende LCN-Unit-Instanzen (erwartet Unit=2); '
+                    . 'alle vorhandenen Units an Relaismodul #' . $relayModule . ': '
+                    . ($units === [] ? 'KEINE' : implode(', ', $units));
+            }
+            $relayUnit = $matchesUnit[0];
+            $status = $this->AutoCoolingFindBoolean($relayUnit, 'Status');
+            if ($status <= 0) {
+                return 'LCN-Relaisinstanz #' . $relayUnit
+                    . ' fuer M' . $relayNo . '/R' . $channel
+                    . ' vorhanden, aber Boolean-Rueckmeldung Status fehlt/ist uneindeutig: '
+                    . $this->AutoCoolingDescribeBoolChildren($relayUnit);
+            }
+            if ($target <= 0 || !IPS_VariableExists($target)) {
+                return 'S1Target #' . $target . ' ist nicht mehr vorhanden';
+            }
+            $parent = (int) IPS_GetParent($target);
+            if (!IPS_InstanceExists($parent)) {
+                return 'S1Target #' . $target . ' liegt nicht unter einer LCN-Value-Instanz (Parent=#'
+                    . $parent . ')';
+            }
+            $valueInfo = IPS_GetInstance($parent);
+            $guid = (string) ($valueInfo['ModuleInfo']['ModuleID'] ?? '');
+            $connection = (int) ($valueInfo['ConnectionID'] ?? 0);
+            if (strcasecmp($guid, self::LCN_VALUE_MODULE_ID) !== 0 || $connection !== $sender) {
+                return 'S1Target #' . $target . ' hat LCN-Value-Instanz #' . $parent
+                    . ', Typ=' . $guid . ', Verbindung=#' . $connection
+                    . ', erwartet LCN Value an Sender #' . $sender;
+            }
+            $unlock = $this->AutoCoolingFindBoolean($parent, 'Entriegelt');
+            if ($unlock <= 0) {
+                return 'LCN-Value-Instanz #' . $parent
+                    . ' hat keine eindeutige Boolean-Rueckmeldung Entriegelt: '
+                    . $this->AutoCoolingDescribeBoolChildren($parent);
+            }
+            return 'Alle Symcon-Instanzen gefunden: M' . $relayNo . '/R' . $channel
+                . ', Relais-Unit #' . $relayUnit . ', Relais-Status #' . $status
+                . ', Regler-Entriegelt #' . $unlock . '; Betriebsbereitschaft getrennt pruefen';
+        } catch (Throwable $e) {
+            return 'Lesefehler in der Instanzkonfiguration: ' . $e->getMessage();
+        }
+    }
+
+    private function AutoCoolingDescribeBoolChildren(int $parent): string
+    {
+        $parts = [];
+        try {
+            foreach (IPS_GetChildrenIDs($parent) as $id) {
+                $id = (int) $id;
+                if (!IPS_VariableExists($id)) {
+                    continue;
+                }
+                if ((int) (IPS_GetVariable($id)['VariableType'] ?? -1) !== VARIABLETYPE_BOOLEAN) {
+                    continue;
+                }
+                $o = IPS_GetObject($id);
+                $parts[] = '#' . $id . '[Ident=' . (string) ($o['ObjectIdent'] ?? '')
+                    . ',Name=' . IPS_GetName($id) . ']';
+            }
+        } catch (Throwable) {
+            return 'Statusobjekte nicht lesbar';
+        }
+        return $parts === [] ? 'keine Boolean-Variablen' : implode(', ', $parts);
+    }
+
+    /**
      * Read-only diagnostic; reports actual IPS IDs and missing objects.
      * Does not create variables, switch relays or send LCN commands.
      */
@@ -162,7 +298,7 @@ trait LCNClimateCoolingDiscovery
                 if ($m === null) {
                     $lines[] = $name . ' / LCN-Instanz #' . $source
                         . ', S1Target #' . $target
-                        . ': alte A7/A8-Steuerung (native Relais-Rueckmeldung/Polaritaet nicht komplett).';
+                        . ': alte A7/A8-Steuerung | Grund: ' . $this->AutoCoolingDiscoveryReason($room);
                     continue;
                 }
                 $lines[] = $name . ' / LCN-Instanz #' . $source
