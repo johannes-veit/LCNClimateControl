@@ -12,6 +12,7 @@ $GLOBALS['probeCommands'] = [];
 $GLOBALS['probeConfig'] = [];
 $GLOBALS['probeIgnoreLockFeedback'] = false;
 $GLOBALS['probeIgnoreReleaseFeedback'] = false;
+$GLOBALS['probeRejectLockCommand'] = false;
 
 function IPS_SemaphoreEnter(string $name, int $timeout): bool { return true; }
 function IPS_SemaphoreLeave(string $name): void {}
@@ -28,6 +29,9 @@ function IPS_GetInstance(int $id): array { return ['ConnectionID' => $id === 190
 function LCN_LockTargetValue(int $sender, int $idx): bool
 {
     $GLOBALS['probeCommands'][] = ['lock',$sender,$idx];
+    if ($GLOBALS['probeRejectLockCommand']) {
+        return false;
+    }
     if (!$GLOBALS['probeIgnoreLockFeedback']) {
         $GLOBALS['probeValues'][46746] = true;
         $GLOBALS['probeVars'][46746]['VariableUpdated'] = time();
@@ -123,6 +127,7 @@ function initProbe(): MockM11Climate
     $GLOBALS['probeConfig'] = [37617=>['Target'=>11],36930=>['Target'=>92]];
     $GLOBALS['probeIgnoreLockFeedback'] = false;
     $GLOBALS['probeIgnoreReleaseFeedback'] = false;
+    $GLOBALS['probeRejectLockCommand'] = false;
     return new MockM11Climate();
 }
 
@@ -191,4 +196,26 @@ $m->mode=1;$m->M11ProbeWorker();
 t(count(array_filter($GLOBALS['probeCommands'], fn($cmd)=>$cmd[0]==='lock'))===0,
   'unexpected mode switch must never send a lock');
 echo "PASS duplicate suppression and changed-mode guard\n";
-echo "ALL SEVEN M11 PROBE TEST CASES PASSED\n";
+// Explicit one-time retest logs the bool return from the native API.
+$m=initProbe();
+$GLOBALS['probeRejectLockCommand']=true;
+$m->StartM11RegulatorTest();
+for($i=0;$i<4;$i++){$m->M11ProbeWorker();}
+t(($m->attrs['M11ProbeSession']['phase']??'')==='failed_safe',
+  'rejected command leads to safe failed status');
+t(str_contains($m->M11ProbeStatus(), 'Sperr-API-Diagnose: LCN_LockTargetValue(#37617, 2) hat FALSE'),
+  'native command rejection is documented for postmortem');
+t(str_starts_with($m->StartM11RegulatorTest(), 'ABBRUCH'),
+  'normal start does not retrigger failed test');
+$GLOBALS['probeRejectLockCommand']=false;
+t(str_contains($m->RetestM11Regulator(), 'gestartet'),
+  'separate deliberate retest can begin once');
+for($i=0;$i<5;$i++){$m->M11ProbeWorker();}
+t(($m->attrs['M11ProbeSession']['phase']??'')==='passed',
+  'retest succeeds when hardware permits lock');
+t(($m->attrs['M11ProbeSession']['retestCount']??0)===1,
+  'exactly one retry recorded');
+t(str_starts_with($m->RetestM11Regulator(), 'ABBRUCH'),
+  'third test attempt is prohibited');
+echo "PASS one explicit retry, command-error diagnostics, no unlimited attempts\n";
+echo "ALL EIGHT M11 PROBE TEST CASES PASSED\n";
