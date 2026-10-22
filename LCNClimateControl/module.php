@@ -6,6 +6,7 @@ require_once __DIR__ . '/CoolingDiscovery.php';
 require_once __DIR__ . '/ChatGPTDiagnostic.php';
 require_once __DIR__ . '/LockRecovery.php';
 require_once __DIR__ . '/M11LockTest.php';
+require_once __DIR__ . '/NativeInterfaceAudit.php';
 
 /**
  * LCN Heizung / Kühlung für IP-Symcon 9
@@ -28,6 +29,7 @@ class LCNClimateControl extends IPSModuleStrict
     use LCNClimateChatGPTDiagnostic;
     use LCNClimateLockRecovery;
     use LCNClimateM11LockTest;
+    use LCNClimateNativeInterfaceAudit;
 
     private const STATUS_ACTIVE = 102;
     private const STATUS_INACTIVE = 104;
