@@ -332,6 +332,21 @@
     },
     {
       "type": "Button",
+      "caption": "M11 EG Büro: S1-Sperrtest starten (kurz sperren, automatisch wieder freigeben)",
+      "onClick": "echo LCNC_StartM11RegulatorTest($id);"
+    },
+    {
+      "type": "Button",
+      "caption": "M11 EG Büro: Sperrtest-Status anzeigen (nur lesen)",
+      "onClick": "echo LCNC_M11ProbeStatus($id);"
+    },
+    {
+      "type": "Button",
+      "caption": "M11 EG Büro: NOT-FREIGABE erneut auslösen (nur S1 entsperren)",
+      "onClick": "echo LCNC_M11ProbeEmergencyRelease($id);"
+    },
+    {
+      "type": "Button",
       "caption": "Fehlende 11 LCN-Relais-Units anlegen (nur im Heizbetrieb, ohne Relais zu schalten)",
       "onClick": "echo LCNC_PrepareCoolingRelayUnits($id);"
     }
