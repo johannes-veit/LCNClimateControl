@@ -39,8 +39,10 @@ function LCN_ReleaseTargetValue(int $sender, int $idx): bool
     $GLOBALS['probeCommands'][] = ['release',$sender,$idx];
     if (!$GLOBALS['probeIgnoreReleaseFeedback']) {
         $GLOBALS['probeValues'][46746] = false;
-        $GLOBALS['probeVars'][46746]['VariableUpdated'] = time();
-        $GLOBALS['probeVars'][34107]['VariableUpdated'] = time();
+        // Model the later BUS REPLY in the following timestamp-second,
+        // rather than reusing the pre-command status in the same second.
+        $GLOBALS['probeVars'][46746]['VariableUpdated'] = time() + 1;
+        $GLOBALS['probeVars'][34107]['VariableUpdated'] = time() + 1;
     }
     return true;
 }
