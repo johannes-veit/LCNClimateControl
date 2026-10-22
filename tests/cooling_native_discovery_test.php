@@ -19,7 +19,7 @@ $GLOBALS['configs']=[
 ];
 $GLOBALS['variables']=[
 10000=>['VariableType'=>2,'Parent'=>800,'Name'=>'S1Target'],
-10001=>['VariableType'=>0,'Parent'=>800,'Name'=>'Entriegelt'],
+10001=>['VariableType'=>0,'Parent'=>800,'Name'=>'Zieltemperatur S1','Ident'=>'S1TargetLock'],
 7001=>['VariableType'=>0,'Parent'=>700,'Name'=>'Status']
 ];
 function IPS_InstanceExists(int $id): bool{return isset($GLOBALS['instances'][$id]);}
@@ -88,7 +88,8 @@ class Probe{
 function check(bool $ok,string $message):void{if(!$ok)throw new RuntimeException($message);}
 $p=new Probe();$m=$p->go();
 check(is_array($m)&&$m['RelayModule']===92&&$m['RelayUnit']===700&&$m['RelayChannel']===1,'correct native link');
-check($m['UnlockedVariable']===10001&&$m['RelayStatusVariable']===7001,'correct feedback');
+check($m['UnlockedVariable']===10001&&$m['RelayStatusVariable']===7001
+    && $m['LockFeedbackIsLocked']===true,'correct native lock TRUE=locked feedback');
 check($m['RegulatorIndex']===2&&$m['OpenRelayOn']===true&&$m['PolarityConfirmed'],'verified S1 regulator & polarity');
 $p->properties['AutoCoolingPolarityConfirmed']=false;
 check($p->go()!==null,'confirmed valve wiring must not require old manual checkbox');
@@ -112,9 +113,8 @@ $GLOBALS['variables'][7001]['Ident']='Status';
 check($p->go()!==null,'technical ident survives renamed relay label');
 $GLOBALS['variables'][7001]['Name']='Status';
 $GLOBALS['variables'][10001]['Name']='Umbenannt';
-$GLOBALS['variables'][10001]['Ident']='Entriegelt';
-check($p->go()!==null,'technical ident survives renamed unlocked label');
-$GLOBALS['variables'][10001]['Name']='Entriegelt';
+check($p->go()!==null,'S1TargetLock ObjectIdent survives renaming');
+$GLOBALS['variables'][10001]['Name']='Zieltemperatur S1';
 $GLOBALS['configs'][11]['Target']=99;
 check($p->go()===null,'unknown source hardware must not be assigned');
 $GLOBALS['configs'][11]['Target']=11;
@@ -137,8 +137,10 @@ check(str_contains($p->reason(),'Boolean-Rueckmeldung Status'), 'missing relay s
 $GLOBALS['variables'][7001]['Name']='Status';
 $GLOBALS['variables'][10001]['Name']='Andere';
 unset($GLOBALS['variables'][10001]['Ident']);
-check(str_contains($p->reason(),'Entriegelt'), 'missing unlock feedback diagnostic');
-$GLOBALS['variables'][10001]['Name']='Entriegelt';
+check(str_contains($p->reason(),'S1TargetLock'), 'missing native lock feedback diagnostic');
+$GLOBALS['variables'][10001]['Name']='Zieltemperatur S1';
+$GLOBALS['variables'][10001]['Ident']='S1TargetLock';
+check(str_contains($p->reason(),'TRUE=gesperrt'),'native feedback polarity in diagnostic');
 check($p->go()!==null, 'read-only diagnostic leaves good discovery working');
 // One-click setup: no switch commands, strictly idempotent and gated.
 unset($GLOBALS['instances'][700],$GLOBALS['configs'][700]);
@@ -163,4 +165,4 @@ $p->setup();
 check(count($GLOBALS['created'])===1,
     'second setup must not create duplicates');
 check($GLOBALS['commands']===[], 'setup may not emit a bus switch command');
-echo "PASS: 24 native discovery and safe, idempotent unit-provisioning tests\n";
+echo "PASS: native S1TargetLock recognition, 11-relay discovery and idempotent provisioning tests\n";
