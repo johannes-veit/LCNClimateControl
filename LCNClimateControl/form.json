@@ -327,6 +327,11 @@
     },
     {
       "type": "Button",
+      "caption": "LCN-Regler: R1/S1-Schnittstellen und Verbindungen prüfen (nur lesen)",
+      "onClick": "echo LCNC_AuditLCNNativeRegulatorInterfaces($id);"
+    },
+    {
+      "type": "Button",
       "caption": "Interne Reglersperr-Vormerkungen prüfen und bereinigen (nur Software, keine LCN-Befehle)",
       "onClick": "echo LCNC_ReconcileUncertainCoolingLocks($id);"
     },
