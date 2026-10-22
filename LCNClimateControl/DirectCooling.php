@@ -189,6 +189,28 @@ trait LCNDirectCooling
         ]);
     }
 
+    private function DirectCoolingEnqueueEmergencyClose(array $room, bool $previous): void
+    {
+        $target = (int) $room['TargetVariable'];
+        $mapping = $this->DirectCoolingMapping($target)
+            ?? ($this->ReadJsonAttribute('DirectCoolingLockMappings')[(string) $target] ?? null);
+        if (!is_array($mapping)) {
+            $this->SetRoomError($target, $room['Name']
+                . ': Relais nicht eindeutig erreichbar; AUS konnte nicht ausgefuehrt werden.');
+            $this->SetValueIfChanged($this->CoolIdent($target), $previous);
+            return;
+        }
+        $this->AppendJob([
+            'Type' => 'direct_emergency_close',
+            'Name' => $room['Name'],
+            'SendModule' => $room['SendModule'],
+            'TargetVariable' => $target,
+            'PreviousCoolingState' => $previous,
+            'Mapping' => $mapping,
+            'Phase' => 'close'
+        ]);
+    }
+
     private function DirectCoolingEnqueueRelease(array $room, ?float $restore): void
     {
         $this->AppendJob([
@@ -669,8 +691,15 @@ trait LCNDirectCooling
         $locked = $this->DirectCoolingLockState($target);
         if ($locked === 'uncertain') {
             $this->DirectCoolingFallbackSet($target, 'Reglerzustand ungewiss', 'blocked');
+            if (!$state) {
+                // AUS ist eine ausdruecklich erlaubte, physisch sicherere
+                // Aktion: Strom vom NC-Ventil nehmen, aber KEINEN
+                // ungewissen Regler entsperren und keinen Heizwert fahren.
+                $this->DirectCoolingEnqueueEmergencyClose($room, $previous);
+                return;
+            }
             $this->SetValueIfChanged($this->CoolIdent($target), $previous);
-            $this->SetRoomError($target, $room['Name'] . ': Reglerzustand ungewiss; keine neue Ventilfahrt.');
+            $this->SetRoomError($target, $room['Name'] . ': Reglerzustand ungewiss; EIN bleibt gesperrt.');
             return;
         }
         if ($locked !== '') {
@@ -706,6 +735,10 @@ trait LCNDirectCooling
         if (str_contains($reason, 'bereits gesperrt')
             || str_contains($reason, 'gehoert nicht zum S1Target')) {
             $this->DirectCoolingFallbackSet($target, $reason, 'blocked');
+            if (!$state && str_contains($reason, 'bereits gesperrt')) {
+                $this->DirectCoolingEnqueueEmergencyClose($room, $previous);
+                return;
+            }
             $this->SetValueIfChanged($this->CoolIdent($target), $previous);
             $this->SetRoomError($target, $room['Name'] . ': ' . $reason);
             return;
