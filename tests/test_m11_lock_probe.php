@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/../LCNClimateControl/M11LockTest.php';
+require_once __DIR__ . '/../LCNClimateControl/TrafficPacing.php';
 
 const KR_READY = 10103;
 const VARIABLETYPE_BOOLEAN = 0;
@@ -9,6 +10,7 @@ const VARIABLETYPE_FLOAT = 2;
 $GLOBALS['probeVars'] = [];
 $GLOBALS['probeValues'] = [];
 $GLOBALS['probeCommands'] = [];
+$GLOBALS['probeSleeps'] = [];
 $GLOBALS['probeConfig'] = [];
 $GLOBALS['probeIgnoreLockFeedback'] = false;
 $GLOBALS['probeIgnoreReleaseFeedback'] = false;
@@ -17,6 +19,7 @@ $GLOBALS['probeRejectReleaseCommand'] = false;
 
 function IPS_SemaphoreEnter(string $name, int $timeout): bool { return true; }
 function IPS_SemaphoreLeave(string $name): void {}
+function IPS_Sleep(int $ms): bool { $GLOBALS['probeSleeps'][] = $ms; return true; }
 function IPS_GetKernelRunlevel(): int { return KR_READY; }
 function IPS_VariableExists(int $id): bool { return array_key_exists($id, $GLOBALS['probeVars']); }
 function IPS_GetVariable(int $id): array { return $GLOBALS['probeVars'][$id]; }
@@ -56,6 +59,7 @@ function LCN_RequestRead(int $id): bool { return true; }
 final class MockM11Climate
 {
     use LCNClimateM11LockTest;
+    use LCNClimateTrafficPacing;
     public const MODE_HEATING = 0;
     public const MODE_COOLING = 1;
     private const GLOBAL_LCN_SEND_SEMAPHORE = 'LCN_BUS_SEND_GLOBAL';
@@ -125,6 +129,7 @@ function initProbe(): MockM11Climate
     ];
     $GLOBALS['probeValues'] = [34107=>21.0, 46746=>false, 30465=>false];
     $GLOBALS['probeCommands'] = [];
+    $GLOBALS['probeSleeps'] = [];
     $GLOBALS['probeConfig'] = [37617=>['Target'=>11],36930=>['Target'=>92]];
     $GLOBALS['probeIgnoreLockFeedback'] = false;
     $GLOBALS['probeIgnoreReleaseFeedback'] = false;
@@ -140,6 +145,8 @@ for($i=0;$i<5;$i++){$m->M11ProbeWorker();}
 t(($m->attrs['M11ProbeSession']['phase'] ?? '')==='passed','successful full round-trip');
 t(!isset($m->attrs['DirectCoolingLocks']['34107']),'confirmed release clears uncertainty');
 t($GLOBALS['probeCommands']===[['lock',37617,2],['release',37617,2]],'only M11 S1 commands');
+t($GLOBALS['probeSleeps']===[750,750],
+  '750ms cooldown applied to BOTH LCN sends under global semaphore');
 t(($m->timers['M11ProbeTimer']??-1)===0,'timer stops after pass');
 echo "PASS M11 lock + release + S1 target confirmed\n";
 
