@@ -282,9 +282,10 @@ trait LCNClimateM11LockTest
             return;
         }
         $p['lastRead'] = time();
+        $p['lastReadAccepted'] = false;
         if (IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 1500)) {
             try {
-                LCN_RequestRead($valueInstance);
+                $p['lastReadAccepted'] = (bool) LCN_RequestRead($valueInstance);
             } catch (Throwable $e) {
                 $this->SendDebug('M11-Leseanfrage', $e->getMessage(), 0);
             } finally {
@@ -336,12 +337,19 @@ trait LCNClimateM11LockTest
                     $ok ? 'Sperrbefehl gesendet; Rueckmeldung wird erwartet.'
                         : 'Sperrbefehl fehlgeschlagen; Freigabe wird sicherheitshalber versucht.');
             } elseif ($phase === 'lock_wait') {
+                $readConfirmed = (string) ($p['commandPath'] ?? '') !== 'RequestAction'
+                    || ((bool) ($p['lastReadAccepted'] ?? false)
+                        && (int) ($p['lastRead'] ?? 0) > (int) ($p['lockSent'] ?? 0)
+                        && IPS_VariableExists($lockId)
+                        && (int) (IPS_GetVariable($lockId)['VariableUpdated'] ?? 0)
+                            >= (int) ($p['lastRead'] ?? PHP_INT_MAX));
                 $p['lastLockSample'] = IPS_VariableExists($lockId)
                     ? ((bool) GetValue($lockId) ? 'GESPERRT' : 'FREI') : 'FEHLT';
                 $p['lastLockSampleAt'] = time();
                 $p['lastLockFeedbackAt'] = IPS_VariableExists($lockId)
                     ? (int) (IPS_GetVariable($lockId)['VariableUpdated'] ?? 0) : 0;
-                if (IPS_VariableExists($lockId)
+                if ($readConfirmed
+                    && IPS_VariableExists($lockId)
                     && (bool) GetValue($lockId)
                     && (int) (IPS_GetVariable($lockId)['VariableUpdated'] ?? 0)
                         >= (int) ($p['lockSent'] ?? PHP_INT_MAX)) {
@@ -355,6 +363,10 @@ trait LCNClimateM11LockTest
             } elseif ($phase === 'release') {
                 $p['tries'] = (int) ($p['tries'] ?? 0) + 1;
                 $p['releaseSent'] = time();
+                // The action's local Boolean update is NOT a proof of real
+                // bus feedback. Require a separate post-release read.
+                $p['lastRead'] = 0;
+                $p['lastReadAccepted'] = false;
                 $this->M11ProbeSetPhase($p, 'release_wait', 'Freigabebefehl an M11 gesendet, Rueckmeldung ausstehend.');
                 $this->M11ProbeWrite($p);
                 $detail = null;
@@ -365,7 +377,13 @@ trait LCNClimateM11LockTest
                     $p['message'] = 'Freigabebefehl nicht angenommen; erneuter Versuch folgt.';
                 }
             } elseif ($phase === 'release_wait') {
-                if (IPS_VariableExists($lockId)
+                $readConfirmed = (string) ($p['commandPath'] ?? '') !== 'RequestAction'
+                    || ((bool) ($p['lastReadAccepted'] ?? false)
+                        && (int) ($p['lastRead'] ?? 0) > (int) ($p['releaseSent'] ?? 0)
+                        && IPS_VariableExists($lockId)
+                        && (int) (IPS_GetVariable($lockId)['VariableUpdated'] ?? 0)
+                            >= (int) ($p['lastRead'] ?? PHP_INT_MAX));
+                if ($readConfirmed && IPS_VariableExists($lockId)
                     && !(bool) GetValue($lockId)
                     && (int) (IPS_GetVariable($lockId)['VariableUpdated'] ?? 0)
                         > (int) ($p['releaseSent'] ?? PHP_INT_MAX)) {
@@ -383,7 +401,10 @@ trait LCNClimateM11LockTest
                 }
             } elseif ($phase === 'target_wait') {
                 $actual = $this->ReadTarget($target);
-                if (IPS_VariableExists($lockId)
+                $readConfirmed = (string) ($p['commandPath'] ?? '') !== 'RequestAction'
+                    || ((bool) ($p['lastReadAccepted'] ?? false)
+                        && (int) ($p['lastRead'] ?? 0) > (int) ($p['releaseSent'] ?? 0));
+                if ($readConfirmed && IPS_VariableExists($lockId)
                     && !(bool) GetValue($lockId)
                     && (int) (IPS_GetVariable($lockId)['VariableUpdated'] ?? 0)
                         > (int) ($p['releaseSent'] ?? PHP_INT_MAX)
