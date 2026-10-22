@@ -341,11 +341,15 @@ trait LCNDirectCooling
         $phase = (string) ($job['Phase'] ?? ($type === 'direct_cool' ? 'lock' : 'close'));
         $unlockID = (int) ($m['UnlockedVariable'] ?? 0);
         $statusID = (int) ($m['RelayStatusVariable'] ?? 0);
-        if (!IPS_VariableExists($unlockID) || !IPS_VariableExists($statusID)) {
+        if (!IPS_VariableExists($statusID)
+            || ($type !== 'direct_emergency_close' && !IPS_VariableExists($unlockID))) {
             $this->FailCurrentJob($job, 'Statusvariable entfernt; keine unbestaetigten Ventilbefehle.');
             return;
         }
-        $unlocked = $this->DirectCoolingRegulatorUnlocked($m);
+        // Not-AUS liest bewusst nur die Relaisrueckmeldung und greift die
+        // unklare Reglersperre weder an noch interpretiert sie um.
+        $unlocked = $type === 'direct_emergency_close' ? false
+            : $this->DirectCoolingRegulatorUnlocked($m);
         $electric = (bool) GetValue($statusID);
         if ($type === 'direct_emergency_close') {
             if ($phase === 'close') {
