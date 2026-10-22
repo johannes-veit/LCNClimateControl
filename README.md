@@ -685,3 +685,52 @@ liegen unter tests/test_m11_lock_probe.php. Die GitHub-Action
 lintet PHP und ruft beide Mock-Testreihen auf. Ein realer
 LCN-Hardwaretest wurde noch nicht durchgefuehrt.
 
+
+
+## v0.3.17 Build 33 – Ursachenanalyse des ersten M11-Sperrtests
+
+Live-Bericht (22.10.2026, 21:50): M11/EG Buero meldete
+"failed_safe". S1TargetLock #46746 war nach dem Test FREIGEGEBEN;
+S1Target #34107 war 21,0 Grad. Der Sperrzustand selbst wurde nicht
+bestaetigt. Die normale Heizfreigabe ist gemeldet, der reale
+Sperrtest ist NICHT bestanden.
+
+Die alte v0.3.16-Testlogik hielt nicht dauerhaft fest, ob
+LCN_LockTargetValue(M11, 2) den Befehl angenommen hatte. Ein
+"failed_safe"-Ergebnis kann daher ohne weitere Daten nicht zwischen
+Sendeproblem, fehlender oder verspaeteter Bus-Rueckmeldung und
+wirklich ausgebliebener Sperre unterscheiden.
+
+Neue passive Diagnose im bestehenden Button
+"M11 EG Büro: Sperrtest-Status anzeigen (nur lesen)":
+- Letzte Testphase, Bestaetigung der wirklichen Sperre
+- Zahl der Freigabeversuche
+- Start-, Sperr-, Rueckmelde- und Freigabezeiten
+- Fuer kuenftige Testlaeufe: Ergebnissignale beider nativen API-Befehle
+  sowie letzte beobachtete Lock-Rueckmeldung (TRUE/FALSE)
+
+Fuer den ALTEN Testlauf zeigt der Bericht beim Sperrbefehl
+"NICHT PROTOKOLLIERT (alter Testlauf v0.3.16)" statt einen
+unbelegten Erfolg vorzugeben. Die Session wird beim Update nicht
+geloescht.
+
+Sicherheit: Ein bereits mit "failed_safe" oder "passed" beendeter
+M11-Test wird beim Startbutton nicht automatisch wiederholt. Keine
+Aenderung an Relais, Heizung, GT8, S1Target oder LCN-Firmware.
+Die Berichtserweiterung sendet keinerlei LCN-Befehle.
+Erneute physische Sperrversuche nur nach gesonderter Ursachenpruefung
+und neuer Freigabe.
+
+Die offizielle Symcon-Zuordnung 0=R1, 1=R2, 2=S1, 3=S2 bestaetigt
+den bislang benutzten Index 2 fuer die native S1-Rueckmeldung,
+beweist aber allein nicht, dass der Befehl das richtige Reglerziel
+in der vorliegenden LCN-PRO-Konfiguration erreicht hat.
+LCN-PRO-Projekteinstellung "Sperrung zulassen" fuer M11 ist vom
+Eigentuemer online aktiviert worden; diese Option ist passiv in
+Symcon weiterhin nicht auslesbar.
+
+Testcode erweitert um die Erkennung fehlender Sperrbestaetigung
+und die Unterdrueckung eines unabsichtlichen zweiten Sperrversuchs.
+GitHub Action zur PHP-Pruefung im Repository vorhanden; ein
+vollstaendiger Hardwaretest und ein bestaetigter CI-Durchlauf
+werden nicht behauptet.
