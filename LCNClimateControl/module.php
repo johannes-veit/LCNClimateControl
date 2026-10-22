@@ -1351,7 +1351,7 @@ class LCNClimateControl extends IPSModuleStrict
 
         // Zusätzlich zur Instanz-Queue wird der sehr kurze eigentliche
         // LCN_SendCommand-Aufruf global zwischen mehreren Klima-Instanzen
-        // serialisiert. Es gibt bewusst kein Sleep in dieser Sperre.
+        // serialisiert. Nach JEDEM Busaufruf bleibt der Bus-Slot 750 ms belegt.
         if (!IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 2000)) {
             $this->SendDebug('TS', 'Globale LCN-Sendesperre war länger als 2 s belegt.', 0);
             return false;
