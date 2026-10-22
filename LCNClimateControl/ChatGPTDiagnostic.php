@@ -8,7 +8,7 @@ declare(strict_types=1);
  */
 trait LCNClimateChatGPTDiagnostic
 {
-    private const CHATGPT_DIAGNOSTIC_VERSION = '0.3.11 Build 26';
+    private const CHATGPT_DIAGNOSTIC_VERSION = '0.3.12 Build 27';
 
     private function ChatGPTDiagnosticBoolState(int $id, bool $invert = false): string
     {
@@ -73,6 +73,7 @@ trait LCNClimateChatGPTDiagnostic
         $rooms = $this->GetRuntimeRooms();
         $locks = $this->ReadJsonAttribute('DirectCoolingLocks');
         $fallbacks = $this->DirectCoolingFallbacks();
+        $pendingCooling = $this->GetPendingCoolingRequests();
         $currentJob = $this->GetCurrentJob();
         $queue = $this->GetQueue();
         $isBusy = $this->IsBusy();
@@ -150,7 +151,14 @@ trait LCNClimateChatGPTDiagnostic
                     . ', IST ' . $this->ChatGPTDiagnosticTemperature(
                         $this->ReadFloatVariable((int) ($room['TemperatureVariable'] ?? 0)))
                     . ', Soll ' . $this->ChatGPTDiagnosticTemperature($this->ReadTarget($target))
-                    . ', Kuehlwunsch ' . ($this->GetStoredCoolingState($target) ? 'AN' : 'AUS');
+                    . ', Kuehlzustand bestaetigt '
+                    . ($this->GetStoredCoolingState($target) ? 'AN' : 'AUS');
+                if (array_key_exists((string) $target, $pendingCooling)) {
+                    $lines[] = '  NEUER SCHALTWUNSCH VORGEMERKT: '
+                        . ((bool) $pendingCooling[(string) $target]
+                            ? 'KUEHLEN' : 'NICHT KUEHLEN')
+                        . ' (wartet auf Abschluss des vorherigen Raumauftrags).';
+                }
 
                 if ($mapping !== null) {
                     $lines[] = '  Relais-Modul #' . (int) ($mapping['RelayModule'] ?? 0)

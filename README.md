@@ -515,3 +515,44 @@ Ein Regressionstest verbietet jetzt die globale Schreibfunktion bewusst.
 Nach Modulupdate sollte `Senden an ChatGPT` innerhalb von ApplyChanges
 sofort einen Bericht erhalten und dann automatisch minuetlich aktualisiert
 werden. Heizungs- und Kuehlungssteuerung sind unveraendert.
+
+
+## v0.3.12 Build 27 – Alle elf Kuehlraeume einzeln schaltbar
+
+Konkrete Fehlermeldung in der Visu: OG Ankleide/HWR und OG Flur
+sprangen nach `Nicht kuehlen` wieder auf `Kuehlen`.
+Drei Ursachen wurden behoben:
+
+1. **Heizbetrieb:** Die boolesche Kuehl-Vorwahl darf jetzt jederzeit
+   geaendert werden, ohne den Heizbetrieb zu beeinflussen und ohne
+   Relais, LCN-Regler oder TS-Tasten anzufassen. Sie wird als Wunsch fuer
+   den naechsten Kuehlzyklus im bestehenden Attribut gespeichert.
+2. **Raumfahrt noch aktiv:** Neue An/Aus-Wuensche werden nicht mehr mit
+   `Vorheriger Kuehlbefehl noch nicht bestaetigt` abgelehnt, sondern
+   je Raum auf den *neuesten* Wert zusammengefasst. Sobald die bisherige
+   bestaetigte Fahrt beendet ist, wird die neue Stellung eingereiht.
+   Die Kachel bestaetigt den angenommenen Wunsch, kennzeichnet den
+   Raum bis zur physischen Rueckmeldung aber weiterhin als `busy`.
+   Die Regler-/Relais-Rueckmeldungen bleiben die einzige Quelle fuer
+   tatsaechliche Aktorstellung.
+3. **Sperre ungewiss:** `Nicht kuehlen` darf das zugeordnete NC-Ventil
+   ueber sein einzelnes LCN-Relais abschalten, ohne den regulatorischen
+   Sperrzustand vorzutäuschen oder den Regler blind freizugeben.
+   Erst nach positiver Relais-AUS-Rueckmeldung wird `Nicht kuehlen`
+   bestaetigt; bei ausbleibender Rueckmeldung erscheint ein Fehler.
+   Die gesonderte Warnung wegen unbekanntem Sperrstatus bleibt sichtbar.
+
+Es entstehen keine weiteren Symcon-Variablen. Ein fluechtiger
+`CoolingPendingRequests`-Puffer pro Modul fasst gleichzeitige
+Aenderungen mehrerer Raeume zusammen. Die bestehende Heizsteuerung,
+GT8, A7/A8, die Rueckfalllogik und die gesicherte v0.2.10-Backup-Version
+bleiben erhalten. Die reale LCN-Firmwarefreigabe der Reglersperre
+bleibt bis zum vor-Ort-Test unbestaetigt.
+
+**Testfolge:** Modus HEIZEN – Kühlvorwahl der Räume umstellen,
+keine LCN-Kommandos; danach im Kuehlbetrieb bei laufender
+Raumfahrt ON/OFF wiederholt setzen – der letzte Wunsch muss
+nach Abschluss der vorherigen Bewegung wirksam werden; bei
+Sperrfehler nur NC-Relais AUS, kein blindes Entsperren.
+Die physische Taupunkt-Abschaltung im Kuehlkreis ist unabhaengig
+von dieser Bedienkorrektur weiterhin erforderlich.

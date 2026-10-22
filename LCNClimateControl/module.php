@@ -143,6 +143,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->SetBuffer('RuntimeRooms', '[]');
         $this->SetBuffer('PendingMode', '');
         $this->SetBuffer('RoomErrors', '{}');
+        $this->SetBuffer('CoolingPendingRequests', '{}');
         $this->SetBuffer('ConfigurationValid', '1');
         $this->SetBuffer('ConfigurationErrors', '[]');
 
@@ -482,6 +483,7 @@ class LCNClimateControl extends IPSModuleStrict
 
                 $this->SetBuffer('Queue', '[]');
                 $this->SetBuffer('CurrentJob', '');
+                $this->SetBuffer('CoolingPendingRequests', '{}');
                 $this->ClearPendingMode();
                 $this->SetTimerInterval('Worker', 0);
                 $this->SyncAllHeatingDisplayFromLCN();
@@ -563,6 +565,7 @@ class LCNClimateControl extends IPSModuleStrict
 
         $rooms = $this->GetRuntimeRooms();
         $this->ClearPendingMode();
+        $this->SetBuffer('CoolingPendingRequests', '{}');
         $this->SetQueue([]);
 
         if ($Mode === self::MODE_COOLING) {
@@ -639,24 +642,90 @@ class LCNClimateControl extends IPSModuleStrict
 
     private function RequestCoolingState(array $Room, bool $State): void
     {
-        if ($this->GetMode() !== self::MODE_COOLING) {
-            throw new RuntimeException('Kühlung ist nur im Kühlbetrieb bedienbar.');
+        $targetID = (int) $Room['TargetVariable'];
+        // Auch im HEIZBETRIEB darf die Kuehlvorwahl eingestellt werden.
+        // Keine LCN-Befehle, keine Reglersperren, keine Heizungsveraenderung.
+        if ($this->GetMode() === self::MODE_HEATING) {
+            $this->StoreCoolingState($targetID, $State);
+            $this->SetValueIfChanged($this->CoolIdent($targetID), $State);
+            $this->ClearRoomError($targetID);
+            $this->RefreshRuntimeStatus();
+            $this->PushVisualizationRow($Room);
+            $this->PushVisualizationMeta();
+            return;
         }
 
-        $targetID = $Room['TargetVariable'];
-        if ($this->UsesDirectCooling() && $this->HasJobForTarget((int) $targetID)) {
-            throw new RuntimeException($Room['Name'] . ': Vorheriger Kuehlbefehl noch nicht bestaetigt.');
+        // Keine bereits gesendeten WAIT-/Reglersperrkommandos manipulieren.
+        // Stattdessen den neuesten Benutzerwunsch fuer diesen Raum merken.
+        if ($this->HasJobForTarget($targetID)) {
+            $this->SetPendingCoolingRequest($targetID, $State);
+            $this->SetValueIfChanged($this->CoolIdent($targetID), $State);
+            $this->PushVisualizationRow($Room);
+            $this->PushVisualizationMeta();
+            return;
         }
+
+        $previous = $this->GetStoredCoolingState($targetID);
         $this->ClearRoomError($targetID);
         $this->RefreshRuntimeStatus();
-        $previous = $this->GetStoredCoolingState($targetID);
-
-        // Optimistische Bedienanzeige; bei Fehler wird auf previous zurückgestellt.
         $this->SetValueIfChanged($this->CoolIdent($targetID), $State);
         $this->RetargetOrEnqueueCoolingJob($Room, $State, $previous);
         $this->StartWorkerIfNeeded();
         $this->PushVisualizationRow($Room);
         $this->PushVisualizationMeta();
+    }
+
+    private function GetPendingCoolingRequests(): array
+    {
+        $map = json_decode($this->GetBuffer('CoolingPendingRequests'), true);
+        return is_array($map) ? $map : [];
+    }
+
+    private function SetPendingCoolingRequest(int $targetID, bool $state): void
+    {
+        $map = $this->GetPendingCoolingRequests();
+        $map[(string) $targetID] = $state;
+        $this->SetBuffer('CoolingPendingRequests',
+            json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}');
+    }
+
+    private function ConsumePendingCoolingRequest(int $targetID): ?bool
+    {
+        $map = $this->GetPendingCoolingRequests();
+        $key = (string) $targetID;
+        if (!array_key_exists($key, $map)) {
+            return null;
+        }
+        $wanted = (bool) $map[$key];
+        unset($map[$key]);
+        $this->SetBuffer('CoolingPendingRequests',
+            json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}');
+        return $wanted;
+    }
+
+    // Only schedule the new desire after the earlier LCN job was confirmed.
+    private function ApplyPendingCoolingRequest(int $targetID): void
+    {
+        if ($this->GetMode() !== self::MODE_COOLING
+            || $this->GetPendingMode() !== null
+            || $this->HasJobForTarget($targetID)) {
+            return;
+        }
+        $wanted = $this->ConsumePendingCoolingRequest($targetID);
+        if ($wanted === null) {
+            return;
+        }
+        $room = $this->FindRoomByTarget($targetID);
+        if ($room === null) {
+            return;
+        }
+        $actual = $this->GetStoredCoolingState($targetID);
+        $this->SetValueIfChanged($this->CoolIdent($targetID), $wanted);
+        if ($wanted !== $actual) {
+            $this->RetargetOrEnqueueCoolingJob($room, $wanted, $actual);
+            $this->StartWorkerIfNeeded();
+        }
+        $this->PushVisualizationRow($room);
     }
 
     private function ProcessJob(array $Job): void
@@ -665,7 +734,8 @@ class LCNClimateControl extends IPSModuleStrict
             $this->HandleDirectCoolingRecovery($Job);
             return;
         }
-        if (in_array((string) ($Job['Type'] ?? ''), ['direct_cool', 'direct_release'], true)) {
+        if (in_array((string) ($Job['Type'] ?? ''),
+            ['direct_cool', 'direct_release', 'direct_emergency_close'], true)) {
             $this->HandleDirectCoolingJob($Job);
             return;
         }
@@ -921,6 +991,7 @@ class LCNClimateControl extends IPSModuleStrict
 
         $this->SetBuffer('CurrentJob', '');
         $this->ClearRoomError($targetID);
+        $this->ApplyPendingCoolingRequest($targetID);
         $this->RefreshRuntimeStatus();
         $this->PushVisualizationRowByTarget($targetID);
         $this->PushVisualizationMeta();
@@ -931,6 +1002,14 @@ class LCNClimateControl extends IPSModuleStrict
         $targetID = (int) ($Job['TargetVariable'] ?? 0);
 
         if (($Job['Type'] ?? '') === 'direct_cool' && $this->UsesDirectCooling()) {
+            $pending = $this->GetPendingCoolingRequests();
+            $key = (string) $targetID;
+            if (array_key_exists($key, $pending)) {
+                // Falls inzwischen AUS gewuenscht: im Rueckfall NIE
+                // einen inzwischen ueberholten Einschaltauftrag fortsetzen.
+                $Job['DesiredOpen'] = (bool) $pending[$key];
+                $this->ConsumePendingCoolingRequest($targetID);
+            }
             $this->BeginDirectCoolingRecovery($Job, $Reason);
             return;
         }
@@ -961,6 +1040,12 @@ class LCNClimateControl extends IPSModuleStrict
         // Ein einzelner Raumfehler darf niemals die komplette Heiz-/Kühlung
         // aller übrigen Räume stoppen. Nur dieser Job wird beendet.
         $this->SetBuffer('CurrentJob', '');
+        if (in_array((string) ($Job['Type'] ?? ''), ['direct_recover','direct_release'], true)) {
+            // Kein weiterer Auftrag bei unklarer Reglerfreigabe.
+            $this->ConsumePendingCoolingRequest($targetID);
+        } elseif ($this->DirectCoolingLockState($targetID) === '') {
+            $this->ApplyPendingCoolingRequest($targetID);
+        }
         $this->RefreshRuntimeStatus();
 
         if ($this->GetQueue() === [] && $this->GetPendingMode() === null) {
@@ -1162,7 +1247,9 @@ class LCNClimateControl extends IPSModuleStrict
         }
 
         $Job['Phase'] = ($Job['Type'] ?? '') === 'direct_cool' ? 'lock'
-            : (($Job['Type'] ?? '') === 'direct_release' ? 'close' : self::PHASE_SEND);
+            : (in_array(($Job['Type'] ?? ''),
+                ['direct_release', 'direct_emergency_close'], true)
+                ? 'close' : self::PHASE_SEND);
         $Job['Steps'] = 0;
         $Job['NoChange'] = 0;
         $Job['SentAtMs'] = 0;
@@ -1573,8 +1660,20 @@ class LCNClimateControl extends IPSModuleStrict
                     $displayCooling = true;
                 } elseif ($effectiveType === self::JOB_COOL_DOWN) {
                     $displayCooling = false;
+                } elseif ($effectiveType === 'direct_cool'
+                    || $effectiveType === 'direct_recover') {
+                    // Der Benutzerwunsch ist angenommen, wird aber noch
+                    // nicht als bestaetigter Relaiszustand behandelt.
+                    $displayCooling = (bool) ($job['DesiredOpen'] ?? $displayCooling);
+                } elseif ($effectiveType === 'direct_emergency_close') {
+                    $displayCooling = false;
                 }
             }
+        }
+        $pendingCooling = $this->GetPendingCoolingRequests();
+        if (array_key_exists((string) $targetID, $pendingCooling)) {
+            $displayCooling = (bool) $pendingCooling[(string) $targetID];
+            $roomBusy = true;
         }
 
         return [

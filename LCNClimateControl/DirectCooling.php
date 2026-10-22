@@ -189,6 +189,28 @@ trait LCNDirectCooling
         ]);
     }
 
+    private function DirectCoolingEnqueueEmergencyClose(array $room, bool $previous): void
+    {
+        $target = (int) $room['TargetVariable'];
+        $mapping = $this->DirectCoolingMapping($target)
+            ?? ($this->ReadJsonAttribute('DirectCoolingLockMappings')[(string) $target] ?? null);
+        if (!is_array($mapping)) {
+            $this->SetRoomError($target, $room['Name']
+                . ': Relais nicht eindeutig erreichbar; AUS konnte nicht ausgefuehrt werden.');
+            $this->SetValueIfChanged($this->CoolIdent($target), $previous);
+            return;
+        }
+        $this->AppendJob([
+            'Type' => 'direct_emergency_close',
+            'Name' => $room['Name'],
+            'SendModule' => $room['SendModule'],
+            'TargetVariable' => $target,
+            'PreviousCoolingState' => $previous,
+            'Mapping' => $mapping,
+            'Phase' => 'close'
+        ]);
+    }
+
     private function DirectCoolingEnqueueRelease(array $room, ?float $restore): void
     {
         $this->AppendJob([
@@ -319,12 +341,60 @@ trait LCNDirectCooling
         $phase = (string) ($job['Phase'] ?? ($type === 'direct_cool' ? 'lock' : 'close'));
         $unlockID = (int) ($m['UnlockedVariable'] ?? 0);
         $statusID = (int) ($m['RelayStatusVariable'] ?? 0);
-        if (!IPS_VariableExists($unlockID) || !IPS_VariableExists($statusID)) {
+        if (!IPS_VariableExists($statusID)
+            || ($type !== 'direct_emergency_close' && !IPS_VariableExists($unlockID))) {
             $this->FailCurrentJob($job, 'Statusvariable entfernt; keine unbestaetigten Ventilbefehle.');
             return;
         }
-        $unlocked = $this->DirectCoolingRegulatorUnlocked($m);
+        // Not-AUS liest bewusst nur die Relaisrueckmeldung und greift die
+        // unklare Reglersperre weder an noch interpretiert sie um.
+        $unlocked = $type === 'direct_emergency_close' ? false
+            : $this->DirectCoolingRegulatorUnlocked($m);
         $electric = (bool) GetValue($statusID);
+        if ($type === 'direct_emergency_close') {
+            if ($phase === 'close') {
+                if (!$this->DirectCoolingRelaySet($m, false)) {
+                    $this->FailCurrentJob($job, 'NC-Ventil AUS konnte nicht gesendet werden.');
+                    return;
+                }
+                $job['Phase'] = 'close_wait';
+                $job['SentAtMs'] = $this->NowMs();
+                $job['SentAtEpoch'] = time();
+                $this->YieldCurrentJob($job);
+                return;
+            }
+            if ($phase === 'close_wait') {
+                $want = !(bool) ($m['OpenRelayOn'] ?? true);
+                if ($electric === $want
+                    && $this->DirectCoolingFeedbackFresh($statusID, $job)
+                    && $this->NowMs() - (int) ($job['SentAtMs'] ?? 0) >= 500) {
+                    $this->StoreCoolingState($target, false);
+                    $this->SetValueIfChanged($this->CoolIdent($target), false);
+                    $this->SetBuffer('CurrentJob', '');
+                    // Es wird NUR das NC-Ventil geschlossen. Eine moegliche
+                    // Reglersperre bleibt als gesonderter Fehler bestehen.
+                    $this->SetRoomError($target,
+                        'NC-Ventil AUS bestaetigt; Reglersperre ungewiss – '
+                        . 'vor Heizbetrieb in LCN kontrollieren.');
+                    $this->ConsumePendingCoolingRequest($target);
+                    $this->RefreshRuntimeStatus();
+                    $this->PushVisualizationRowByTarget($target);
+                    $this->PushVisualizationMeta();
+                    return;
+                }
+                if ($this->NowMs() - (int) ($job['SentAtMs'] ?? 0) >
+                    $this->DirectCoolingTimeoutMs()) {
+                    $this->FailCurrentJob($job,
+                        'NC-Ventil AUS nicht bestaetigt; reale Stellung pruefen.');
+                    return;
+                }
+                $job = $this->DirectCoolingRequestFreshRelay($job, $m);
+                $this->YieldCurrentJob($job);
+                return;
+            }
+            $this->FailCurrentJob($job, 'Unbekannte NC-Not-AUS-Phase: ' . $phase);
+            return;
+        }
         if ($type === 'direct_cool') {
             $open = (bool) ($job['DesiredOpen'] ?? false);
             if ($open && !$this->DirectCoolingSafe()) {
@@ -379,6 +449,7 @@ trait LCNDirectCooling
                     $this->SetValueIfChanged($this->CoolIdent($target), $open);
                     $this->SetBuffer('CurrentJob', '');
                     $this->ClearRoomError($target);
+                    $this->ApplyPendingCoolingRequest($target);
                     $this->RefreshRuntimeStatus();
                     $this->PushVisualizationRowByTarget($target);
                     $this->PushVisualizationMeta();
@@ -668,8 +739,15 @@ trait LCNDirectCooling
         $locked = $this->DirectCoolingLockState($target);
         if ($locked === 'uncertain') {
             $this->DirectCoolingFallbackSet($target, 'Reglerzustand ungewiss', 'blocked');
+            if (!$state) {
+                // AUS ist eine ausdruecklich erlaubte, physisch sicherere
+                // Aktion: Strom vom NC-Ventil nehmen, aber KEINEN
+                // ungewissen Regler entsperren und keinen Heizwert fahren.
+                $this->DirectCoolingEnqueueEmergencyClose($room, $previous);
+                return;
+            }
             $this->SetValueIfChanged($this->CoolIdent($target), $previous);
-            $this->SetRoomError($target, $room['Name'] . ': Reglerzustand ungewiss; keine neue Ventilfahrt.');
+            $this->SetRoomError($target, $room['Name'] . ': Reglerzustand ungewiss; EIN bleibt gesperrt.');
             return;
         }
         if ($locked !== '') {
@@ -705,6 +783,10 @@ trait LCNDirectCooling
         if (str_contains($reason, 'bereits gesperrt')
             || str_contains($reason, 'gehoert nicht zum S1Target')) {
             $this->DirectCoolingFallbackSet($target, $reason, 'blocked');
+            if (!$state && str_contains($reason, 'bereits gesperrt')) {
+                $this->DirectCoolingEnqueueEmergencyClose($room, $previous);
+                return;
+            }
             $this->SetValueIfChanged($this->CoolIdent($target), $previous);
             $this->SetRoomError($target, $room['Name'] . ': ' . $reason);
             return;
@@ -839,16 +921,20 @@ trait LCNDirectCooling
                 $reason = (string) ($job['FallbackReason'] ?? 'Direkte Kuehlung nicht bestaetigt');
                 $this->DirectCoolingFallbackSet($target, $reason);
                 $this->SetBuffer('CurrentJob', '');
+                $nextWanted = $this->ConsumePendingCoolingRequest($target);
+                $restoreWanted = $nextWanted ?? (bool) ($job['DesiredOpen'] ?? false);
+                $this->SetValueIfChanged($this->CoolIdent($target), $restoreWanted);
                 $room = $this->FindRoomByTarget($target);
                 if ($room !== null && $this->GetMode() === self::MODE_COOLING
-                    && (!(bool) ($job['DesiredOpen'] ?? false) || $this->DirectCoolingSafe())) {
+                    && (!$restoreWanted || $this->DirectCoolingSafe())) {
                     $this->EnqueueLegacyCoolingJob(
                         $room,
-                        (bool) ($job['DesiredOpen'] ?? false),
+                        $restoreWanted,
                         (bool) ($job['PreviousCoolingState'] ?? false)
                     );
+                    $this->StartWorkerIfNeeded();
                 }
-                if ((bool) ($job['DesiredOpen'] ?? false) && !$this->DirectCoolingSafe()) {
+                if ($restoreWanted && !$this->DirectCoolingSafe()) {
                     $this->DirectCoolingFallbackSet($target, 'Externe Kuehlfreigabe verloren: Kuehlung blockiert', 'blocked');
                     $this->SetRoomError($target, 'Kuehlfreigabe fehlt; keine Ersatzsteuerung gestartet.');
                 } else {
