@@ -317,6 +317,180 @@ trait LCNClimateCoolingDiscovery
         return implode("\n", $lines);
     }
 
+    /**
+     * Optional, explicit one-click preparation. No existing instance/property
+     * is modified and NO LCN relay or regulator command is sent.
+     * Creates only missing native LCN relay units, idempotently.
+     */
+    public function PrepareCoolingRelayUnits(): string
+    {
+        if ($this->GetMode() !== self::MODE_HEATING || $this->IsBusy()
+            || $this->ReadJsonAttribute('DirectCoolingLocks') !== []) {
+            return 'ABBRUCH: Erst HEIZEN waehlen und laufende Auftraege / Reglersperren vollstaendig beenden.';
+        }
+        if (!IPS_SemaphoreEnter('LCNC_' . $this->InstanceID, 5000)) {
+            return 'ABBRUCH: Das Klimamodul ist belegt. Keine Aenderung.';
+        }
+        try {
+            $plan = $this->AutoCoolingBuildUnitPlan();
+            if (!($plan['valid'] ?? false)) {
+                return "ABBRUCH, keine Instanz erzeugt:\n" . implode("\n", $plan['errors'] ?? []);
+            }
+            $need = $plan['create'];
+            $messages = [
+                'LCNClimateControl: NATIVE RELAIS-UNITS (kein LCN-PRO)',
+                'Bestehende M92/M192-Instanzen werden NICHT geaendert.',
+                'Es werden keine Relais- oder Reglersperrbefehle gesendet.'
+            ];
+            if ($need === []) {
+                $messages[] = 'Keine neuen Instanzen erforderlich: alle angefragten Relais-Units bestehen bereits.';
+                $messages[] = 'Anschliessend die reine Zuordnungsdiagnose erneut ausfuehren.';
+                return implode("\n", $messages);
+            }
+            $created = [];
+            foreach ($need as $spec) {
+                $relayModule = (int) $spec['relay'];
+                $channel = (int) $spec['channel'];
+                $id = 0;
+                try {
+                    $id = (int) IPS_CreateInstance(self::AUTO_LCN_UNIT_GUID);
+                    if ($id <= 0 || !IPS_InstanceExists($id)) {
+                        throw new RuntimeException('LCN-Unit konnte nicht erzeugt werden.');
+                    }
+                    $created[] = $id;
+                    // Unter dem Klimamodul gruppiert, damit nicht elf neue
+                    // Kategorien im Objektbaum entstehen.
+                    IPS_SetParent($id, $this->InstanceID);
+                    IPS_SetName($id, 'Kuehlventil ' . $spec['room']
+                        . ' (M' . $spec['hardware'] . '/R' . $channel . ')');
+                    if (!IPS_ConnectInstance($id, $relayModule)) {
+                        throw new RuntimeException('Verbindung zum Relaismodul fehlgeschlagen.');
+                    }
+                    IPS_SetProperty($id, 'Unit', 2);
+                    IPS_SetProperty($id, 'Channel', $channel);
+                    IPS_ApplyChanges($id);
+                    $info = IPS_GetInstance($id);
+                    $cfg = $this->AutoCoolingInstanceConfig($id);
+                    if (!is_array($cfg) || (int) ($cfg['Unit'] ?? -1) !== 2
+                        || (int) ($cfg['Channel'] ?? -1) !== $channel
+                        || (int) ($info['ConnectionID'] ?? 0) !== $relayModule) {
+                        throw new RuntimeException('LCN-Unit stimmt nach ApplyChanges nicht mit Sollkonfiguration ueberein.');
+                    }
+                    $messages[] = $spec['room'] . ': M' . $spec['hardware'] . '/R' . $channel
+                        . ' -> neue Symcon-Unit #' . $id . ' eingerichtet.';
+                } catch (Throwable $e) {
+                    // Entferne ausschliesslich in diesem Lauf NEU erzeugte Units,
+                    // niemals vorhandene oder vom Benutzer angelegte Instanzen.
+                    foreach (array_reverse($created) as $ownId) {
+                        try {
+                            if (IPS_InstanceExists($ownId)) {
+                                IPS_DeleteInstance($ownId);
+                            }
+                        } catch (Throwable) {
+                        }
+                    }
+                    return 'ABBRUCH nach Fehler bei ' . $spec['room'] . ': ' . $e->getMessage()
+                        . "\n" . count($created)
+                        . ' nur fuer diese Aktion erzeugte Instanzen wurden zurueckzusetzen versucht.'
+                        . "\n" . 'Vor erneutem Klick zuerst Zuordnungsdiagnose ausfuehren.';
+                }
+            }
+            $messages[] = count($created) . ' native LCN-Relais-Units vorbereitet.';
+            $messages[] = 'NAECHSTER SCHRITT: Zuordnungsdiagnose erneut ausfuehren.';
+            $messages[] = 'Ob Entriegelt-Rueckmeldungen und die direkte Reglerfreigabe funktionieren, wird getrennt geprueft.';
+            return implode("\n", $messages);
+        } finally {
+            IPS_SemaphoreLeave('LCNC_' . $this->InstanceID);
+        }
+    }
+
+    private function AutoCoolingBuildUnitPlan(): array
+    {
+        $errors = [];
+        $create = [];
+        $keys = [];
+        foreach ($this->GetRuntimeRooms() as $room) {
+            $sender = (int) ($room['SendModule'] ?? 0);
+            $name = (string) ($room['Name'] ?? 'Raum');
+            $senderCfg = $this->AutoCoolingInstanceConfig($sender);
+            if ($senderCfg === null) {
+                $errors[] = $name . ': LCN-Sender nicht lesbar.';
+                continue;
+            }
+            $hardware = (int) ($senderCfg['Target'] ?? -1);
+            $segment = (int) ($senderCfg['Segment'] ?? -1);
+            if (!isset(self::AUTO_COOLING_PHYSICAL_RELAYS[$hardware])) {
+                $errors[] = $name . ': LCN-Target M' . $hardware . ' nicht in LP3-Zuordnung.';
+                continue;
+            }
+            [$relayHardware, $channel] = self::AUTO_COOLING_PHYSICAL_RELAYS[$hardware];
+            $senderGateway = (int) (IPS_GetInstance($sender)['ConnectionID'] ?? 0);
+            if ($senderGateway <= 0 || !$this->IsOperationalLCNModule($sender)) {
+                $errors[] = $name . ': Sender offline oder ohne Gateway.';
+                continue;
+            }
+            $relayCandidates = [];
+            foreach (IPS_GetInstanceListByModuleID(self::AUTO_LCN_MODULE_GUID) as $candidate) {
+                $candidate = (int) $candidate;
+                $cfg = $this->AutoCoolingInstanceConfig($candidate);
+                if ($cfg === null
+                    || (int) ($cfg['Target'] ?? -1) !== $relayHardware
+                    || (int) ($cfg['Segment'] ?? -1) !== $segment) {
+                    continue;
+                }
+                $info = IPS_GetInstance($candidate);
+                if ((int) ($info['ConnectionID'] ?? 0) === $senderGateway
+                    && $this->IsOperationalLCNModule($candidate)) {
+                    $relayCandidates[] = $candidate;
+                }
+            }
+            if (count($relayCandidates) !== 1) {
+                $errors[] = $name . ': Relaismodul M' . $relayHardware
+                    . ' nicht eindeutig (Treffer=' . count($relayCandidates) . ').';
+                continue;
+            }
+            $relay = $relayCandidates[0];
+            $key = $relay . '/' . $channel;
+            if (isset($keys[$key])) {
+                $errors[] = $name . ': Doppelte Relaiszuordnung zu ' . $keys[$key] . '.';
+                continue;
+            }
+            $keys[$key] = $name;
+            $matched = [];
+            $wrong = [];
+            foreach (IPS_GetInstanceListByModuleID(self::AUTO_LCN_UNIT_GUID) as $instance) {
+                $instance = (int) $instance;
+                $info = IPS_GetInstance($instance);
+                if ((int) ($info['ConnectionID'] ?? 0) !== $relay) {
+                    continue;
+                }
+                $cfg = $this->AutoCoolingInstanceConfig($instance);
+                if ($cfg === null || (int) ($cfg['Channel'] ?? -1) !== $channel) {
+                    continue;
+                }
+                if ((int) ($cfg['Unit'] ?? -1) === 2) {
+                    $matched[] = $instance;
+                } else {
+                    $wrong[] = $instance;
+                }
+            }
+            if (count($matched) > 1 || ($matched === [] && $wrong !== [])) {
+                $errors[] = $name . ': Unit-Konflikt an M' . $relayHardware . '/R'
+                    . $channel . '; keine Objekte veraendert.';
+                continue;
+            }
+            if ($matched === []) {
+                $create[] = [
+                    'relay' => $relay,
+                    'channel' => $channel,
+                    'hardware' => $relayHardware,
+                    'room' => $name
+                ];
+            }
+        }
+        return ['valid' => $errors === [], 'errors' => $errors, 'create' => $create];
+    }
+
     private function AutoCoolingFindBoolean(int $parent, string $name): int
     {
         $byIdent = [];
