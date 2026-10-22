@@ -16,6 +16,7 @@ $GLOBALS['probeIgnoreLockFeedback'] = false;
 $GLOBALS['probeIgnoreReleaseFeedback'] = false;
 $GLOBALS['probeRejectLockCommand'] = false;
 $GLOBALS['probeRejectReleaseCommand'] = false;
+$GLOBALS['probeRejectActionCommand'] = false;
 
 function IPS_SemaphoreEnter(string $name, int $timeout): bool { return true; }
 function IPS_SemaphoreLeave(string $name): void {}
@@ -55,6 +56,18 @@ function LCN_ReleaseTargetValue(int $sender, int $idx): bool
     return !$GLOBALS['probeRejectReleaseCommand'];
 }
 function LCN_RequestRead(int $id): bool { return true; }
+function RequestAction(int $variableId, bool $requested): bool
+{
+    if ($variableId !== 46746) { throw new RuntimeException('wrong lock variable'); }
+    $GLOBALS['probeCommands'][] = [$requested ? 'action_lock' : 'action_release',$variableId];
+    if ($GLOBALS['probeRejectActionCommand']) { return false; }
+    $GLOBALS['probeValues'][$variableId] = $requested;
+    $GLOBALS['probeVars'][$variableId]['VariableUpdated'] = time() + ($requested ? 0 : 1);
+    if (!$requested) {
+        $GLOBALS['probeVars'][34107]['VariableUpdated'] = time() + 1;
+    }
+    return true;
+}
 
 final class MockM11Climate
 {
@@ -80,6 +93,10 @@ final class MockM11Climate
         return [['Name'=>'EG Büro', 'SendModule'=>37617, 'TargetVariable'=>34107]];
     }
     private function IsOperationalLCNModule(int $id): bool { return $id === 37617 || $id === 36930; }
+    private function IsOperationalTargetVariable(int $target, int $sender): bool
+    {
+        return $target === 34107 && $sender === 37617;
+    }
     private function AutoCoolingInstanceConfig(int $id): ?array
     {
         return $GLOBALS['probeConfig'][$id] ?? null;
@@ -124,7 +141,7 @@ function initProbe(): MockM11Climate
 {
     $GLOBALS['probeVars'] = [
         34107=>['VariableUpdated'=>time(), 'VariableType'=>VARIABLETYPE_FLOAT],
-        46746=>['VariableUpdated'=>time(), 'VariableType'=>VARIABLETYPE_BOOLEAN],
+        46746=>['VariableUpdated'=>time(), 'VariableType'=>VARIABLETYPE_BOOLEAN, 'VariableAction'=>19003],
         30465=>['VariableUpdated'=>time(), 'VariableType'=>VARIABLETYPE_BOOLEAN]
     ];
     $GLOBALS['probeValues'] = [34107=>21.0, 46746=>false, 30465=>false];
@@ -135,6 +152,7 @@ function initProbe(): MockM11Climate
     $GLOBALS['probeIgnoreReleaseFeedback'] = false;
     $GLOBALS['probeRejectLockCommand'] = false;
     $GLOBALS['probeRejectReleaseCommand'] = false;
+    $GLOBALS['probeRejectActionCommand'] = false;
     return new MockM11Climate();
 }
 
@@ -237,4 +255,35 @@ t(($m->attrs['M11ProbeSession']['phase']??'')==='failed_safe',
 t(str_contains($m->M11ProbeStatus(), 'Freigabebefehl angenommen: NEIN'),
   'native release false must be exposed');
 echo "PASS rejected release never counts as successful regulator test\n";
-echo "ALL NINE M11 PROBE TEST CASES PASSED\n";
+// A deliberately armed RequestAction probe is permitted only after the
+// original native API has failed with exactly one documented retest.
+$m=initProbe();
+$m->attrs['M11ProbeSession']=['phase'=>'failed_safe','retestCount'=>1,
+    'lockConfirmed'=>false,'lockCommandAccepted'=>false];
+t(str_contains($m->StartM11ViaActionTest(),'RequestAction(#46746, true/false)'),
+    'action test enabled only following the native API failure');
+for($i=0;$i<5;$i++){$m->M11ProbeWorker();}
+t(($m->attrs['M11ProbeSession']['phase']??'')==='passed',
+    'action lock and release confirmed via feedback');
+t($GLOBALS['probeCommands']===[['action_lock',46746],['action_release',46746]],
+    'RequestAction test must never use broken native LCN calls');
+t($GLOBALS['probeSleeps']===[750,750],
+    'both action commands are paced 750ms');
+t(str_starts_with($m->StartM11ViaActionTest(),'ABBRUCH'),
+    'only one action test allowed after successful attempt');
+echo "PASS RequestAction M11 one-time lock and release\n";
+
+// A refused action call still attempts to release and remains blocked.
+$m=initProbe();
+$m->attrs['M11ProbeSession']=['phase'=>'failed_safe','retestCount'=>1];
+$GLOBALS['probeRejectActionCommand']=true;
+t(str_contains($m->StartM11ViaActionTest(),'RequestAction'),'action test starts');
+for($i=0;$i<4;$i++){$m->M11ProbeWorker();}
+t($GLOBALS['probeCommands']===[['action_lock',46746],['action_release',46746]],
+    'failed action lock still attempts release');
+t(($m->attrs['M11ProbeSession']['phase']??'')==='release_wait',
+    'failed release cannot be falsely confirmed');
+t(str_starts_with($m->StartM11ViaActionTest(),'ABBRUCH'),
+    'failed action probe cannot be repeated');
+echo "PASS rejected RequestAction still releases and blocks repeat\n";
+echo "ALL ELEVEN M11 PROBE TEST CASES DEFINED\n";
