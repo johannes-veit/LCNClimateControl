@@ -46,6 +46,7 @@ class Probe{
     public function ReadPropertyBoolean(string $key): bool{return (bool)($this->properties[$key]??false);}
     private function IsOperationalLCNModule(int $id):bool{return IPS_InstanceExists($id)&&IPS_GetInstance($id)['InstanceStatus']===102;}
     public function go():?array{return $this->AutoCoolingReadOnlyDiscovery(['SendModule'=>11,'TargetVariable'=>10000]);}
+    public function reason():string{return $this->AutoCoolingDiscoveryReason(['SendModule'=>11,'TargetVariable'=>10000]);}
 }
 function check(bool $ok,string $message):void{if(!$ok)throw new RuntimeException($message);}
 $p=new Probe();$m=$p->go();
@@ -81,4 +82,25 @@ $GLOBALS['configs'][11]['Target']=99;
 check($p->go()===null,'unknown source hardware must not be assigned');
 $GLOBALS['configs'][11]['Target']=11;
 check($p->go()!==null,'valid native mapping restored');
-echo "PASS: 12 native hardware-mapping and technical object-ident cases\n";
+// Granulare Diagnose MUSS die Ursache nennen, ohne einen Befehl zu senden.
+check(str_contains($p->reason(),'Alle Symcon-Instanzen gefunden'), 'successful mapping diagnostic');
+$GLOBALS['configs'][92]['Segment']=1;
+check(str_contains($p->reason(),'Relaismodul M92'), 'missing relay module diagnostic');
+$GLOBALS['configs'][92]['Segment']=0;
+$GLOBALS['configs'][700]['Unit']=1;
+check(str_contains($p->reason(),'Unit=1'), 'unexpected LCN Unit type diagnostic');
+$GLOBALS['configs'][700]['Unit']=2;
+unset($GLOBALS['instances'][700],$GLOBALS['configs'][700]);
+check(str_contains($p->reason(),'alle vorhandenen Units an Relaismodul #92: KEINE'), 'missing relay Unit diagnostic');
+$GLOBALS['instances'][700]=['ConnectionID'=>92,'InstanceStatus'=>102,'ModuleInfo'=>['ModuleID'=>UNIT]];
+$GLOBALS['configs'][700]=['Unit'=>2,'Channel'=>1];
+$GLOBALS['variables'][7001]['Name']='Andere';
+unset($GLOBALS['variables'][7001]['Ident']);
+check(str_contains($p->reason(),'Boolean-Rueckmeldung Status'), 'missing relay status diagnostic');
+$GLOBALS['variables'][7001]['Name']='Status';
+$GLOBALS['variables'][10001]['Name']='Andere';
+unset($GLOBALS['variables'][10001]['Ident']);
+check(str_contains($p->reason(),'Entriegelt'), 'missing unlock feedback diagnostic');
+$GLOBALS['variables'][10001]['Name']='Entriegelt';
+check($p->go()!==null, 'read-only diagnostic leaves good discovery working');
+echo "PASS: 18 native discovery and detailed failure-cause tests\n";
