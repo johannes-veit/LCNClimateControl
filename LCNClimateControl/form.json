@@ -347,6 +347,11 @@
     },
     {
       "type": "Button",
+      "caption": "M11 EG Büro: RequestAction-Sperrtest EINMALIG starten (mit automatischer Freigabe)",
+      "onClick": "echo LCNC_StartM11ViaActionTest($id);"
+    },
+    {
+      "type": "Button",
       "caption": "M11 EG Büro: Sperrtest-Status anzeigen (nur lesen)",
       "onClick": "echo LCNC_M11ProbeStatus($id);"
     },
