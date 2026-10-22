@@ -3,6 +3,7 @@
 declare(strict_types=1);
 require_once __DIR__ . '/DirectCooling.php';
 require_once __DIR__ . '/CoolingDiscovery.php';
+require_once __DIR__ . '/ChatGPTDiagnostic.php';
 
 /**
  * LCN Heizung / Kühlung für IP-Symcon 9
@@ -20,6 +21,7 @@ class LCNClimateControl extends IPSModuleStrict
 {
     use LCNDirectCooling;
     use LCNClimateCoolingDiscovery;
+    use LCNClimateChatGPTDiagnostic;
 
     private const STATUS_ACTIVE = 102;
     private const STATUS_INACTIVE = 104;
@@ -84,6 +86,7 @@ class LCNClimateControl extends IPSModuleStrict
 
         $this->RegisterTimer('Worker', 0, 'LCNC_Worker($_IPS[\'TARGET\']);');
         $this->RegisterTimer('DirectCoolingGuard', 0, 'LCNC_DirectCoolingWatchdog($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('ChatGPTDiagnosticTimer', 0, 'LCNC_UpdateChatGPTDiagnostic($_IPS[\'TARGET\']);');
 
         $this->EnsureProfiles();
 
@@ -134,6 +137,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->SetVisualizationType(1);
         $this->SetTimerInterval('Worker', 0);
         $this->SetTimerInterval('DirectCoolingGuard', $this->UsesDirectCooling() ? 15000 : 0);
+        $this->SetTimerInterval('ChatGPTDiagnosticTimer', 60000);
         $this->SetBuffer('Queue', '[]');
         $this->SetBuffer('CurrentJob', '');
         $this->SetBuffer('RuntimeRooms', '[]');
@@ -163,6 +167,8 @@ class LCNClimateControl extends IPSModuleStrict
         }
 
         $this->MaintainVariable('Mode', 'Betriebsart', VARIABLETYPE_INTEGER, self::PROFILE_MODE, 10, true);
+        // Ein einziger kopierbarer Bericht statt elf Raumdiagnosen oder vieler Buttons.
+        $this->MaintainVariable('ChatGPTDiagnostic', 'Senden an ChatGPT', VARIABLETYPE_STRING, '', 900, true);
         $this->EnableAction('Mode');
         $this->SetValueIfChanged('Mode', $this->ReadAttributeInteger('OperatingMode'));
 
@@ -282,6 +288,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->ApplyModeVisibility();
 
         $this->RefreshRuntimeStatus();
+        $this->UpdateChatGPTDiagnostic();
         $this->PushVisualizationState();
         } finally {
             IPS_SemaphoreLeave($applyLock);
