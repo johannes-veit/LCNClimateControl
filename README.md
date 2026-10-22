@@ -394,3 +394,38 @@ Einrichten von Symcon-Instanzen.** Die echte Regler-Sperr-/Freigabe-
 Funktion bleibt bis zum Praxistest nicht bestaetigt. Rueckfall auf
 alte A7/A8-Steuerung bleibt erhalten, sofern keine direkte
 Reglersperre erfolgt ist.
+
+
+## v0.3.8 Build 23 – Native Reglersperren-Rueckmeldung korrigiert
+
+Bestaetigter 11-Raum-Livebericht nach erfolgreichem Einrichten nativer
+M92/M192-Relais-Units:
+- Die zugehoerige Symcon LCN-Value-Instanz besitzt jeweils die
+  native Boolean-Variable mit **ObjectIdent=S1TargetLock**.
+- Symcon zeigt als Label "Zieltemperatur S1"; dieses LABEL ist
+  nicht als Bool-Bedeutung geeignet.
+- **S1TargetLock TRUE = REGELSPERRE AKTIV (gesperrt).**
+- **S1TargetLock FALSE = REGLER FREIGEGEBEN.**
+
+Fuer automatische LP3-Erkennung wird zwingend zuerst das native
+ObjectIdent S1TargetLock (mit richtiger Polaritaet) gesucht.
+Nur die bewusst manuelle, anders benannte Rueckmeldung
+"Entriegelt" verwendet weiterhin TRUE=freigegeben.
+
+Die neue Regler-Zustandsmaschine verwendet diese Polaritaet in
+folgenden Phasen: Praeflight, Sperren, Bestatigen der Sperre,
+vor Relais-EIN, Freigabe nach Relais-AUS, Freigaberueckmeldung
+und Fehler-Rueckfall. Kein Rueckfall auf A7/A8, bevor der
+Regler nachweislich freigegeben ist.
+
+Automatische Erkennung der elf native Relais-Units bleibt wie
+in v0.3.7. Die PHP-Testreihe prueft den direkten Betrieb unter
+S1TargetLock FALSE->TRUE->FALSE sowie die Kompatibilitaet mit
+vorhandenen manuellen "Entriegelt"-Zuordnungen.
+**Der reale LCN-Firmwaretest ist weiterhin ausstehend.**
+
+Alle elf aktuellen native Symcon-Bool-Rueckmeldungen:
+EG Bad 19580; EG Buero 46746; EG Gaeste WC 32130;
+EG Kueche 53830; EG Schlafen 18533; EG Wohnen 38100;
+OG Ankleide/HWR 24239; OG Bad 59442; OG Flur 31648;
+OG Schlafen 1 46283; OG Schlafen 2 33374.
