@@ -22,3 +22,5 @@ jobs:
           find LCNClimateControl tests -name '*.php' -print0 | xargs -0 -n1 php -l
       - name: Lock recovery simulation
         run: php tests/test_lock_recovery.php
+      - name: M11 isolated lock and release simulation
+        run: php tests/test_m11_lock_probe.php
