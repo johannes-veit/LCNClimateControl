@@ -157,9 +157,9 @@ trait LCNDirectCooling
                 $errors[] = $room['Name'] . ': Relais wird bereits von ' . $seenRelay[$relayKey] . ' verwendet.';
             }
             $seenRelay[$relayKey] = $room['Name'];
-            // Die Reglerklasse (R1=0 / S1=2) wird NIE geraten.
-            if (!in_array($lock, [0, 2], true)) {
-                $errors[] = $room['Name'] . ': Reglernummer R1/S1 nicht bestaetigt.';
+            // This installation uses S1 only. No guessed R1 fallback.
+            if ($lock !== 2 || $this->DirectCoolingLockActionID($room, $m) <= 0) {
+                $errors[] = $room['Name'] . ': native S1TargetLock-Standardaktion fehlt.';
             }
             foreach (['Entriegelt' => $unlocked, 'Relaisstatus' => $status] as $name => $id) {
                 if ($id <= 0 || !IPS_VariableExists($id)
