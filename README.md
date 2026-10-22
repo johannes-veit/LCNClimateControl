@@ -734,3 +734,56 @@ und die Unterdrueckung eines unabsichtlichen zweiten Sperrversuchs.
 GitHub Action zur PHP-Pruefung im Repository vorhanden; ein
 vollstaendiger Hardwaretest und ein bestaetigter CI-Durchlauf
 werden nicht behauptet.
+
+
+## v0.3.18 Build 34 – ein gezielter M11-Wiederholungstest mit Fehlerursache
+
+Der Anlagenbetreiber hat am 22.10.2026 gemeldet, die LCN-PRO-Option
+"Sperrung zulassen" bei allen elf LCN-Raumreglern aktiviert zu haben.
+Ob jede Aenderung online uebertragen wurde, kann das Modul nicht
+passiv auslesen. Der bislang einzige Funktionstest (M11) blieb
+"failed_safe": Lockversuch 21:49:45, Releaseversuch 21:49:46;
+S1TargetLock #46746 war danach FREIGEGEBEN, S1Target #34107 bei
+21,0 Grad. Ein Sperrzustand wurde nicht nachgewiesen.
+
+Die nach nur einer Sekunde eingeleitete Freigabe ist mit der
+normalerweise vorgesehenen 12-Sekunden-Rueckmeldefrist nicht
+vereinbar und deutet auf eine sofortige Ablehnung (Vorbedingung,
+Sendesperre oder nativer LCN-Lock-Aufruf) hin. Der alte Test
+speicherte den Rueckgabewert noch nicht, daher ist die Ursache
+nicht rekonstruiert.
+
+**Neue Aktion** in Instanz #17597:
+"M11 EG Büro: S1-Sperrtest einmalig wiederholen
+(sendet nur M11 S1-Sperre/Freigabe)"
+
+- Genau ein ausdruecklicher Wiederholungstest nach einem alten
+  `failed_safe`-Lauf; keine automatische Wiederholung.
+- Identische Schutzpruefungen wie bisher (HEIZEN, keine Jobs,
+  keine Sperren, eindeutig M11 mit S1=2 und M92/R1, frische
+  Rueckmeldungen, Relais AUS, gueltiger Sollwert).
+- Kein Relaiskommando, kein Heizsollwertkommando, kein
+  Betriebsartenwechsel, keine Befehle an andere Raummodule.
+- Bei Nichtbestaetigung automatisch S1 FREIGEBEN versuchen,
+  maximal drei Versuche. Andernfalls unveraenderte Warnung.
+- Jetzt wird fuer Sperr- und Freigabebefehl getrennt protokolliert,
+  ob der native LCN-Aufruf TRUE oder FALSE liefert, oder welche
+  Vorbedingung (Senderstatus, Modulziel, IPS-Funktion,
+  500-ms-Bus-Semaphor, Exception) den Versand verhindert hat.
+- Der reine Statusknopf zeigt die Fehlermeldung des nativen
+  Befehls, Lock-/Release-Antworten, Zeitstempel sowie den
+  Anzahlzaehler fuer den Einzel-Wiederholungstest.
+- Nach Abschluss dieses Wiederholungstests ist kein dritter
+  Testversuch ueber die Moduloberflaeche erlaubt.
+
+Die verifizierte API-Signatur laut Symcon dokumentiert
+bool LCN_LockTargetValue(int InstanzID,int Ziel), mit
+0=R1, 1=R2, 2=S1, 3=S2. Ein TRUE bedeutet nur
+erfolgreichen Befehlsaufruf und beweist noch keine
+physische Reglersperre.
+
+Der Test wurde durch Regressionstest-Szenarien fuer FALSE-
+Rueckgabewerte, Wiederholungsschutz und erfolgreiche
+Wiederfreigabe ergaenzt. Reale Tests der Hardware sowie
+CI-Ausfuehrung bleiben separat nachzuweisen.
+
