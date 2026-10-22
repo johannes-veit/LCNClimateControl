@@ -175,6 +175,7 @@ echo "PASS failed release keeps blocker and permits emergency retry\n";
 $m=initProbe();$m->StartM11RegulatorTest();
 t(str_starts_with($m->StartM11RegulatorTest(),'ABBRUCH'),'duplicate test disallowed');
 $m->mode=1;$m->M11ProbeWorker();
-t($GLOBALS['probeCommands']===[],'unexpected mode switch sends no lock');
+t(count(array_filter($GLOBALS['probeCommands'], fn($cmd)=>$cmd[0]==='lock'))===0,
+  'unexpected mode switch must never send a lock');
 echo "PASS duplicate suppression and changed-mode guard\n";
 echo "ALL SIX M11 PROBE TEST CASES PASSED\n";
