@@ -458,7 +458,7 @@ trait LCNClimateCoolingDiscovery
         }
         $cursor = (int) $this->GetBuffer('CoolingReadCursor');
         $cursor = (($cursor % $count) + $count) % $count;
-        $limit = min(2, $count);
+        $limit = min(2, $count - $cursor);
         $lines = [];
         $success = 0;
         for ($i = 0; $i < $limit; $i++) {
@@ -489,9 +489,9 @@ trait LCNClimateCoolingDiscovery
             . ' Leseanfragen angenommen, Durchlauf ' . ($cursor + 1)
             . '-' . ($cursor + $limit) . ' von ' . $count . '. '
             . 'Naechster Aufruf setzt bei ' . ($next + 1) . ' fort.'
-            . "\\nKeine Regler-/Relais-Schaltbefehle. Eine angenommene Anfrage "
+            . "\nKeine Regler-/Relais-Schaltbefehle. Eine angenommene Anfrage "
             . 'ist KEIN Nachweis einer aktuellen Antwort.'
-            . "\\n" . implode("\\n", $lines);
+            . "\n" . implode("\n", $lines);
     }
 
     /**
