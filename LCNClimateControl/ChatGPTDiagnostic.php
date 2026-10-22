@@ -8,7 +8,20 @@ declare(strict_types=1);
  */
 trait LCNClimateChatGPTDiagnostic
 {
-    private const CHATGPT_DIAGNOSTIC_VERSION = '0.3.12 Build 27';
+    private function ChatGPTDiagnosticVersion(): string
+    {
+        // Versionsangabe immer aus der zentralen Bibliotheksdefinition lesen.
+        // So kann der Diagnosebericht nach einem Release nicht veralten.
+        try {
+            $data = json_decode((string) file_get_contents(__DIR__ . '/../library.json'), true);
+            if (is_array($data) && isset($data['version'], $data['build'])) {
+                return (string) $data['version'] . ' Build ' . (int) $data['build'];
+            }
+        } catch (Throwable $e) {
+            $this->SendDebug('DiagnosticVersion', $e->getMessage(), 0);
+        }
+        return 'unbekannt (library.json nicht lesbar)';
+    }
 
     private function ChatGPTDiagnosticBoolState(int $id, bool $invert = false): string
     {
@@ -91,7 +104,7 @@ trait LCNClimateChatGPTDiagnostic
 
         $lines = [
             'LCNClimateControl – SENDEN AN CHATGPT',
-            'Modulstand: ' . self::CHATGPT_DIAGNOSTIC_VERSION,
+            'Modulstand: ' . $this->ChatGPTDiagnosticVersion(),
             'Erstellt: ' . date('d.m.Y H:i:s') . ' (Europe/Berlin)',
             'Symcon-Modulinstanz: #' . $this->InstanceID,
             'Betriebsart: ' . ($mode === self::MODE_HEATING ? 'HEIZEN' : 'KUEHLEN'),
