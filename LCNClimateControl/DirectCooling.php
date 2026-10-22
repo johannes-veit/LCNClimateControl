@@ -95,6 +95,18 @@ trait LCNDirectCooling
         return $this->DirectCoolingMapping($target);
     }
 
+    /**
+     * Normalisiert zwei verschiedene native Rueckmelde-Semantiken.
+     * S1TargetLock: TRUE=gesperrt. Aeltere "Entriegelt"-Konfiguration:
+     * TRUE=freigegeben. Direktsteuerung benutzt NUR diese Ableitung.
+     */
+    private function DirectCoolingRegulatorUnlocked(array $mapping): bool
+    {
+        $status = (bool) GetValue((int) ($mapping['UnlockedVariable'] ?? 0));
+        return (bool) ($mapping['LockFeedbackIsLocked'] ?? false)
+            ? !$status : $status;
+    }
+
     private function DirectCoolingSafe(): bool
     {
         $id = $this->ReadPropertyInteger('CoolingSafetyVariable');
@@ -311,7 +323,7 @@ trait LCNDirectCooling
             $this->FailCurrentJob($job, 'Statusvariable entfernt; keine unbestaetigten Ventilbefehle.');
             return;
         }
-        $unlocked = (bool) GetValue($unlockID);
+        $unlocked = $this->DirectCoolingRegulatorUnlocked($m);
         $electric = (bool) GetValue($statusID);
         if ($type === 'direct_cool') {
             $open = (bool) ($job['DesiredOpen'] ?? false);
@@ -546,15 +558,15 @@ trait LCNDirectCooling
         // Keine fremde Reglersperre uebernehmen.
         $unlockedId = (int) ($m['UnlockedVariable'] ?? 0);
         try {
-            if (!(bool) GetValue($unlockedId)) {
+            if (!$this->DirectCoolingRegulatorUnlocked($m)) {
                 return 'LCN-Regler bereits gesperrt; kein TS-Rueckfall erlaubt';
             }
             if (function_exists('IPS_GetParent')
                 && IPS_GetParent($unlockedId) !== IPS_GetParent($target)) {
-                return 'Entriegelt-Rueckmeldung gehoert nicht zum S1Target';
+                return 'Reglersperren-Rueckmeldung gehoert nicht zum S1Target';
             }
         } catch (Throwable) {
-            return 'Entriegelt-Rueckmeldung nicht lesbar';
+            return 'Reglersperren-Rueckmeldung nicht lesbar';
         }
         return '';
     }
@@ -800,7 +812,7 @@ trait LCNDirectCooling
         }
         if ($phase === 'unlock_wait') {
             if ($this->DirectCoolingFeedbackFresh($unlockId, $job)
-                && (bool) GetValue($unlockId)
+                && $this->DirectCoolingRegulatorUnlocked($m)
                 && $this->NowMs() - (int) ($job['SentAtMs'] ?? 0) >= 500) {
                 $job['Phase'] = 'normal_target_wait';
                 $job['SentAtMs'] = $this->NowMs();
@@ -816,7 +828,7 @@ trait LCNDirectCooling
             return;
         }
         if ($phase === 'normal_target_wait') {
-            if (!(bool) GetValue($unlockId)) {
+            if (!$this->DirectCoolingRegulatorUnlocked($m)) {
                 $this->DirectCoolingFallbackSet($target, 'Regler erneut gesperrt', 'blocked');
                 $this->FailCurrentJob($job, 'Regler erneut gesperrt; kein automatischer Rueckfall.');
                 return;
