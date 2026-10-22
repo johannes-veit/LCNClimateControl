@@ -60,6 +60,8 @@ final class AutoProbe {
     public function release(float $target): void { $this->DirectCoolingEnqueueRelease($this->room, $target); }
     private function EnqueueHeatJob(array $room, float $target): void { $this->jobs[]=['Type'=>'heat','Desired'=>$target]; }
     private function StoreCoolingState(int $target, bool $state): void { $this->coolingStored[$target]=$state; }
+    private function ApplyPendingCoolingRequest(int $target):void{}
+    private function ConsumePendingCoolingRequest(int $target):?bool{return null;}
     public function lockState(int $target, string $state): void { $this->DirectCoolingSetLockState($target,$state); }
 }
 function check(bool $condition, string $message): void { if (!$condition) throw new RuntimeException($message); }
@@ -313,5 +315,26 @@ check($external->jobs===[] &&
     str_contains($external->summary(),'gestoppt'),
     'external S1TargetLock=true must not be taken over');
 $GLOBALS['v'][101]=true;$GLOBALS['v'][102]=false;
-echo "PASS: 22 scenarios incl. native S1TargetLock polarity and direct heating recovery\n";
+// 23. Falls die direkte Reglersperre ungewiss ist, muss OFF trotzdem
+// den korrekten NC-Relaiskanal stromlos schalten koennen – OHNE UNLOCK.
+$emergency=new AutoProbe();config($emergency);$emergency->lockState(777,'uncertain');
+$GLOBALS['v'][102]=true;
+$emergency->choose(false,true);
+check(count($emergency->jobs)===1
+    && $emergency->jobs[0]['Type']==='direct_emergency_close',
+    'uncertain lock must still accept cooling OFF');
+$job=$emergency->jobs[0];$emergency->jobs=[];$emergency->processDirect($job);
+check($emergency->jobs[0]['Phase']==='close_wait',
+    'NC valve receives only relay OFF');
+$job=$emergency->jobs[0];$emergency->jobs=[];
+$emergency->now=$job['SentAtMs']+600;
+$GLOBALS['v'][102]=false;$GLOBALS['updated'][102]=time();
+$emergency->processDirect($job);
+check(($emergency->coolingStored[777]??true)===false,
+    'NC relay OFF must be confirmed');
+check(($emergency->attrs['DirectCoolingLocks']['777']??'')==='uncertain',
+    'relay close must NOT pretend regulator was unlocked');
+check($emergency->jobs===[],'no unexpected unlock or heating job');
+$GLOBALS['v'][102]=false;
+echo "PASS: 23 scenarios incl. blocked-regulator NC-valve emergency OFF\n";
 
