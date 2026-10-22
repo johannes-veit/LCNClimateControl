@@ -31,6 +31,7 @@ final class MockClimate
 
     public function GetMode(): int { return $this->mode; }
     private function IsBusy(): bool { return $this->busy; }
+    private function M11ProbeActive(): bool { return false; }
     private function GetPendingMode(): ?int { return null; }
     private function GetPendingCoolingRequests(): array { return []; }
     private function GetBuffer(string $key): string { return $key === 'ConfigurationValid' ? '1' : ''; }
