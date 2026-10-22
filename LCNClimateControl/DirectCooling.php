@@ -379,6 +379,7 @@ trait LCNDirectCooling
                     $this->SetValueIfChanged($this->CoolIdent($target), $open);
                     $this->SetBuffer('CurrentJob', '');
                     $this->ClearRoomError($target);
+                    $this->ApplyPendingCoolingRequest($target);
                     $this->RefreshRuntimeStatus();
                     $this->PushVisualizationRowByTarget($target);
                     $this->PushVisualizationMeta();
@@ -839,16 +840,20 @@ trait LCNDirectCooling
                 $reason = (string) ($job['FallbackReason'] ?? 'Direkte Kuehlung nicht bestaetigt');
                 $this->DirectCoolingFallbackSet($target, $reason);
                 $this->SetBuffer('CurrentJob', '');
+                $nextWanted = $this->ConsumePendingCoolingRequest($target);
+                $restoreWanted = $nextWanted ?? (bool) ($job['DesiredOpen'] ?? false);
+                $this->SetValueIfChanged($this->CoolIdent($target), $restoreWanted);
                 $room = $this->FindRoomByTarget($target);
                 if ($room !== null && $this->GetMode() === self::MODE_COOLING
-                    && (!(bool) ($job['DesiredOpen'] ?? false) || $this->DirectCoolingSafe())) {
+                    && (!$restoreWanted || $this->DirectCoolingSafe())) {
                     $this->EnqueueLegacyCoolingJob(
                         $room,
-                        (bool) ($job['DesiredOpen'] ?? false),
+                        $restoreWanted,
                         (bool) ($job['PreviousCoolingState'] ?? false)
                     );
+                    $this->StartWorkerIfNeeded();
                 }
-                if ((bool) ($job['DesiredOpen'] ?? false) && !$this->DirectCoolingSafe()) {
+                if ($restoreWanted && !$this->DirectCoolingSafe()) {
                     $this->DirectCoolingFallbackSet($target, 'Externe Kuehlfreigabe verloren: Kuehlung blockiert', 'blocked');
                     $this->SetRoomError($target, 'Kuehlfreigabe fehlt; keine Ersatzsteuerung gestartet.');
                 } else {
