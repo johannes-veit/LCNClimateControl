@@ -48,6 +48,7 @@ final class AutoProbe {
     private function SetValueIfChanged(string $id, mixed $value): void {}
     private function CoolIdent(int $id): string { return 'C'.$id; }
     private function RefreshRuntimeStatus(): void {}
+    private function StartWorkerIfNeeded(): void {}
     private function PushVisualizationRowByTarget(int $id): void {}
     private function PushVisualizationMeta(): void {}
     private function SendDebug(string $name, string $text, int $format): void {}
