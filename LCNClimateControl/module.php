@@ -12,8 +12,10 @@ require_once __DIR__ . '/M11LockTest.php';
  *
  * Grundprinzip:
  * - LCN bleibt Master und regelt die Fußbodenheizung weiterhin vollständig.
- * - Symcon setzt niemals LCN-Reglerwerte oder Relais direkt.
- * - Jede Änderung erfolgt ausschließlich über die vorhandenen LCN-KURZ-Tasten
+ * - Heizen bleibt allein ueber die vorhandenen LCN-KURZ-Tasten.
+ * - Die ausdruecklich gestartete Diagnose M11-Sperrtest ist eine eng
+ *   begrenzte Ausnahme: native S1-Sperre/Freigabe, ohne Relaisbefehle.
+ * - Heiz-Sollwertaenderungen erfolgen ausschließlich über LCN-KURZ-Tasten
  *   (standardmäßig A7 = Soll +1 °C / Ventil Richtung AUF,
  *    A8 = Soll -1 °C / Ventil Richtung ZU).
  * - Die native S1Target-Floatvariable ist die einzige Wahrheitsquelle für den
