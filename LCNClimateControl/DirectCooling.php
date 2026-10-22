@@ -973,7 +973,7 @@ trait LCNDirectCooling
             return $job;
         }
         $job['LastRelayReadAtMs'] = $now;
-        if (IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 500)) {
+        if (IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 2000)) {
             try {
                 LCN_RequestStatus($module);
             } catch (Throwable $e) {
@@ -1013,7 +1013,7 @@ trait LCNDirectCooling
             return $job;
         }
         $job['LastReadAtMs'] = $now;
-        if (IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 500)) {
+        if (IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 2000)) {
             try {
                 LCN_RequestRead($valueInstance);
             } catch (Throwable $e) {
