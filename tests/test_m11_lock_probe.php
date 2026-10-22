@@ -13,6 +13,7 @@ $GLOBALS['probeConfig'] = [];
 $GLOBALS['probeIgnoreLockFeedback'] = false;
 $GLOBALS['probeIgnoreReleaseFeedback'] = false;
 $GLOBALS['probeRejectLockCommand'] = false;
+$GLOBALS['probeRejectReleaseCommand'] = false;
 
 function IPS_SemaphoreEnter(string $name, int $timeout): bool { return true; }
 function IPS_SemaphoreLeave(string $name): void {}
@@ -48,7 +49,7 @@ function LCN_ReleaseTargetValue(int $sender, int $idx): bool
         $GLOBALS['probeVars'][46746]['VariableUpdated'] = time() + 1;
         $GLOBALS['probeVars'][34107]['VariableUpdated'] = time() + 1;
     }
-    return true;
+    return !$GLOBALS['probeRejectReleaseCommand'];
 }
 function LCN_RequestRead(int $id): bool { return true; }
 
@@ -128,6 +129,7 @@ function initProbe(): MockM11Climate
     $GLOBALS['probeIgnoreLockFeedback'] = false;
     $GLOBALS['probeIgnoreReleaseFeedback'] = false;
     $GLOBALS['probeRejectLockCommand'] = false;
+    $GLOBALS['probeRejectReleaseCommand'] = false;
     return new MockM11Climate();
 }
 
@@ -218,4 +220,14 @@ t(($m->attrs['M11ProbeSession']['retestCount']??0)===1,
 t(str_starts_with($m->RetestM11Regulator(), 'ABBRUCH'),
   'third test attempt is prohibited');
 echo "PASS one explicit retry, command-error diagnostics, no unlimited attempts\n";
-echo "ALL EIGHT M11 PROBE TEST CASES PASSED\n";
+// Return-value rejection must prevent a false-positive passed state.
+$m=initProbe();
+$GLOBALS['probeRejectReleaseCommand']=true;
+$m->StartM11RegulatorTest();
+for($i=0;$i<5;$i++){$m->M11ProbeWorker();}
+t(($m->attrs['M11ProbeSession']['phase']??'')==='failed_safe',
+  'rejected native release prevents a false-positive passed state');
+t(str_contains($m->M11ProbeStatus(), 'Freigabebefehl angenommen: NEIN'),
+  'native release false must be exposed');
+echo "PASS rejected release never counts as successful regulator test\n";
+echo "ALL NINE M11 PROBE TEST CASES PASSED\n";
