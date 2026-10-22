@@ -499,3 +499,19 @@ Nach der Aktualisierung erzeugt dieselbe LCNClimateControl-Instanz genau **eine*
 **Nutzung:** Im Objektbaum unter `Heizen / Kuehlen` die Variable
 `Senden an ChatGPT` öffnen, ihren kompletten Inhalt kopieren und in
 ChatGPT einfügen. Nach weiteren Messungen wird die Variable automatisch aktualisiert.
+
+
+## v0.3.11 Build 26 – „Senden an ChatGPT“ bleibt auf „Nie“
+
+Fehler in 0.3.10 behoben: `LCNClimateControl` verwendet `IPSModuleStrict`.
+Modulintern registrierte Variablen sind schreibgeschuetzt; die globale
+Funktion `SetValueString` darf sie nicht veraendern. Die Diagnose
+schreibt daher jetzt korrekt per `$this->SetValue('ChatGPTDiagnostic', $content)`.
+Der automatische 60-Sekunden-Timer und das sofortige Update nach
+`ApplyChanges` bleiben bestehen. Es wird weiterhin nur eine
+String-Variable erstellt und es werden keine LCN-Kommandos gesendet.
+Ein Regressionstest verbietet jetzt die globale Schreibfunktion bewusst.
+
+Nach Modulupdate sollte `Senden an ChatGPT` innerhalb von ApplyChanges
+sofort einen Bericht erhalten und dann automatisch minuetlich aktualisiert
+werden. Heizungs- und Kuehlungssteuerung sind unveraendert.

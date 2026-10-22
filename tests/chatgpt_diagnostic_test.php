@@ -10,7 +10,11 @@ $GLOBALS['writes']=[];
 function IPS_VariableExists(int $id):bool{return isset($GLOBALS['feedback'][$id]) || $id===999;}
 function IPS_GetVariable(int $id):array{return $GLOBALS['feedback'][$id];}
 function GetValue(int $id):mixed{return $GLOBALS['feedback'][$id]['Value']??null;}
-function SetValueString(int $id,string $value):void{$GLOBALS['writes'][]=[$id,$value];}
+// Global write intentionally forbidden for IPSModuleStrict: the test
+// must fail if production code reintroduces SetValueString().
+function SetValueString(int $id,string $value):void{
+    throw new RuntimeException('IPSModuleStrict eigene Variable ist schreibgeschuetzt');
+}
 require __DIR__.'/../LCNClimateControl/ChatGPTDiagnostic.php';
 class DiagnosticProbe {
     use LCNClimateChatGPTDiagnostic;
@@ -20,6 +24,7 @@ class DiagnosticProbe {
     public int $mode=0;
     public array $locks=[];
     public array $errors=[];
+    public bool $throwOnFallback = false;
     private function GetMode():int{return $this->mode;}
     private function GetRuntimeRooms():array{return [
         ['Name'=>'EG Büro','TargetVariable'=>100,'SendModule'=>37617,'TemperatureVariable'=>400],
@@ -28,7 +33,7 @@ class DiagnosticProbe {
     private function ReadJsonAttribute(string $name):array{
         return $name==='DirectCoolingLocks'?$this->locks:[];
     }
-    private function DirectCoolingFallbacks():array{return ['200'=>['kind'=>'legacy','reason'=>'Sperrfeedback zu alt']];}
+    private function DirectCoolingFallbacks():array{if($this->throwOnFallback){throw new RuntimeException('Demo-Diagnosefehler');}return ['200'=>['kind'=>'legacy','reason'=>'Sperrfeedback zu alt']];}
     private function GetCurrentJob():?array{return null;}
     private function GetQueue():array{return [];}
     private function IsBusy():bool{return $this->busy;}
@@ -55,6 +60,12 @@ class DiagnosticProbe {
     private function GetRoomError(int $id):string{return $this->errors[$id]??'';}
     private function ReadAttributeString(string $name):string{return '';}
     private function GetIDForIdent(string $ident):int{return $ident==='ChatGPTDiagnostic'?999:0;}
+    private function SetValue(string $ident, mixed $value):void{
+        if ($ident !== 'ChatGPTDiagnostic') {
+            throw new RuntimeException('unexpected module variable Ident');
+        }
+        $GLOBALS['writes'][]=[$ident,(string)$value];
+    }
     private function SendDebug(string $n,string $message,int $format):void{}
 }
 function ensure(bool $ok,string $message):void{
@@ -78,9 +89,9 @@ ensure(str_contains($text,'KEINE LCN-Befehle gesendet'),
     'state passive no active bus tests');
 $p->UpdateChatGPTDiagnostic();
 ensure(count($GLOBALS['writes'])===1 &&
-    $GLOBALS['writes'][0][0]===999 &&
+    $GLOBALS['writes'][0][0]==='ChatGPTDiagnostic' &&
     str_contains($GLOBALS['writes'][0][1],'OG Bad'),
-    'single diagnostic string is written once');
+    'IPSModuleStrict must write one diagnostic string through internal SetValue');
 $p->mode=1;
 $p->locks=['100'=>'uncertain'];
 $p->errors=[100=>'Freigabe nicht bestaetigt'];
@@ -89,4 +100,11 @@ ensure(str_contains($text,'KUEHLEN') &&
     str_contains($text,'GESTOPPT/PRUEFEN') &&
     str_contains($text,'FEHLER: Freigabe nicht bestaetigt'),
     'cooling fault and persistent uncertain lock');
-echo "PASS: one automatically copyable read-only diagnostic variable with room, feedback, fallback and fault snapshots\n";
+$GLOBALS['writes']=[];
+$p->throwOnFallback=true;
+$p->UpdateChatGPTDiagnostic();
+ensure(count($GLOBALS['writes'])===1 &&
+    $GLOBALS['writes'][0][0]==='ChatGPTDiagnostic' &&
+    str_contains($GLOBALS['writes'][0][1],'DIAGNOSEFEHLER: Demo-Diagnosefehler'),
+    'failed generation must write visible error, not leave variable at Never');
+echo "PASS: strict internal diagnostic writes and visible fallback on report generation errors\n";
