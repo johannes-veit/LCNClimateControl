@@ -121,8 +121,18 @@ trait LCNClimateCoolingDiscovery
             || (int) ($valueInfo['ConnectionID'] ?? 0) !== $sender) {
             return null;
         }
-        $unlocked = $this->AutoCoolingFindBoolean($valueParent, 'Entriegelt');
-        if ($relayStatus <= 0 || $unlocked <= 0) {
+        // Native IP-Symcon LCN Value: ObjectIdent=S1TargetLock.
+        // TRUE bedeutet REGLER GESPERRT (nicht entriegelt)!
+        $lockFeedback = $this->AutoCoolingFindBoolean($valueParent, 'S1TargetLock');
+        $lockedMeansTrue = true;
+        if ($lockFeedback <= 0) {
+            // Kompatibilitaet zu bewusst manuell benannter Rueckmeldung:
+            // "Entriegelt" TRUE = freigegeben. Niemals die Polaritaeten
+            // durcheinander interpretieren.
+            $lockFeedback = $this->AutoCoolingFindBoolean($valueParent, 'Entriegelt');
+            $lockedMeansTrue = false;
+        }
+        if ($relayStatus <= 0 || $lockFeedback <= 0) {
             return null;
         }
         if (!$this->AutoCoolingAutoPolarityConfirmed()) {
@@ -134,7 +144,8 @@ trait LCNClimateCoolingDiscovery
             'RelayUnit' => $relayUnit,
             'RelayChannel' => $channel,
             'RegulatorIndex' => 2, // S1, verified by the existing S1Target route.
-            'UnlockedVariable' => $unlocked,
+            'UnlockedVariable' => $lockFeedback,
+            'LockFeedbackIsLocked' => $lockedMeansTrue,
             'RelayStatusVariable' => $relayStatus,
             'OpenRelayOn' => $this->AutoCoolingOpenRelayOn(),
             'PolarityConfirmed' => true,
@@ -242,15 +253,21 @@ trait LCNClimateCoolingDiscovery
                     . ', Typ=' . $guid . ', Verbindung=#' . $connection
                     . ', erwartet LCN Value an Sender #' . $sender;
             }
-            $unlock = $this->AutoCoolingFindBoolean($parent, 'Entriegelt');
-            if ($unlock <= 0) {
+            $lock = $this->AutoCoolingFindBoolean($parent, 'S1TargetLock');
+            $feedbackName = 'S1TargetLock (TRUE=gesperrt)';
+            if ($lock <= 0) {
+                $lock = $this->AutoCoolingFindBoolean($parent, 'Entriegelt');
+                $feedbackName = 'Entriegelt (TRUE=freigegeben)';
+            }
+            if ($lock <= 0) {
                 return 'LCN-Value-Instanz #' . $parent
-                    . ' hat keine eindeutige Boolean-Rueckmeldung Entriegelt: '
+                    . ' hat keine eindeutige Boolean-Rueckmeldung S1TargetLock: '
                     . $this->AutoCoolingDescribeBoolChildren($parent);
             }
             return 'Alle Symcon-Instanzen gefunden: M' . $relayNo . '/R' . $channel
                 . ', Relais-Unit #' . $relayUnit . ', Relais-Status #' . $status
-                . ', Regler-Entriegelt #' . $unlock . '; Betriebsbereitschaft getrennt pruefen';
+                . ', Regler-' . $feedbackName . ' #' . $lock
+                . '; Funktion und Rueckmeldungsaktualisierung im realen LCN noch pruefen';
         } catch (Throwable $e) {
             return 'Lesefehler in der Instanzkonfiguration: ' . $e->getMessage();
         }
@@ -306,7 +323,9 @@ trait LCNClimateCoolingDiscovery
                     . ' -> Relais-Modul #' . (int) ($m['RelayModule'] ?? 0)
                     . ', Einzelrelais #' . (int) ($m['RelayUnit'] ?? 0)
                     . '/R' . (int) ($m['RelayChannel'] ?? 0)
-                    . ', Entriegelt #' . (int) ($m['UnlockedVariable'] ?? 0)
+                    . ', Regler-' . (((bool) ($m['LockFeedbackIsLocked'] ?? false))
+                        ? 'S1TargetLock (TRUE=gesperrt)' : 'Entriegelt (TRUE=freigegeben)')
+                    . ' #' . (int) ($m['UnlockedVariable'] ?? 0)
                     . ', Status #' . (int) ($m['RelayStatusVariable'] ?? 0)
                     . ': ' . ($this->DirectCoolingEligibility($room) === ''
                         ? 'Direktsteuerung bereit' : 'alte A7/A8-Steuerung');
