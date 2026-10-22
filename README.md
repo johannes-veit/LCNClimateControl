@@ -319,3 +319,39 @@ LCN-Firmware-Pruefung**.
 Mechanischer Taupunktschutz vor Freigabe realen Kuehlwassers erforderlich.
 17 Grad C Mindest-Vorlauf allein ist nicht ausreichend. Der Hinweis
 bleibt in der Kachel; Schutzkette nicht auf Symcon verlaengern.
+
+
+## v0.3.6 Build 21 – Diagnostik der fehlenden Relais-Zuordnungen
+
+Ein Live-Bericht vom 22.10.2026 erkannte 11 korrekte LCN-Sendemodule
+und die folgenden S1Target Variablen, aber keinerlei native LCN-Relais-
+Rueckmeldezuordnungen. Alle Räume blieben auf dem bewährten A7/A8-Weg.
+
+Die Schaltlogik bleibt von 0.3.5 UNVERAENDERT. Neu ist die detaillierte
+read-only Fehlersuche pro Raum hinter dem bestehenden Konfigurationsknopf
+`LCN-Zuordnungen aus Symcon auslesen (nur Diagnose)`:
+- Prueft LCN-Sendeinstanz: Hardware-Target, Segment und Gateway.
+- Findet native Relais-Splitter M92/M192 exakt in demselben Segment/Gateway.
+- Zeigt ALLE LCN-Units und deren tatsaechliche Unit-/Channel-Konfiguration.
+- Unterscheidet fehlende Relay-Unit, falsche Unit-Konfiguration,
+  fehlenden Boolean-Status, fehlende LCN-Value-Verknuepfung und
+  fehlende Entriegelt-Rueckmeldung.
+- Es erfolgt KEINE automatische Aenderung an Symcon-Instanzen oder LCN.
+- Kein Statuswert in diesem Bericht darf eine wirkliche
+  Reglersperre oder den elektrischen Relaiszustand ersetzen.
+
+Symcon IDs aus dem bereits uebermittelten Bericht:
+EG Bad: Sender 15856 / S1Target 21099
+EG Buero: Sender 37617 / S1Target 34107
+EG Gaeste WC: Sender 57174 / S1Target 10099
+EG Kueche: Sender 30987 / S1Target 30507
+EG Schlafen: Sender 12826 / S1Target 29239
+EG Wohnen: Sender 37476 / S1Target 59161
+OG Ankleide / HWR: Sender 41134 / S1Target 58217
+OG Bad: Sender 32128 / S1Target 55084
+OG Flur: Sender 11331 / S1Target 15371
+OG Schlafen 1: Sender 13700 / S1Target 49519
+OG Schlafen 2: Sender 41951 / S1Target 34041
+
+Bestehende 0.2.10 Backup-Version bleibt unveraendert. Kein physischer
+Kuehlwasserbetrieb ohne unabhängige mechanische Taupunktsicherung.
