@@ -53,7 +53,15 @@ function IPS_ConnectInstance(int $id,int $parent):bool{$GLOBALS['instances'][$id
 function IPS_SetProperty(int $id,string $name,mixed $value):bool{$GLOBALS['configs'][$id][$name]=$value;return true;}
 function IPS_SetParent(int $id,int $parent):bool{return true;}
 function IPS_SetName(int $id,string $name):bool{return true;}
-function IPS_ApplyChanges(int $id):bool{return true;}
+function IPS_ApplyChanges(int $id):bool{
+    // The native LCN Unit creates its Boolean Status child when configured.
+    if ((int) ($GLOBALS['configs'][$id]['Unit']??-1)===2) {
+        $v=$id*10+1;
+        $GLOBALS['variables'][$v]=['VariableType'=>0,'Parent'=>$id,
+            'Name'=>'Status','Ident'=>'Status'];
+    }
+    return true;
+}
 function IPS_DeleteInstance(int $id):bool{unset($GLOBALS['instances'][$id],$GLOBALS['configs'][$id]);return true;}
 require __DIR__.'/../LCNClimateControl/CoolingDiscovery.php';
 class Probe{
