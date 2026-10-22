@@ -335,12 +335,16 @@ trait LCNClimateM11LockTest
                     && (int) (IPS_GetVariable($target)['VariableUpdated'] ?? 0)
                         > (int) ($p['releaseSent'] ?? PHP_INT_MAX)) {
                     $this->DirectCoolingSetLockState($target, '');
-                    if ((bool) ($p['lockConfirmed'] ?? false)) {
+                    // Successful status feedback alone is not evidence
+                    // that both native API calls were accepted.
+                    $allCommandsAccepted = (bool) ($p['lockCommandAccepted'] ?? false)
+                        && (bool) ($p['releaseCommandAccepted'] ?? false);
+                    if ($allCommandsAccepted && (bool) ($p['lockConfirmed'] ?? false)) {
                         $this->M11ProbeSetPhase($p, 'passed',
                             'ERFOLGREICH: M11 S1 gesperrt, entsperrt und S1Target erneut bestaetigt. Kein Relaisbefehl.');
                     } else {
                         $this->M11ProbeSetPhase($p, 'failed_safe',
-                            'SICHER FREIGEGEBEN, aber Sperre nicht bestaetigt. M11-Test NICHT bestanden.');
+                            'LCN meldet FREIGEGEBEN, aber Sperr-/Freigabe-API oder Sperrrueckmeldung nicht bestaetigt. M11-Test NICHT bestanden.');
                     }
                     $this->ClearRoomError($target);
                 } elseif (time() - (int) ($p['phaseSince'] ?? 0) >= 30) {
