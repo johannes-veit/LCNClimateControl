@@ -1662,9 +1662,11 @@ class LCNClimateControl extends IPSModuleStrict
                     $displayCooling = false;
                 } elseif ($effectiveType === 'direct_cool'
                     || $effectiveType === 'direct_recover') {
-                    // Neue Direktregelung: Benutzerwunsch waehrend der
-                    // Rueckmeldungsvorgänge anzeigen (busy bleibt aktiv).
+                    // Der Benutzerwunsch ist angenommen, wird aber noch
+                    // nicht als bestaetigter Relaiszustand behandelt.
                     $displayCooling = (bool) ($job['DesiredOpen'] ?? $displayCooling);
+                } elseif ($effectiveType === 'direct_emergency_close') {
+                    $displayCooling = false;
                 }
             }
         }
