@@ -556,3 +556,23 @@ nach Abschluss der vorherigen Bewegung wirksam werden; bei
 Sperrfehler nur NC-Relais AUS, kein blindes Entsperren.
 Die physische Taupunkt-Abschaltung im Kuehlkreis ist unabhaengig
 von dieser Bedienkorrektur weiterhin erforderlich.
+
+
+## v0.3.13 Build 28 – Fehlgeschlagene Kuehlauftraege nicht automatisch wiederholen
+
+Sicherheitskorrektur der Auftragswarteschlange: Falls ein Kuehl-Stellauftrag
+aufgrund fehlender oder unplausibler LCN-Rueckmeldung scheitert, wird ein
+waehrend der Fahrt vorgemerkter weiterer Benutzerwunsch **nicht** automatisch
+als neuer Stellauftrag gestartet. Andernfalls konnten immer neue A7/A8-Fahrten
+mit demselben Rueckmeldefehler entstehen. Der Raum behält seinen zuletzt
+bestaetigten Kuehlzustand und zeigt den Fehler; zur erneuten Ansteuerung ist
+ein neuer ausdruecklicher Bedienwunsch notwendig.
+
+Bei erfolgreich quittierten Fahrten bleibt die in v0.3.12 eingefuehrte
+Last-Request-Wins-Warteschlange unveraendert. Andere Raeume laufen unabhaengig
+weiter. Keine neuen IP-Symcon-Variablen, keine neuen LCN-Kommandotypen,
+keine Aenderung an GT8, Heiz-Sollwerten oder S1Target-Pruefung.
+
+Quellcodekontrolle durchgefuehrt; ein echter Test an der SymBox/LCN-Hardware
+ist weiterhin erforderlich. Die mechanische Taupunktsicherung ist fuer
+reale Kuehlung weiterhin unverzichtbar.
