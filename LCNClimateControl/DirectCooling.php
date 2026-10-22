@@ -597,13 +597,16 @@ trait LCNDirectCooling
                 $progress = is_array($tracker[$key] ?? null) ? $tracker[$key] : [];
                 $sentAt = (int) ($progress['sentAt'] ?? 0);
                 $proofs = (int) ($progress['proofs'] ?? 0);
+                $priorUpdated = (int) ($progress['priorUpdated'] ?? 0);
                 if ($sentAt > 0) {
                     try {
                         // Strictly AFTER our last explicit request; the old
                         // report's 80s-old snapshots are never sufficient.
-                        $fresh = (int) (IPS_GetVariable($lockID)['VariableUpdated'] ?? 0) > $sentAt
-                            && (int) (IPS_GetVariable($relayID)['VariableUpdated'] ?? 0) > $sentAt
-                            && (int) (IPS_GetVariable($target)['VariableUpdated'] ?? 0) > $sentAt;
+                        $lockUpdated = (int) (IPS_GetVariable($lockID)['VariableUpdated'] ?? 0);
+                        $relayUpdated = (int) (IPS_GetVariable($relayID)['VariableUpdated'] ?? 0);
+                        $targetUpdated = (int) (IPS_GetVariable($target)['VariableUpdated'] ?? 0);
+                        $fresh = min($lockUpdated, $relayUpdated, $targetUpdated)
+                            > max($sentAt, $priorUpdated);
                         if ($fresh) {
                             $isFree = $this->DirectCoolingRegulatorUnlocked($m);
                             $relayOff = (bool) GetValue($relayID)
@@ -629,7 +632,10 @@ trait LCNDirectCooling
                                 $this->PushVisualizationRowByTarget($target);
                                 continue;
                             }
-                            $tracker[$key] = ['sentAt' => 0, 'proofs' => $proofs];
+                            $tracker[$key] = [
+                                'sentAt' => 0, 'proofs' => $proofs,
+                                'priorUpdated' => max($lockUpdated, $relayUpdated, $targetUpdated)
+                            ];
                             continue;
                         }
                     } catch (Throwable) {
@@ -648,7 +654,10 @@ trait LCNDirectCooling
                     $time = time();
                     if ((bool) LCN_RequestRead($valueParent)
                         && (bool) LCN_RequestStatus((int) $m['RelayModule'])) {
-                        $tracker[$key] = ['sentAt' => $time, 'proofs' => $proofs];
+                        $tracker[$key] = [
+                            'sentAt' => $time, 'proofs' => $proofs,
+                            'priorUpdated' => $priorUpdated
+                        ];
                     }
                 } catch (Throwable $e) {
                     $this->SendDebug('Uncertain-Reconcile', $e->getMessage(), 0);
