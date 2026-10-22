@@ -24,6 +24,7 @@ class DiagnosticProbe {
     public int $mode=0;
     public array $locks=[];
     public array $errors=[];
+    public bool $throwOnFallback = false;
     private function GetMode():int{return $this->mode;}
     private function GetRuntimeRooms():array{return [
         ['Name'=>'EG Büro','TargetVariable'=>100,'SendModule'=>37617,'TemperatureVariable'=>400],
@@ -32,7 +33,7 @@ class DiagnosticProbe {
     private function ReadJsonAttribute(string $name):array{
         return $name==='DirectCoolingLocks'?$this->locks:[];
     }
-    private function DirectCoolingFallbacks():array{return ['200'=>['kind'=>'legacy','reason'=>'Sperrfeedback zu alt']];}
+    private function DirectCoolingFallbacks():array{if($this->throwOnFallback){throw new RuntimeException('Demo-Diagnosefehler');}return ['200'=>['kind'=>'legacy','reason'=>'Sperrfeedback zu alt']];}
     private function GetCurrentJob():?array{return null;}
     private function GetQueue():array{return [];}
     private function IsBusy():bool{return $this->busy;}
@@ -99,4 +100,11 @@ ensure(str_contains($text,'KUEHLEN') &&
     str_contains($text,'GESTOPPT/PRUEFEN') &&
     str_contains($text,'FEHLER: Freigabe nicht bestaetigt'),
     'cooling fault and persistent uncertain lock');
-echo "PASS: one automatically copyable read-only diagnostic variable with room, feedback, fallback and fault snapshots\n";
+$GLOBALS['writes']=[];
+$p->throwOnFallback=true;
+$p->UpdateChatGPTDiagnostic();
+ensure(count($GLOBALS['writes'])===1 &&
+    $GLOBALS['writes'][0][0]==='ChatGPTDiagnostic' &&
+    str_contains($GLOBALS['writes'][0][1],'DIAGNOSEFEHLER: Demo-Diagnosefehler'),
+    'failed generation must write visible error, not leave variable at Never');
+echo "PASS: strict internal diagnostic writes and visible fallback on report generation errors\n";
