@@ -906,3 +906,55 @@ Regressionstest `test_m11_lock_probe.php` prueft die beiden
 750-ms-Sendeschleusen ohne reale Wartezeit durch einen
 `IPS_Sleep`-Mock. Ein Live-Test am LCN-Bus und ein GitHub-CI-
 Ergebnis muessen separat bestaetigt werden.
+
+
+## v0.3.21 Build 37 – M11 native RequestAction als isolierter Funktionstest
+
+Bestätigtes Live-Ergebnis am 22.10.2026, Symcon 9:
+`RequestAction(46746, false)` meldete TRUE.
+Vorher/Nachher `S1TargetLock #46746 = FALSE (FREI)`;
+die native Standardaktion der Boolean-Variablen war
+`#19003 – LCN Variable Soll-Temperatur`. Im Gegensatz dazu
+hatten `LCN_LockTargetValue(#37617,2)` und
+`LCN_ReleaseTargetValue(#37617,2)` jeweils FALSE geliefert.
+WICHTIG: Die erfolgreiche Anforderung der Freigabe am
+bereits freigegebenen Regler ist KEIN Sperrtest.
+
+Neue **ausdrücklich aufzurufende** Aktion für M11:
+"M11 EG Büro: RequestAction-Sperrtest EINMALIG starten (mit automatischer Freigabe)"
+
+- Aktivierbar ausschliesslich nach dem bereits protokollierten
+  `failed_safe` und dem einen vorherigen nativen Wiederholungstest.
+  Danach wird der RequestAction-Test nur EINMAL zugelassen.
+- Vorbedingung: ruhender Heizbetrieb, freigegebener M11,
+  M92 R1 elektrisch AUS, frischer Sollwert und aktuelle Statuswerte,
+  valide LCN-Hardwareadresse 11 sowie native S1TargetLock-
+  Variable mit genau der nachgewiesenen Standardaktion #19003.
+- Sendet `RequestAction(#46746, true)` zum SPERREN und nach
+  bestätigter Sperre sofort `RequestAction(#46746, false)`
+  zur FREIGABE. Auch bei abgelehntem/ungewissen Sperrbefehl
+  erfolgt der Freigabeversuch.
+- Pro Busanfrage mindestens 750ms Abstand über das bereits
+  verwendete globale Sendesemaphor. Es werden keine Heiz-Sollwerte,
+  Relais, Kühlfreigaben oder weiteren Raummodule angesteuert.
+- Test besteht nur bei vom API angenommenem Sperr- und
+  Freigabebefehl sowie später gemeldeten S1TargetLock TRUE,
+  S1TargetLock FALSE und frischem plausiblen S1Target.
+- Maximal 12 Sekunden auf Sperre warten, danach Freigabephase.
+  Bei unbekannter Freigabe bis zu 3 Versuche, Warnung und
+  Not-Freigabeknopf für M11. Der persistente Testzustand
+  ueberlebt einen Modulneustart (ausschliesslich mit Freigabe).
+- Der Statusknopf nennt nun den tatsaechlich verwendeten
+  Befehlspfad und die API-Rueckgaben.
+- Selbst bei bestandenem M11-Test wird die PRODUKTIVE
+  Direktkuehlung weiterhin nicht freigegeben: Die bisherige
+  Controllerfunktion benutzt unveraendert die fehlgeschlagene
+  native LCN-API und bei den anderen zehn Modulen liegt noch
+  keine kontrollierte Funktionsfreigabe vor. Die bisherige
+  Heizsteuerung bleibt uneingeschraenkt.
+
+Regressionsszenarien für positive und fehlerhafte
+RequestAction-Aufrufe wurden als Mocktests hinzugefügt.
+Kein realer Sperr- oder Freigabebefehl wurde vom Entwickler
+an die Busanlage gesendet. Ein tatsächlich bestandener
+CI-Lauf und der reale M11-Sperrtest stehen noch aus.
