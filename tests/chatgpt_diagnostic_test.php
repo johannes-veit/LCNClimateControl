@@ -23,6 +23,8 @@ class DiagnosticProbe {
     public bool $busy=false;
     public int $mode=0;
     public array $locks=[];
+    public array $pendingCooling=[];
+    private function GetPendingCoolingRequests():array{return $this->pendingCooling;}
     public array $errors=[];
     public bool $throwOnFallback = false;
     private function GetMode():int{return $this->mode;}
@@ -107,4 +109,10 @@ ensure(count($GLOBALS['writes'])===1 &&
     $GLOBALS['writes'][0][0]==='ChatGPTDiagnostic' &&
     str_contains($GLOBALS['writes'][0][1],'DIAGNOSEFEHLER: Demo-Diagnosefehler'),
     'failed generation must write visible error, not leave variable at Never');
-echo "PASS: strict internal diagnostic writes and visible fallback on report generation errors\n";
+$p->throwOnFallback=false;
+$p->pendingCooling=['200'=>false];
+$text=$p->BuildChatGPTDiagnosticReport();
+ensure(str_contains($text,'NEUER SCHALTWUNSCH VORGEMERKT: NICHT KUEHLEN') &&
+    str_contains($text,'Kuehlzustand bestaetigt AN'),
+    'pending OFF and electrically confirmed previous ON must be shown separately');
+echo "PASS: strict diagnostic writes, visible failures and pending cooling intent\n";
