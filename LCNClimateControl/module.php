@@ -1043,8 +1043,14 @@ class LCNClimateControl extends IPSModuleStrict
         if (in_array((string) ($Job['Type'] ?? ''), ['direct_recover','direct_release'], true)) {
             // Kein weiterer Auftrag bei unklarer Reglerfreigabe.
             $this->ConsumePendingCoolingRequest($targetID);
-        } elseif ($this->DirectCoolingLockState($targetID) === '') {
-            $this->ApplyPendingCoolingRequest($targetID);
+        } else {
+            // Nach einem fehlgeschlagenen Stellauftrag NIEMALS automatisch
+            // einen zwischenzeitlich vorgemerkten Folgebefehl ausloesen.
+            // Insbesondere bei ausbleibender Rueckmeldung koennte sonst
+            // derselbe Fehler endlos neue TS-Fahrten starten.
+            // Der bisher bestaetigte Zustand und die Fehlermeldung bleiben
+            // sichtbar; eine neue Bedienaktion ist erforderlich.
+            $this->ConsumePendingCoolingRequest($targetID);
         }
         $this->RefreshRuntimeStatus();
 
