@@ -355,3 +355,42 @@ OG Schlafen 2: Sender 41951 / S1Target 34041
 
 Bestehende 0.2.10 Backup-Version bleibt unveraendert. Kein physischer
 Kuehlwasserbetrieb ohne unabhängige mechanische Taupunktsicherung.
+
+
+## v0.3.7 Build 22: fehlende LCN-Relais-Units per Knopfdruck vorbereiten
+
+Der Diagnosebericht von 22.10.2026 bestaetigt beide vorhandenen
+Symcon-LCN-Module M92 (Instanz #36930) und M192 (Instanz #25610),
+aber NULL native Relais-Units an diesen Modulen. Alle elf Raeume bleiben
+zunaechst korrekt auf A7/A8.
+
+Die bestaetigte 11-fache LP3-Relaiszuordnung ist fest im Modul vorhanden.
+Im Modul-Konfigurationsfenster bei Betriebsart HEIZEN und ohne laufende
+Schaltauftraege den neuen Knopf
+**„Fehlende 11 LCN-Relais-Units anlegen“** betaetigen.
+
+Sicherheitsregeln des Knopfes:
+- Vollstaendige read-only Vorpruefung aller vorhandenen Sender und
+  korrespondierenden Relaismodule, Segment/Gateway/Hardware-Target.
+- Neue native LCN-Unit-Instanzen nur fuer tatsaechlich fehlende
+  Einzelrelais, maximal 11; Eigenschaft Unit=2, Channel=R1..R6,
+  Verbindung zu M92/M192 (die vorhandenen Splitter bleiben unveraendert).
+- Neue Instanzen befinden sich gesammelt unter dem Klimamodul,
+  keine elf neuen Kategorien und kein Eingriff in andere Module.
+- Keine LCN-Schaltkommandos oder Reglersperren bei der Vorbereitung.
+- Bei laufendem Auftrag, KUEHLEN oder gesperrtem Regler: Abbruch.
+- Bei Fehlern: neu erzeugte Units werden zurueckzusetzen versucht;
+  vorhandene Instanzen werden nie geloescht oder umgeschrieben.
+- Wiederholtes Klicken legt keine Duplikate an.
+
+Im Anschluss den bestehenden Button „LCN-Zuordnungen aus Symcon auslesen“
+benutzen. Die Rueckmeldung „Status“ der Relais wird durch die native
+LCN-Unit zur Verfuegung gestellt. Ob die native „Entriegelt“-Boolean-
+Variable auf den vorhandenen LCN-Value-Instanzen existiert, muss der
+neue Diagnosebericht erst nachweisen.
+
+**Keine automatische hardwareseitige Schaltfreigabe durch das
+Einrichten von Symcon-Instanzen.** Die echte Regler-Sperr-/Freigabe-
+Funktion bleibt bis zum Praxistest nicht bestaetigt. Rueckfall auf
+alte A7/A8-Steuerung bleibt erhalten, sofern keine direkte
+Reglersperre erfolgt ist.
