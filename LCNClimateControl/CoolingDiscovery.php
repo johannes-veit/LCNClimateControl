@@ -337,6 +337,155 @@ trait LCNClimateCoolingDiscovery
     }
 
     /**
+     * Resolve only the native regulator feedback belonging to this room.
+     * This does NOT test LCN-PRO's "Regler-Sperrung erlaubt" setting.
+     */
+    private function AutoCoolingLockFeedbackForRoom(array $room): ?array
+    {
+        $target = (int) ($room['TargetVariable'] ?? 0);
+        $sender = (int) ($room['SendModule'] ?? 0);
+        if ($target <= 0 || !IPS_VariableExists($target)) {
+            return null;
+        }
+        $valueInstance = (int) IPS_GetParent($target);
+        if ($valueInstance <= 0 || !IPS_InstanceExists($valueInstance)) {
+            return null;
+        }
+        $instance = IPS_GetInstance($valueInstance);
+        if (strcasecmp((string) ($instance['ModuleInfo']['ModuleID'] ?? ''),
+                self::LCN_VALUE_MODULE_ID) !== 0
+            || (int) ($instance['ConnectionID'] ?? 0) !== $sender) {
+            return null;
+        }
+        $native = $this->AutoCoolingFindBoolean($valueInstance, 'S1TargetLock');
+        if ($native > 0) {
+            return [
+                'id' => $native,
+                'valueInstance' => $valueInstance,
+                'lockedWhenTrue' => true,
+                'type' => 'S1TargetLock'
+            ];
+        }
+        $alternative = $this->AutoCoolingFindBoolean($valueInstance, 'Entriegelt');
+        if ($alternative > 0) {
+            return [
+                'id' => $alternative,
+                'valueInstance' => $valueInstance,
+                'lockedWhenTrue' => false,
+                'type' => 'Entriegelt'
+            ];
+        }
+        return null;
+    }
+
+    /**
+     * Passive snapshot of native LCN lock feedback. NEVER infers that
+     * "lock permitted" equals "not presently locked".
+     */
+    public function CoolingLockStatusReport(): string
+    {
+        $lines = [
+            'LCN-Regler 1 / S1 – SPERRSTATUS (NUR LESEN)',
+            'S1TargetLock: AN = derzeit gesperrt, AUS = derzeit freigegeben.',
+            'LCN-PRO: "Regler-Sperrung erlaubt/verboten" ist aus dem Symcon-Status NICHT auslesbar.',
+            'Der gemeldete Zustand ist keine Bestaetigung der Sperrerlaubnis.',
+            'Es wird weder ein Regler gesperrt noch ein Relais geschaltet.'
+        ];
+        foreach ($this->GetRuntimeRooms() as $room) {
+            $name = (string) ($room['Name'] ?? 'Raum');
+            try {
+                $entry = $this->AutoCoolingLockFeedbackForRoom($room);
+                if ($entry === null) {
+                    $lines[] = $name . ': keine eindeutige native Regler-Rueckmeldung vorhanden.';
+                    continue;
+                }
+                $id = (int) $entry['id'];
+                $data = IPS_GetVariable($id);
+                $updated = (int) ($data['VariableUpdated'] ?? 0);
+                if ($updated <= 0) {
+                    $lines[] = $name . ': ' . $entry['type'] . ' #' . $id
+                        . ' = NICHT BESTAETIGT (noch keine Rueckmeldung).'
+                        . ' Sperrung in LCN-PRO erlaubt: NICHT AUSBLESBAR.';
+                    continue;
+                }
+                $raw = (bool) GetValue($id);
+                $locked = (bool) ($entry['lockedWhenTrue'] ?? false) ? $raw : !$raw;
+                $age = max(0, time() - $updated);
+                $lines[] = $name . ': ' . $entry['type'] . ' #' . $id
+                    . ' = ' . ($raw ? 'AN' : 'AUS')
+                    . ' -> ' . ($locked ? 'GESPERRT' : 'FREIGEGEBEN')
+                    . '; letzte Aktualisierung ' . date('d.m.Y H:i:s', $updated)
+                    . ' (' . $age . ' s alt). '
+                    . ($age > 300 ? 'ACHTUNG: Rueckmeldung veraltet. ' : '')
+                    . 'Sperrung in LCN-PRO erlaubt: NICHT AUSBLESBAR.';
+            } catch (Throwable $e) {
+                $lines[] = $name . ': Status-Lesefehler: ' . $e->getMessage();
+            }
+        }
+        return implode("\n", $lines);
+    }
+
+    /**
+     * Explicit BUS READ ONLY: ask native LCN Value instances to refresh
+     * Targets and their lock status. DOES NOT write any configuration,
+     * change setpoints, lock regulators or switch relays.
+     */
+    public function RequestCoolingLockRead(): string
+    {
+        if (!IPS_FunctionExists('LCN_RequestRead')) {
+            return 'ABBRUCH: LCN_RequestRead ist nicht verfuegbar.';
+        }
+        if ($this->IsBusy()) {
+            return 'ABBRUCH: Heiz-/Kuehlauftrag laeuft; bitte danach erneut abfragen.';
+        }
+        $sent = 0;
+        $errors = [];
+        $seen = [];
+        foreach ($this->GetRuntimeRooms() as $room) {
+            $name = (string) ($room['Name'] ?? 'Raum');
+            try {
+                $entry = $this->AutoCoolingLockFeedbackForRoom($room);
+                if ($entry === null) {
+                    $errors[] = $name . ': keine native Regler-Rueckmeldung/LCN-Value-Instanz.';
+                    continue;
+                }
+                $id = (int) $entry['valueInstance'];
+                if (isset($seen[$id])) {
+                    continue;
+                }
+                $seen[$id] = true;
+                if (!IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 2000)) {
+                    $errors[] = $name . ': LCN-Bus durch anderen Auftrag belegt.';
+                    continue;
+                }
+                try {
+                    if ((bool) LCN_RequestRead($id)) {
+                        $sent++;
+                    } else {
+                        $errors[] = $name . ': LCN-Leseanfrage fehlgeschlagen.';
+                    }
+                } finally {
+                    IPS_SemaphoreLeave(self::GLOBAL_LCN_SEND_SEMAPHORE);
+                }
+                // Keep the shared LCN bus responsive. Eleven requests ~= 1.3 s.
+                IPS_Sleep(120);
+            } catch (Throwable $e) {
+                $errors[] = $name . ': ' . $e->getMessage();
+            }
+        }
+        $lines = [
+            'LCN-Regler: ' . $sent . ' reine Leseanfragen versendet (von maximal 11).',
+            'KEINE Reglersperre, Freigabe oder Relaisschaltung wurde ausgeloest.',
+            'Bitte anschliessend "LCN-Reglersperren: aktuellen Status anzeigen" anklicken.',
+            'Die LCN-PRO-Einstellung "Sperren erlaubt/verboten" kann damit NICHT ausgelesen werden.'
+        ];
+        foreach ($errors as $error) {
+            $lines[] = $error;
+        }
+        return implode("\n", $lines);
+    }
+
+    /**
      * Optional, explicit one-click preparation. No existing instance/property
      * is modified and NO LCN relay or regulator command is sent.
      * Creates only missing native LCN relay units, idempotently.

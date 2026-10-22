@@ -429,3 +429,44 @@ EG Bad 19580; EG Buero 46746; EG Gaeste WC 32130;
 EG Kueche 53830; EG Schlafen 18533; EG Wohnen 38100;
 OG Ankleide/HWR 24239; OG Bad 59442; OG Flur 31648;
 OG Schlafen 1 46283; OG Schlafen 2 33374.
+
+
+## v0.3.9 Build 24 – Reglersperre ohne Eingriff lesen
+
+Die Regelung unterscheidet drei Sachverhalte strikt:
+1. **Aktuelle Sperrung:** `S1TargetLock` an der vorhandenen nativen
+   LCN-Value-Instanz; TRUE=gesperrt, FALSE=freigegeben.
+2. **Aktualitaet:** `VariableUpdated` zeigt, wie alt die empfangene
+   Rueckmeldung ist. Ohne Aktualisierung kann der Zustand NICHT
+   sicher aus einer vorgabemaessigen Boolean-Variable abgeleitet werden.
+3. **LCN-PRO-Option „Regler-Sperrung erlaubt/verboten“:** Dieser
+   Konfigurationsparameter ist ueber die dokumentierte IP-Symcon
+   LCN-Leseschnittstelle **nicht auslesbar**. „Regler gerade frei“
+   ist kein Nachweis der Erlaubnis.
+
+Neue Schaltflaechen im Modul:
+- `LCN-Reglersperren: aus dem LCN-Bus abfragen (nur Leseanfragen)`:
+  sendet maximal 11 reine native `LCN_RequestRead`-Anfragen
+  an die bereits vorhandenen Value-Instanzen. Mit kurzem Bus-Abstand,
+  ohne Reglersperre, Sollwert- oder Relaisbefehl.
+- `LCN-Reglersperren: Zustand und Aktualisierung aller 11 Räume anzeigen`:
+  liefert pro Raum den aktuellen Boolean-Rueckmeldestand, ID,
+  gemeldete Bedeutung, Zeitstempel, Alter sowie einen deutlichen
+  „Sperrung erlaubt: nicht auslesbar“-Hinweis.
+  Ohne Status-/Verbindungsnachweis oder bei fehlender
+  Erstmeldung wird der Zustand als unbekannt behandelt.
+
+Das vorhandene Projekt `JV_2025_Test EG Kamin nur an wenn sonst alles aus.lp3`
+enthielt 11 konfigurierte Regler; die exakte herstellerspezifische
+Bitzuordnung des Parameters „Sperrung erlaubt“ wurde bislang nicht
+sicher dekodiert. Eine Offline-Projektdatei ist ohnehin kein
+garantierter Nachweis fuer den aktuellen Zustand auf dem LCN-Bus.
+
+Die Option selbst laesst sich in LCN-PRO am entsprechenden Regler
+als „Regler-Sperrung erlaubt/verboten“ kontrollieren. Ob die
+laufende Firmware die Sperre und Rueckkehr in die Heizregelung
+sauber verarbeitet, kann nur ein kontrollierter Funktionstest
+bestimmen. Die normale A7/A8-Regelung bleibt unveraendert.
+
+Kein Hardware- oder Software-Freigabehinweis dieses Berichts
+ersetzt den unabhängigen mechanischen Taupunktschutz.
