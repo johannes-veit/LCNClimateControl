@@ -55,7 +55,15 @@ function LCN_ReleaseTargetValue(int $sender, int $idx): bool
     }
     return !$GLOBALS['probeRejectReleaseCommand'];
 }
-function LCN_RequestRead(int $id): bool { return true; }
+function LCN_RequestRead(int $id): bool
+{
+    if ($id === 19003) {
+        // Independent mock bus-status response, after RequestAction.
+        $GLOBALS['probeVars'][46746]['VariableUpdated'] = time();
+        $GLOBALS['probeVars'][34107]['VariableUpdated'] = time();
+    }
+    return true;
+}
 function RequestAction(int $variableId, bool $requested): bool
 {
     if ($variableId !== 46746) { throw new RuntimeException('wrong lock variable'); }
@@ -262,13 +270,23 @@ $m->attrs['M11ProbeSession']=['phase'=>'failed_safe','retestCount'=>1,
     'lockConfirmed'=>false,'lockCommandAccepted'=>false];
 t(str_contains($m->StartM11ViaActionTest(),'RequestAction(#46746, true/false)'),
     'action test enabled only following the native API failure');
-for($i=0;$i<5;$i++){$m->M11ProbeWorker();}
+$m->M11ProbeWorker(); // Send RequestAction(true)
+sleep(1);             // Real timer would run on the following second
+$m->M11ProbeWorker(); // Issue independent bus read
+$m->M11ProbeWorker(); // Confirm fresh locked state
+$m->M11ProbeWorker(); // Send RequestAction(false)
+sleep(1);             // Real timer would run on the following second
+$m->M11ProbeWorker(); // Issue independent bus read
+$m->M11ProbeWorker(); // Confirm fresh unlocked state
+$m->M11ProbeWorker(); // Confirm fresh S1Target and finish
 t(($m->attrs['M11ProbeSession']['phase']??'')==='passed',
-    'action lock and release confirmed via feedback');
+    'action lock and release require independent bus-read confirmations');
 t($GLOBALS['probeCommands']===[['action_lock',46746],['action_release',46746]],
     'RequestAction test must never use broken native LCN calls');
-t($GLOBALS['probeSleeps']===[750,750],
-    'both action commands are paced 750ms');
+t(count($GLOBALS['probeSleeps'])>=4
+    && count(array_filter($GLOBALS['probeSleeps'],fn($ms)=>$ms===750))
+        ===count($GLOBALS['probeSleeps']),
+    'both RequestAction commands and independent status reads are paced 750ms');
 t(str_starts_with($m->StartM11ViaActionTest(),'ABBRUCH'),
     'only one action test allowed after successful attempt');
 echo "PASS RequestAction M11 one-time lock and release\n";
