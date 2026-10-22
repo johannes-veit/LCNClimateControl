@@ -1657,8 +1657,18 @@ class LCNClimateControl extends IPSModuleStrict
                     $displayCooling = true;
                 } elseif ($effectiveType === self::JOB_COOL_DOWN) {
                     $displayCooling = false;
+                } elseif ($effectiveType === 'direct_cool'
+                    || $effectiveType === 'direct_recover') {
+                    // Neue Direktregelung: Benutzerwunsch waehrend der
+                    // Rueckmeldungsvorgänge anzeigen (busy bleibt aktiv).
+                    $displayCooling = (bool) ($job['DesiredOpen'] ?? $displayCooling);
                 }
             }
+        }
+        $pendingCooling = $this->GetPendingCoolingRequests();
+        if (array_key_exists((string) $targetID, $pendingCooling)) {
+            $displayCooling = (bool) $pendingCooling[(string) $targetID];
+            $roomBusy = true;
         }
 
         return [
