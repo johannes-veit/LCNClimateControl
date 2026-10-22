@@ -337,6 +337,11 @@
     },
     {
       "type": "Button",
+      "caption": "M11 EG Büro: S1-Sperrtest einmalig wiederholen (sendet nur M11 S1-Sperre/Freigabe)",
+      "onClick": "echo LCNC_RetestM11Regulator($id);"
+    },
+    {
+      "type": "Button",
       "caption": "M11 EG Büro: Sperrtest-Status anzeigen (nur lesen)",
       "onClick": "echo LCNC_M11ProbeStatus($id);"
     },
