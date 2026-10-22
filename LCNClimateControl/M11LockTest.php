@@ -209,7 +209,7 @@ trait LCNClimateM11LockTest
             $this->SendDebug('M11-Sperrtest', $detail, 0);
             return false;
         } finally {
-            IPS_SemaphoreLeave(self::GLOBAL_LCN_SEND_SEMAPHORE);
+            $this->ReleaseLCNBusSlot();
         }
     }
 
@@ -232,7 +232,7 @@ trait LCNClimateM11LockTest
             } catch (Throwable $e) {
                 $this->SendDebug('M11-Leseanfrage', $e->getMessage(), 0);
             } finally {
-                IPS_SemaphoreLeave(self::GLOBAL_LCN_SEND_SEMAPHORE);
+                $this->ReleaseLCNBusSlot();
             }
         }
     }
