@@ -480,7 +480,7 @@ trait LCNClimateCoolingDiscovery
                     $lines[] = $name . ': Lesefehler: ' . $e->getMessage();
                 }
             } finally {
-                IPS_SemaphoreLeave(self::GLOBAL_LCN_SEND_SEMAPHORE);
+                $this->ReleaseLCNBusSlot();
             }
         }
         $next = ($cursor + $limit) % $count;
