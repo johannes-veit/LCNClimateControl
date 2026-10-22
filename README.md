@@ -625,3 +625,63 @@ und Zeilenumbrueche werden in der Ausgabe korrekt dargestellt.
 Quellcode- und Strukturpruefung bestanden; vollstaendige automatische
 PHP-Regressionssimulation und Hardwaretest stehen weiterhin aus.
 
+
+
+## v0.3.16 Build 32 – Isolierter M11-S1-Sperr- und Freigabetest
+
+Ausgangslage: Alle elf Raumregler melden derzeit FREI. Die Option
+"Sperrung zulassen" war in LCN-PRO urspruenglich bei keinem Regler
+aktiv. Der Anlagenbetreiber hat sie ausdruecklich NUR an M11 (EG
+Buero Saeule, 000,011) aktiviert und online gespeichert. Der reale
+Sperrbefehl wurde bisher nicht getestet.
+
+Neuer, explizit per Button zu startender **M11-Einzelraumtest**:
+- Nur im ruhenden HEIZBETRIEB, ohne laufende LCN-Auftraege oder offene
+  Sperrvormerkungen.
+- Verifiziert nativen Sender mit Hardwareziel M11, Reglerindex S1=2,
+  M92/R1, echte S1TargetLock-Variable am selben LCN-Value und
+  aktuelle Rueckmeldungen (<=120s) fuer freigegebenen Regler,
+  Relais AUS und plausiblen S1Target.
+- Fuehrt ausschliesslich LCN_LockTargetValue(M11,2) und danach
+  LCN_ReleaseTargetValue(M11,2) aus: **KEIN Relaisbefehl,
+  KEIN Sollwertbefehl, KEIN Kuehlwasserwechsel, KEIN Moduswechsel**.
+- Verlangt nach dem Sperrbefehl S1TargetLock=TRUE mit aktualisierter
+  Rueckmeldung. Auch bei Fehlschlag oder nicht eingetroffener
+  Rueckmeldung folgt der Freigabeversuch.
+- Meldet Erfolg nur bei nachfolgendem S1TargetLock=FALSE und
+  nach der Freigabe erneut empfangenem plausiblem S1Target.
+  Zwecks Sekunden-Zeitstempel muss die Freigabe-Rueckmeldung
+  **nach** der Befehlssekunde aktualisiert worden sein.
+- Rueckmeldezeitgrenze fuer Sperre 12 Sekunden; nach jeder
+  Freigabe hoechstens 10 Sekunden warten und maximal drei
+  Freigabeversuche. Ohne gueltige Rueckmeldung bleibt die
+  interne `uncertain`-Vormerkung erhalten und eine Warnung sichtbar.
+- Persistenter Sessionzustand: Ein Modul-Neustart oder ApplyChanges
+  im laufenden Test fuehrt NUR in die Freigabephase zurueck; ein
+  Sperrbefehl wird nicht wiederholt.
+- Bedienung am Modul #17597 ist waehrend des laufenden Tests
+  fuer Betriebsart und M11 gesperrt, die restlichen zehn Raeume
+  bleiben unabhaengig steuerbar. Kein Eingriff in den GT8.
+- Im Config-Fenster gibt es drei ausdrueckliche Aktionen:
+  1. "M11 EG Büro: S1-Sperrtest starten (kurz sperren, automatisch wieder freigeben)"
+  2. "M11 EG Büro: Sperrtest-Status anzeigen (nur lesen)"
+  3. "M11 EG Büro: NOT-FREIGABE erneut auslösen (nur S1 entsperren)"
+- Eine Zeile im bestehenden ChatGPT-Bericht meldet Testphase und
+  Freigabeergebnis. Keine neuen sichtbaren Symcon-Variablen.
+
+Vorgehen: Nur M11 darf die LCN-PRO-Option "Sperrung zulassen"
+besitzen. Heizbetrieb und hydraulische Heizfunktion muessen
+unveraendert bleiben. Keine reale Kuehlwasserfreigabe. Nach
+Installation zuerst mit dem Testbutton starten und anschliessend
+"Status anzeigen" auslesen; bei "manual_release_needed" sofort
+spezifische Not-Freigabe pruefen und LCN-PRO kontrollieren.
+"passed" beweist den beobachteten S1-Sperren-/Freigabe-Ablauf,
+aber keine unter Last gemessene Heizfunktion und keine
+Sperrerlaubnis der uebrigen zehn Module.
+
+Regressionstests fuer positive Freigabe, fehlende Rueckmeldung,
+Falschmodul, bestromtes Relais, Freigabefehler und Mode-Konflikt
+liegen unter tests/test_m11_lock_probe.php. Die GitHub-Action
+lintet PHP und ruft beide Mock-Testreihen auf. Ein realer
+LCN-Hardwaretest wurde noch nicht durchgefuehrt.
+
