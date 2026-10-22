@@ -281,18 +281,43 @@ trait LCNDirectCooling
         if (!$this->IsOperationalLCNModule($sender)) {
             return false;
         }
-        $index = (int) $m['RegulatorIndex'];
-        $name = $lock ? 'LCN_LockTargetValue' : 'LCN_ReleaseTargetValue';
-        if (!IPS_FunctionExists($name)
-            || !IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 2000)) {
+        // One validated native Symcon path for S1: the LCN Value
+        // instance owns the S1TargetLock standard action. The historical
+        // LCN_LockTargetValue / ReleaseTargetValue calls returned FALSE
+        // in the live M11 installation and must not be used for cooling.
+        $index = (int) ($m['RegulatorIndex'] ?? -1);
+        $target = (int) ($job['TargetVariable'] ?? 0);
+        $id = (int) ($m['UnlockedVariable'] ?? 0);
+        if ($index !== 2 || $target <= 0 || $id <= 0
+            || !(bool) ($m['LockFeedbackIsLocked'] ?? false)
+            || !IPS_FunctionExists('RequestAction')
+            || !IPS_VariableExists($id) || !IPS_VariableExists($target)) {
             return false;
         }
         try {
-            return $lock
-                ? (bool) LCN_LockTargetValue($sender, $index)
-                : (bool) LCN_ReleaseTargetValue($sender, $index);
+            $valueInstance = (int) IPS_GetParent($id);
+            $variable = IPS_GetVariable($id);
+            if ($valueInstance <= 0 || !IPS_InstanceExists($valueInstance)
+                || $valueInstance !== (int) IPS_GetParent($target)
+                || (int) ($variable['VariableType'] ?? -1) !== VARIABLETYPE_BOOLEAN
+                || (int) ($variable['VariableAction'] ?? 0) !== $valueInstance
+                || (string) (IPS_GetObject($id)['ObjectIdent'] ?? '') !== 'S1TargetLock'
+                || (int) (IPS_GetInstance($valueInstance)['ConnectionID'] ?? 0) !== $sender
+                || !$this->IsOperationalTargetVariable($target, $sender)) {
+                return false;
+            }
         } catch (Throwable $e) {
-            $this->SendDebug('DirectCooling', $name . ': ' . $e->getMessage(), 0);
+            $this->SendDebug('DirectCooling', 'S1 Standardaktion: ' . $e->getMessage(), 0);
+            return false;
+        }
+        if (!IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 2000)) {
+            return false;
+        }
+        try {
+            return (bool) RequestAction($id, $lock);
+        } catch (Throwable $e) {
+            $this->SendDebug('DirectCooling',
+                'S1 RequestAction #' . $id . ': ' . $e->getMessage(), 0);
             return false;
         } finally {
             $this->ReleaseLCNBusSlot();
@@ -621,7 +646,7 @@ trait LCNDirectCooling
         }
         $relayFunction = (int) ($m['RelayUnit'] ?? 0) > 0
             ? 'LCN_SwitchRelay' : 'LCN_SetRelay';
-        foreach (['LCN_LockTargetValue', 'LCN_ReleaseTargetValue', $relayFunction] as $fn) {
+        foreach (['RequestAction', $relayFunction] as $fn) {
             if (!IPS_FunctionExists($fn)) {
                 return 'LCN-Funktion ' . $fn . ' nicht vorhanden';
             }
