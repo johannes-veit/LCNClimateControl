@@ -317,6 +317,16 @@
     },
     {
       "type": "Button",
+      "caption": "LCN-Reglersperren: aus dem LCN-Bus abfragen (nur Leseanfragen)",
+      "onClick": "echo LCNC_RequestCoolingLockRead($id);"
+    },
+    {
+      "type": "Button",
+      "caption": "LCN-Reglersperren: Zustand und Aktualisierung aller 11 Räume anzeigen",
+      "onClick": "echo LCNC_CoolingLockStatusReport($id);"
+    },
+    {
+      "type": "Button",
       "caption": "Fehlende 11 LCN-Relais-Units anlegen (nur im Heizbetrieb, ohne Relais zu schalten)",
       "onClick": "echo LCNC_PrepareCoolingRelayUnits($id);"
     }
