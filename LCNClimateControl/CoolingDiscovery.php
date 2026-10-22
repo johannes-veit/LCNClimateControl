@@ -436,53 +436,62 @@ trait LCNClimateCoolingDiscovery
             return 'ABBRUCH: LCN_RequestRead ist nicht verfuegbar.';
         }
         if ($this->IsBusy()) {
-            return 'ABBRUCH: Heiz-/Kuehlauftrag laeuft; bitte danach erneut abfragen.';
+            return 'ABBRUCH: Heiz-/Kuehlauftrag laeuft; keine Busabfrage gestartet.';
         }
-        $sent = 0;
-        $errors = [];
+        // A synchronous LCN_RequestRead may block until its own backend timeout.
+        // Never expose the UI to an eleven-device synchronous burst.
+        // The next click continues from the last attempted device.
+        $rooms = $this->GetRuntimeRooms();
+        $items = [];
         $seen = [];
-        foreach ($this->GetRuntimeRooms() as $room) {
-            $name = (string) ($room['Name'] ?? 'Raum');
-            try {
-                $entry = $this->AutoCoolingLockFeedbackForRoom($room);
-                if ($entry === null) {
-                    $errors[] = $name . ': keine native Regler-Rueckmeldung/LCN-Value-Instanz.';
-                    continue;
-                }
-                $id = (int) $entry['valueInstance'];
-                if (isset($seen[$id])) {
-                    continue;
-                }
+        foreach ($rooms as $room) {
+            $entry = $this->AutoCoolingLockFeedbackForRoom($room);
+            $id = is_array($entry) ? (int) ($entry['valueInstance'] ?? 0) : 0;
+            if ($id > 0 && !isset($seen[$id])) {
                 $seen[$id] = true;
-                if (!IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 2000)) {
-                    $errors[] = $name . ': LCN-Bus durch anderen Auftrag belegt.';
-                    continue;
-                }
-                try {
-                    if ((bool) LCN_RequestRead($id)) {
-                        $sent++;
-                    } else {
-                        $errors[] = $name . ': LCN-Leseanfrage fehlgeschlagen.';
-                    }
-                } finally {
-                    IPS_SemaphoreLeave(self::GLOBAL_LCN_SEND_SEMAPHORE);
-                }
-                // Keep the shared LCN bus responsive. Eleven requests ~= 1.3 s.
-                IPS_Sleep(120);
-            } catch (Throwable $e) {
-                $errors[] = $name . ': ' . $e->getMessage();
+                $items[] = ['id' => $id, 'name' => (string) ($room['Name'] ?? 'Raum')];
             }
         }
-        $lines = [
-            'LCN-Regler: ' . $sent . ' reine Leseanfragen versendet (von maximal 11).',
-            'KEINE Reglersperre, Freigabe oder Relaisschaltung wurde ausgeloest.',
-            'Bitte anschliessend "LCN-Reglersperren: aktuellen Status anzeigen" anklicken.',
-            'Die LCN-PRO-Einstellung "Sperren erlaubt/verboten" kann damit NICHT ausgelesen werden.'
-        ];
-        foreach ($errors as $error) {
-            $lines[] = $error;
+        $count = count($items);
+        if ($count === 0) {
+            return 'Keine gueltigen nativen LCN-Value-Instanzen erkannt.';
         }
-        return implode("\n", $lines);
+        $cursor = (int) $this->GetBuffer('CoolingReadCursor');
+        $cursor = (($cursor % $count) + $count) % $count;
+        $limit = min(2, $count);
+        $lines = [];
+        $success = 0;
+        for ($i = 0; $i < $limit; $i++) {
+            $item = $items[($cursor + $i) % $count];
+            $name = $item['name'];
+            if (!IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 100)) {
+                $lines[] = $name . ': LCN-Bus belegt, keine Anfrage.';
+                continue;
+            }
+            try {
+                try {
+                    if ((bool) LCN_RequestRead($item['id'])) {
+                        $success++;
+                        $lines[] = $name . ': Leseanfrage angenommen.';
+                    } else {
+                        $lines[] = $name . ': Leseanfrage fehlgeschlagen (Timeout/keine Bestaetigung moeglich).';
+                    }
+                } catch (Throwable $e) {
+                    $lines[] = $name . ': Lesefehler: ' . $e->getMessage();
+                }
+            } finally {
+                IPS_SemaphoreLeave(self::GLOBAL_LCN_SEND_SEMAPHORE);
+            }
+        }
+        $next = ($cursor + $limit) % $count;
+        $this->SetBuffer('CoolingReadCursor', (string) $next);
+        return 'LCN-Regler: ' . $success . '/' . $limit
+            . ' Leseanfragen angenommen, Durchlauf ' . ($cursor + 1)
+            . '-' . ($cursor + $limit) . ' von ' . $count . '. '
+            . 'Naechster Aufruf setzt bei ' . ($next + 1) . ' fort.'
+            . "\\nKeine Regler-/Relais-Schaltbefehle. Eine angenommene Anfrage "
+            . 'ist KEIN Nachweis einer aktuellen Antwort.'
+            . "\\n" . implode("\\n", $lines);
     }
 
     /**
