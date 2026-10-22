@@ -63,6 +63,9 @@ trait LCNDirectCooling
         $map = $this->ReadJsonAttribute('DirectCoolingLocks');
         if ($state === '') {
             unset($map[(string) $target]);
+            $proofs = $this->ReadJsonAttribute('DirectCoolingReconcile');
+            unset($proofs[(string) $target]);
+            $this->WriteJsonAttribute('DirectCoolingReconcile', $proofs);
             $saved = $this->ReadJsonAttribute('DirectCoolingLockMappings');
             unset($saved[(string) $target]);
             $this->WriteJsonAttribute('DirectCoolingLockMappings', $saved);
@@ -530,9 +533,140 @@ trait LCNDirectCooling
         $this->FailCurrentJob($job, 'Unbekannte Direktkuehlungsphase: ' . $phase);
     }
 
+    /**
+     * Reconcile a stale INTERNAL 'uncertain' flag against two independent
+     * ACTIVE bus reads, not against any cached "unlocked" Boolean.
+     *
+     * The LCN lock command can be rejected when LCN-PRO disallows locking;
+     * the regulator then remains unlocked, although we already wrote the
+     * conservative internal "uncertain" marker before sending the command.
+     * This read-only recovery NEVER unlocks the regulator or switches a relay.
+     *
+     * Success makes the affected room LEGACY-only for the current cooling
+     * session. A fresh direct-lock attempt may only happen in a later session.
+     */
+    private function DirectCoolingReconcileUncertain(): void
+    {
+        if (!$this->UsesDirectCooling() || $this->GetMode() !== self::MODE_COOLING
+            || !IPS_FunctionExists('LCN_RequestRead')
+            || !IPS_FunctionExists('LCN_RequestStatus')
+            || !IPS_SemaphoreEnter('LCNC_' . $this->InstanceID, 100)) {
+            return;
+        }
+        try {
+            $tracker = $this->ReadJsonAttribute('DirectCoolingReconcile');
+            foreach ($this->GetRuntimeRooms() as $room) {
+                $target = (int) ($room['TargetVariable'] ?? 0);
+                if ($target <= 0 || $this->DirectCoolingLockState($target) !== 'uncertain'
+                    || $this->HasJobForTarget($target)
+                    || $this->GetStoredCoolingState($target)) {
+                    continue;
+                }
+                $m = $this->DirectCoolingMapping($target)
+                    ?? ($this->ReadJsonAttribute('DirectCoolingLockMappings')[(string) $target] ?? null);
+                if (!is_array($m)
+                    || !$this->IsOperationalLCNModule((int) ($m['RelayModule'] ?? 0))) {
+                    continue;
+                }
+                $lockID = (int) ($m['UnlockedVariable'] ?? 0);
+                $relayID = (int) ($m['RelayStatusVariable'] ?? 0);
+                $valueParent = IPS_VariableExists($target) ? (int) IPS_GetParent($target) : 0;
+                if ($valueParent <= 0 || !IPS_InstanceExists($valueParent)
+                    || !IPS_VariableExists($lockID) || !IPS_VariableExists($relayID)
+                    || $this->ReadTarget($target) === null) {
+                    continue;
+                }
+                try {
+                    $valueInfo = IPS_GetInstance($valueParent);
+                    if (strtoupper((string) ($valueInfo['ModuleInfo']['ModuleID'] ?? ''))
+                            !== strtoupper(self::LCN_VALUE_MODULE_ID)
+                        || (int) ($valueInfo['ConnectionID'] ?? 0)
+                            !== (int) ($room['SendModule'] ?? 0)) {
+                        continue;
+                    }
+                    if ((int) (IPS_GetVariable($lockID)['VariableType'] ?? -1)
+                            !== VARIABLETYPE_BOOLEAN
+                        || (int) (IPS_GetVariable($relayID)['VariableType'] ?? -1)
+                            !== VARIABLETYPE_BOOLEAN) {
+                        continue;
+                    }
+                } catch (Throwable) {
+                    continue;
+                }
+                $key = (string) $target;
+                $progress = is_array($tracker[$key] ?? null) ? $tracker[$key] : [];
+                $sentAt = (int) ($progress['sentAt'] ?? 0);
+                $proofs = (int) ($progress['proofs'] ?? 0);
+                if ($sentAt > 0) {
+                    try {
+                        // Strictly AFTER our last explicit request; the old
+                        // report's 80s-old snapshots are never sufficient.
+                        $fresh = (int) (IPS_GetVariable($lockID)['VariableUpdated'] ?? 0) > $sentAt
+                            && (int) (IPS_GetVariable($relayID)['VariableUpdated'] ?? 0) > $sentAt
+                            && (int) (IPS_GetVariable($target)['VariableUpdated'] ?? 0) > $sentAt;
+                        if ($fresh) {
+                            $isFree = $this->DirectCoolingRegulatorUnlocked($m);
+                            $relayOff = (bool) GetValue($relayID)
+                                === !(bool) ($m['OpenRelayOn'] ?? true);
+                            $targetNormal = $this->ReadTarget($target) !== null;
+                            if (!$isFree || !$relayOff || !$targetNormal) {
+                                // Missing safety evidence must never clear
+                                // the persisted regulator lock uncertainty.
+                                $tracker[$key] = ['sentAt' => 0, 'proofs' => 0];
+                                continue;
+                            }
+                            $proofs++;
+                            if ($proofs >= 2) {
+                                $this->DirectCoolingSetLockState($target, '');
+                                $this->DirectCoolingFallbackSet($target,
+                                    'Reglersperre nicht bestaetigt. Zweimal frisch '
+                                    . 'aus LCN gelesen: Regler FREI, NC-Relais AUS, '
+                                    . 'S1Target plausibel. Bisherige A7/A8-Steuerung '
+                                    . 'aktiv; LCN-PRO Sperrerlaubnis pruefen.',
+                                    'legacy');
+                                $this->ClearRoomError($target);
+                                unset($tracker[$key]);
+                                $this->PushVisualizationRowByTarget($target);
+                                continue;
+                            }
+                            $tracker[$key] = ['sentAt' => 0, 'proofs' => $proofs];
+                            continue;
+                        }
+                    } catch (Throwable) {
+                    }
+                    if (time() - $sentAt < 30) {
+                        continue;
+                    }
+                }
+
+                // Initiate the next PASSIVE sample. Both return codes must
+                // be true. Never send a controller lock/unlock, TS or relay.
+                if (!IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 300)) {
+                    continue;
+                }
+                try {
+                    $time = time();
+                    if ((bool) LCN_RequestRead($valueParent)
+                        && (bool) LCN_RequestStatus((int) $m['RelayModule'])) {
+                        $tracker[$key] = ['sentAt' => $time, 'proofs' => $proofs];
+                    }
+                } catch (Throwable $e) {
+                    $this->SendDebug('Uncertain-Reconcile', $e->getMessage(), 0);
+                } finally {
+                    IPS_SemaphoreLeave(self::GLOBAL_LCN_SEND_SEMAPHORE);
+                }
+            }
+            // The map remains small (at most one entry for each of 11 rooms).
+            $this->WriteJsonAttribute('DirectCoolingReconcile', $tracker);
+        } finally {
+            IPS_SemaphoreLeave('LCNC_' . $this->InstanceID);
+        }
+    }
+
     /** Der externe Sensor MUSS zusaetzlich die Kuehlhydraulik hardwareseitig sperren. */
     public function DirectCoolingWatchdog(): void
     {
+        $this->DirectCoolingReconcileUncertain();
         if (!$this->UsesDirectCooling() || $this->GetMode() !== self::MODE_COOLING
             || $this->DirectCoolingSafe()) {
             return;
