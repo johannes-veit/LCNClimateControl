@@ -8,7 +8,7 @@ declare(strict_types=1);
  */
 trait LCNClimateChatGPTDiagnostic
 {
-    private const CHATGPT_DIAGNOSTIC_VERSION = '0.3.10 Build 25';
+    private const CHATGPT_DIAGNOSTIC_VERSION = '0.3.11 Build 26';
 
     private function ChatGPTDiagnosticBoolState(int $id, bool $invert = false): string
     {
@@ -215,10 +215,11 @@ trait LCNClimateChatGPTDiagnostic
     {
         try {
             $content = $this->BuildChatGPTDiagnosticReport();
-            $id = (int) $this->GetIDForIdent('ChatGPTDiagnostic');
-            if ($id > 0 && IPS_VariableExists($id)) {
-                SetValueString($id, $content);
-            }
+            // IPSModuleStrict-Sicht: Die eigenen Variablen sind ReadOnly.
+            // Globale SetValueString/SetValue sind hier unzulaessig;
+            // ausschliesslich der interne Ident-basierte Modulschreiber
+            // darf die Variable aktualisieren.
+            $this->SetValue('ChatGPTDiagnostic', $content);
         } catch (Throwable $e) {
             $this->SendDebug('ChatGPTDiagnostic', $e->getMessage(), 0);
         }
