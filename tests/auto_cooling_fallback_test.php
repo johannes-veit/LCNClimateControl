@@ -260,4 +260,58 @@ check($back->jobs[0]['Type']==='heat' && $back->jobs[0]['Desired']===22.0,
 check(($back->attrs['DirectCoolingLocks']??[])===[],
     'lock must be released after final feedback confirmation');
 $GLOBALS['v'][101]=true;$GLOBALS['v'][102]=false;
-echo "PASS: 19 scenarios incl. confirmed heating-to-cooling and cooling-to-heating transitions\n";
+// 20. Echtes Symcon S1TargetLock: FALSE=freigegeben, TRUE=gesperrt.
+$native=new AutoProbe();config($native);
+$cfg=json_decode($native->properties['CoolingRelays'],true);
+$cfg[0]['LockFeedbackIsLocked']=true;
+$native->properties['CoolingRelays']=json_encode($cfg);
+$GLOBALS['v'][101]=false;$GLOBALS['v'][102]=false;
+$native->choose(true);
+check(count($native->jobs)===1 && $native->jobs[0]['Type']==='direct_cool',
+    'S1TargetLock=false must allow the new direct controller');
+$job=$native->jobs[0];$native->jobs=[];$native->processDirect($job);
+check($native->jobs[0]['Phase']==='lock_wait','S1 lock command before relay');
+$job=$native->jobs[0];$native->jobs=[];
+$native->now=$job['SentAtMs']+600;$GLOBALS['v'][101]=true;
+$GLOBALS['updated'][101]=time();$native->processDirect($job);
+check($native->jobs[0]['Phase']==='relay'
+    && $native->attrs['DirectCoolingLocks']['777']==='locked',
+    'S1TargetLock=true proves native controller actually locked');
+$job=$native->jobs[0];$native->jobs=[];$native->processDirect($job);
+check($native->jobs[0]['Phase']==='relay_wait','open only AFTER S1TargetLock=true');
+$job=$native->jobs[0];$native->jobs=[];$native->now=$job['SentAtMs']+600;
+$GLOBALS['v'][102]=true;$GLOBALS['updated'][102]=time();$native->processDirect($job);
+check(($native->coolingStored[777]??false)===true,'confirmed relay true opens NC valve');
+// 21. Native Reglerfreigabe: S1TargetLock must go TRUE -> FALSE.
+$native->release(21.5);
+$job=$native->jobs[0];$native->jobs=[];$native->processDirect($job);
+check($native->jobs[0]['Phase']==='close_wait','close relay first');
+$job=$native->jobs[0];$native->jobs=[];
+$native->now=$job['SentAtMs']+600;$GLOBALS['v'][102]=false;
+$GLOBALS['updated'][102]=time();$native->processDirect($job);
+check($native->jobs[0]['Phase']==='unlock','relay off confirmed');
+$job=$native->jobs[0];$native->jobs=[];$native->processDirect($job);
+check($native->jobs[0]['Phase']==='unlock_wait','native release is sent');
+$job=$native->jobs[0];$native->jobs=[];$native->now=$job['SentAtMs']+600;
+$GLOBALS['v'][101]=false;$GLOBALS['updated'][101]=time();
+$native->processDirect($job);
+check($native->jobs[0]['Phase']==='restore_target_wait',
+    'S1TargetLock=false proves unlocked');
+$job=$native->jobs[0];$native->jobs=[];$GLOBALS['updated'][777]=time();
+$native->processDirect($job);
+check($native->jobs[0]['Type']==='heat' &&
+    $native->jobs[0]['Desired']===21.5,
+    'native feedback permits restoring previous heating target');
+check($native->attrs['DirectCoolingLocks']===[], 'native lock state cleared');
+// 22. Already locked by LCN or another controller: never try relay.
+$external=new AutoProbe();config($external);
+$extcfg=json_decode($external->properties['CoolingRelays'],true);
+$extcfg[0]['LockFeedbackIsLocked']=true;
+$external->properties['CoolingRelays']=json_encode($extcfg);
+$GLOBALS['v'][101]=true;$external->choose(true);
+check($external->jobs===[] &&
+    str_contains($external->summary(),'gestoppt'),
+    'external S1TargetLock=true must not be taken over');
+$GLOBALS['v'][101]=true;$GLOBALS['v'][102]=false;
+echo "PASS: 22 scenarios incl. native S1TargetLock polarity and direct heating recovery\n";
+
