@@ -23,6 +23,8 @@ jobs:
         run: php tests/cooling_native_discovery_test.php
       - name: Single auto-refresh ChatGPT diagnostic variable
         run: php tests/chatgpt_diagnostic_test.php
+      - name: OG Flur and Ankleide cooling toggles – real module regression
+        run: php tests/cooling_room_toggle_test.php
       - name: Assert safe automatic fallback enabled
         run: |
           grep -q "RegisterPropertyBoolean('DirectCoolingEnabled', true)" LCNClimateControl/module.php
