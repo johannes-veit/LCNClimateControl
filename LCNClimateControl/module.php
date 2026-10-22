@@ -572,13 +572,17 @@ class LCNClimateControl extends IPSModuleStrict
         }
         // A failed real native lock/release test must NOT result in eleven
         // blind automatic cooling attempts. Keep ordinary heating running.
-        if ($Mode === self::MODE_COOLING && $this->UsesDirectCooling()
-            && (string) ($this->M11ProbeSession()['phase'] ?? '') === 'failed_safe') {
-            throw new RuntimeException(
-                'KÜHLEN derzeit gesperrt: M11-Sperrtest fehlgeschlagen; '
-                . 'native LCN-Sperr-/Freigabefunktionen antworten FALSE. '
-                . 'Zuerst R1/S1-Schnittstelle und LCN-Verbindung prüfen.'
-            );
+        if ($Mode === self::MODE_COOLING && $this->UsesDirectCooling()) {
+            $m11Probe = $this->M11ProbeSession();
+            $phase = (string) ($m11Probe['phase'] ?? '');
+            $path = (string) ($m11Probe['commandPath'] ?? '');
+            if ($phase === 'failed_safe' || $path === 'RequestAction') {
+                throw new RuntimeException(
+                    'KUEHLEN weiterhin gesperrt: M11-Diagnose ist keine Freigabe '
+                    . 'fuer alle elf Raumregler und die produktive Kuehlsteuerung '
+                    . 'nutzt bisher die fehlgeschlagene native LCN-Funktion.'
+                );
+            }
         }
 
         $currentMode = $this->GetMode();
