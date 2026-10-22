@@ -347,6 +347,50 @@ trait LCNDirectCooling
         }
         $unlocked = $this->DirectCoolingRegulatorUnlocked($m);
         $electric = (bool) GetValue($statusID);
+        if ($type === 'direct_emergency_close') {
+            if ($phase === 'close') {
+                if (!$this->DirectCoolingRelaySet($m, false)) {
+                    $this->FailCurrentJob($job, 'NC-Ventil AUS konnte nicht gesendet werden.');
+                    return;
+                }
+                $job['Phase'] = 'close_wait';
+                $job['SentAtMs'] = $this->NowMs();
+                $job['SentAtEpoch'] = time();
+                $this->YieldCurrentJob($job);
+                return;
+            }
+            if ($phase === 'close_wait') {
+                $want = !(bool) ($m['OpenRelayOn'] ?? true);
+                if ($electric === $want
+                    && $this->DirectCoolingFeedbackFresh($statusID, $job)
+                    && $this->NowMs() - (int) ($job['SentAtMs'] ?? 0) >= 500) {
+                    $this->StoreCoolingState($target, false);
+                    $this->SetValueIfChanged($this->CoolIdent($target), false);
+                    $this->SetBuffer('CurrentJob', '');
+                    // Es wird NUR das NC-Ventil geschlossen. Eine moegliche
+                    // Reglersperre bleibt als gesonderter Fehler bestehen.
+                    $this->SetRoomError($target,
+                        'NC-Ventil AUS bestaetigt; Reglersperre ungewiss – '
+                        . 'vor Heizbetrieb in LCN kontrollieren.');
+                    $this->ConsumePendingCoolingRequest($target);
+                    $this->RefreshRuntimeStatus();
+                    $this->PushVisualizationRowByTarget($target);
+                    $this->PushVisualizationMeta();
+                    return;
+                }
+                if ($this->NowMs() - (int) ($job['SentAtMs'] ?? 0) >
+                    $this->DirectCoolingTimeoutMs()) {
+                    $this->FailCurrentJob($job,
+                        'NC-Ventil AUS nicht bestaetigt; reale Stellung pruefen.');
+                    return;
+                }
+                $job = $this->DirectCoolingRequestFreshRelay($job, $m);
+                $this->YieldCurrentJob($job);
+                return;
+            }
+            $this->FailCurrentJob($job, 'Unbekannte NC-Not-AUS-Phase: ' . $phase);
+            return;
+        }
         if ($type === 'direct_cool') {
             $open = (bool) ($job['DesiredOpen'] ?? false);
             if ($open && !$this->DirectCoolingSafe()) {
