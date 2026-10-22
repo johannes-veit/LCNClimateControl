@@ -71,6 +71,7 @@ require __DIR__.'/../LCNClimateControl/CoolingDiscovery.php';
 class Probe{
     use LCNClimateCoolingDiscovery;
     public const LCN_VALUE_MODULE_ID=VALUE;
+    private const GLOBAL_LCN_SEND_SEMAPHORE = 'mock_lcn_bus';
     public const MODE_HEATING=0;
     public int $InstanceID=900;
     public int $mode=0;
