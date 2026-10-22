@@ -470,3 +470,32 @@ bestimmen. Die normale A7/A8-Regelung bleibt unveraendert.
 
 Kein Hardware- oder Software-Freigabehinweis dieses Berichts
 ersetzt den unabhängigen mechanischen Taupunktschutz.
+
+
+## v0.3.10 Build 25 – Eine Diagnosevariable „Senden an ChatGPT“
+
+Nach der Aktualisierung erzeugt dieselbe LCNClimateControl-Instanz genau **eine** zusätzliche String-Variable:
+
+- **Senden an ChatGPT** (String, technische Ident `ChatGPTDiagnostic`).
+- Der mehrzeilige Inhalt wird **automatisch alle 60 Sekunden** und sofort bei `ApplyChanges` neu erstellt. Es braucht keinen Diagnoseknopf und keine manuelle Abfrage.
+- Der Bericht fasst die Betriebsart HEIZEN/KUEHLEN, aktuellen Auftrag, Queue,
+  Software-Kuehlfreigabe und **alle elf Räume** zusammen: Raumtemperatur,
+  LCN-Sollwert, Kuehlwunsch, native LCN-Sendeinstanz und S1Target, Relais-Modul,
+  einzelne Relay-Unit und Rueckmelde-ID, Boolean-Zustand und dessen Alter,
+  S1TargetLock (TRUE=gesperrt), direkte/alte Regelart, Rueckfallgrund,
+  interne Sperrvormerkung und eventuelle Fehlermeldung.
+- Die automatische Diagnose **liest ausschliesslich vorhandene Symcon-Variablen und Attribute**.
+  Sie sendet keine LCN-Kommandos, keine LCN-Statusabfragen und schaltet kein Relais.
+- Die Einstellung `Regler-Sperrung erlaubt/verboten` in LCN-PRO ist
+  nicht aus dem aktuellen `S1TargetLock` ableitbar. Die Diagnose kennzeichnet
+  die Erlaubnis und den realen Hardwaretest deshalb weiterhin als unbestätigt.
+- In der vorhandenen Kachel werden keine zusätzlichen Bedienelemente hinzugefügt;
+  die String-Variable steht unter der Modulinstanz im Symcon-Objektbaum.
+- Bestehende Diagnoseknöpfe bleiben optional bestehen; die einzelne Variable
+  ersetzt sie für die normale Fehleranalyse.
+- Eine unabhängige Taupunktabsicherung des Kühlkreises ist vor physischer
+  Kühlwasserfreigabe weiterhin erforderlich.
+
+**Nutzung:** Im Objektbaum unter `Heizen / Kuehlen` die Variable
+`Senden an ChatGPT` öffnen, ihren kompletten Inhalt kopieren und in
+ChatGPT einfügen. Nach weiteren Messungen wird die Variable automatisch aktualisiert.
