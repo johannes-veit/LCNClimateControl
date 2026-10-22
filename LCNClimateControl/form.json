@@ -312,38 +312,13 @@
     },
     {
       "type": "Button",
-      "caption": "LCN-Zuordnungen aus Symcon auslesen (nur Diagnose)",
-      "onClick": "echo LCNC_CoolingDiscoveryReport($id);"
-    },
-    {
-      "type": "Button",
-      "caption": "LCN-Reglersperren: aus dem LCN-Bus abfragen (nur Leseanfragen)",
-      "onClick": "echo LCNC_RequestCoolingLockRead($id);"
-    },
-    {
-      "type": "Button",
       "caption": "LCN-Reglersperren: Zustand und Aktualisierung aller 11 Räume anzeigen",
       "onClick": "echo LCNC_CoolingLockStatusReport($id);"
     },
     {
       "type": "Button",
-      "caption": "LCN-Regler: R1/S1-Schnittstellen und Verbindungen prüfen (nur lesen)",
-      "onClick": "echo LCNC_AuditLCNNativeRegulatorInterfaces($id);"
-    },
-    {
-      "type": "Button",
       "caption": "Interne Reglersperr-Vormerkungen prüfen und bereinigen (nur Software, keine LCN-Befehle)",
       "onClick": "echo LCNC_ReconcileUncertainCoolingLocks($id);"
-    },
-    {
-      "type": "Button",
-      "caption": "M11 EG Büro: S1-Sperrtest starten (kurz sperren, automatisch wieder freigeben)",
-      "onClick": "echo LCNC_StartM11RegulatorTest($id);"
-    },
-    {
-      "type": "Button",
-      "caption": "M11 EG Büro: S1-Sperrtest einmalig wiederholen (sendet nur M11 S1-Sperre/Freigabe)",
-      "onClick": "echo LCNC_RetestM11Regulator($id);"
     },
     {
       "type": "Button",
@@ -359,11 +334,6 @@
       "type": "Button",
       "caption": "M11 EG Büro: NOT-FREIGABE erneut auslösen (nur S1 entsperren)",
       "onClick": "echo LCNC_M11ProbeEmergencyRelease($id);"
-    },
-    {
-      "type": "Button",
-      "caption": "Fehlende 11 LCN-Relais-Units anlegen (nur im Heizbetrieb, ohne Relais zu schalten)",
-      "onClick": "echo LCNC_PrepareCoolingRelayUnits($id);"
     }
   ],
   "status": [
