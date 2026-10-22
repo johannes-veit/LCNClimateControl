@@ -193,8 +193,8 @@ trait LCNClimateM11LockTest
             $detail = $fn . ' fehlt.';
             return false;
         }
-        if (!IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 500)) {
-            $detail = 'LCN_BUS_SEND_GLOBAL 500 ms belegt; kein Befehl gesendet.';
+        if (!IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 2500)) {
+            $detail = 'LCN_BUS_SEND_GLOBAL 2500 ms belegt; kein Befehl gesendet.';
             return false;
         }
         try {
@@ -226,7 +226,7 @@ trait LCNClimateM11LockTest
             return;
         }
         $p['lastRead'] = time();
-        if (IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 250)) {
+        if (IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 1500)) {
             try {
                 LCN_RequestRead($valueInstance);
             } catch (Throwable $e) {
