@@ -101,7 +101,17 @@ trait LCNClimateM11LockTest
         return $this->M11ProbeStart(true);
     }
 
-    private function M11ProbeStart(bool $allowRetry): string
+    /**
+     * First and only RequestAction-based lock/unlock diagnostic.
+     * The legacy native M11 test already failed and remains preserved
+     * through its historical report/retest count.
+     */
+    public function StartM11ViaActionTest(): string
+    {
+        return $this->M11ProbeStart(false, true);
+    }
+
+    private function M11ProbeStart(bool $allowRetry, bool $viaAction = false): string
     {
         if (!IPS_SemaphoreEnter('LCNC_' . $this->InstanceID, 1000)) {
             return 'ABBRUCH: Climate-Modul beschaeftigt.';
@@ -110,7 +120,13 @@ trait LCNClimateM11LockTest
             $previous = $this->M11ProbeSession();
             $previousPhase = (string) ($previous['phase'] ?? '');
             $retryCount = (int) ($previous['retestCount'] ?? 0);
-            if ($allowRetry) {
+            if ($viaAction) {
+                if ($previousPhase !== 'failed_safe'
+                    || $retryCount !== 1
+                    || (bool) ($previous['viaActionAttempted'] ?? false)) {
+                    return 'ABBRUCH: Der einmalige RequestAction-Test ist nur nach dem bereits fehlgeschlagenen nativen M11-Wiederholungstest erlaubt.';
+                }
+            } elseif ($allowRetry) {
                 if ($previousPhase !== 'failed_safe' || $retryCount >= 1) {
                     return 'ABBRUCH: Genau ein ausdruecklicher Wiederholungstest ist nach failed_safe zulaessig.';
                 }
@@ -142,7 +158,19 @@ trait LCNClimateM11LockTest
                 || $this->ReadTarget($target) === null) {
                 return 'ABBRUCH: M11 braucht aktuelle Rueckmeldungen, S1 FREI, Relais AUS und gueltigen Sollwert.';
             }
-            if (!IPS_FunctionExists('LCN_LockTargetValue')
+            if ($viaAction) {
+                $parent = (int) IPS_GetParent($lock);
+                if (!$this->IsOperationalTargetVariable($target, (int) $room['SendModule'])
+                    || $parent <= 0 || !IPS_InstanceExists($parent)
+                    || (int) (IPS_GetInstance($parent)['ConnectionID'] ?? 0)
+                        !== (int) $room['SendModule']
+                    || (int) (IPS_GetVariable($lock)['VariableType'] ?? -1)
+                        !== VARIABLETYPE_BOOLEAN
+                    || (int) (IPS_GetVariable($lock)['VariableAction'] ?? 0) !== $parent
+                    || !IPS_FunctionExists('RequestAction')) {
+                    return 'ABBRUCH: S1TargetLock besitzt nicht die nachgewiesene native Standardaktion.';
+                }
+            } elseif (!IPS_FunctionExists('LCN_LockTargetValue')
                 || !IPS_FunctionExists('LCN_ReleaseTargetValue')) {
                 return 'ABBRUCH: Symcon LCN-Sperrfunktionen nicht vorhanden.';
             }
@@ -159,11 +187,14 @@ trait LCNClimateM11LockTest
                 'started' => time(), 'phaseSince' => time(),
                 'lockConfirmed' => false, 'tries' => 0,
                 'retestCount' => $retryCount + ($allowRetry ? 1 : 0),
+                'viaActionAttempted' => $viaAction,
+                'commandPath' => $viaAction ? 'RequestAction' : 'LCN_LockTargetValue',
                 'commandDetail' => 'Sperrbefehl noch nicht ausgefuehrt.',
                 'message' => 'M11-Test gestartet, Regler-Sperrung wird kurz geprueft.'
             ]);
             $this->UpdateChatGPTDiagnostic();
-            return 'M11 (EG Buero): isolierter S1-Sperrtest gestartet. '
+            return 'M11 (EG Buero): isolierter S1-Sperrtest gestartet ueber '
+                . ($viaAction ? 'RequestAction(#' . $lock . ', true/false)' : 'LCN_LockTargetValue') . '. '
                 . 'Automatische Freigabe folgt; keine Relaisschaltung. '
                 . 'Nach etwa einer Minute die Taste M11-Teststatus anzeigen verwenden.';
         } finally {
