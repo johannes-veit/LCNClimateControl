@@ -327,6 +327,11 @@
     },
     {
       "type": "Button",
+      "caption": "Interne Reglersperr-Vormerkungen prüfen und bereinigen (nur Software, keine LCN-Befehle)",
+      "onClick": "echo LCNC_ReconcileUncertainCoolingLocks($id);"
+    },
+    {
+      "type": "Button",
       "caption": "Fehlende 11 LCN-Relais-Units anlegen (nur im Heizbetrieb, ohne Relais zu schalten)",
       "onClick": "echo LCNC_PrepareCoolingRelayUnits($id);"
     }
