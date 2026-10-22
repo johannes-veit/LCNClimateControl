@@ -92,15 +92,30 @@ trait LCNClimateM11LockTest
 
     public function StartM11RegulatorTest(): string
     {
+        return $this->M11ProbeStart(false);
+    }
+
+    /** One deliberately clicked retry after a proven safe first release. */
+    public function RetestM11Regulator(): string
+    {
+        return $this->M11ProbeStart(true);
+    }
+
+    private function M11ProbeStart(bool $allowRetry): string
+    {
         if (!IPS_SemaphoreEnter('LCNC_' . $this->InstanceID, 1000)) {
             return 'ABBRUCH: Climate-Modul beschaeftigt.';
         }
         try {
             $previous = $this->M11ProbeSession();
-            if (in_array((string) ($previous['phase'] ?? ''), ['passed', 'failed_safe'], true)) {
-                return 'ABBRUCH: M11 wurde bereits getestet ('
-                    . (string) $previous['phase']
-                    . '). Erst Diagnose auswerten; keine automatische Wiederholung.';
+            $previousPhase = (string) ($previous['phase'] ?? '');
+            $retryCount = (int) ($previous['retestCount'] ?? 0);
+            if ($allowRetry) {
+                if ($previousPhase !== 'failed_safe' || $retryCount >= 1) {
+                    return 'ABBRUCH: Genau ein ausdruecklicher Wiederholungstest ist nach failed_safe zulaessig.';
+                }
+            } elseif (in_array($previousPhase, ['passed', 'failed_safe'], true)) {
+                return 'ABBRUCH: Test ist bereits abgeschlossen. Nach Ursachenanalyse nur den EINMALIGEN M11-Wiederholungstest verwenden.';
             }
             if ($this->M11ProbeActive()
                 || $this->GetMode() !== self::MODE_HEATING
@@ -143,6 +158,8 @@ trait LCNClimateM11LockTest
                 'valueInstance' => (int) IPS_GetParent($target),
                 'started' => time(), 'phaseSince' => time(),
                 'lockConfirmed' => false, 'tries' => 0,
+                'retestCount' => $retryCount + ($allowRetry ? 1 : 0),
+                'commandDetail' => 'Sperrbefehl noch nicht ausgefuehrt.',
                 'message' => 'M11-Test gestartet, Regler-Sperrung wird kurz geprueft.'
             ]);
             $this->UpdateChatGPTDiagnostic();
@@ -154,25 +171,42 @@ trait LCNClimateM11LockTest
         }
     }
 
-    /** M11 hardware identity check before every physical command. */
-    private function M11ProbeCommand(array $p, bool $lock): bool
+    /**
+     * Applies exactly ONE native S1 command to hardware address M11.
+     * The bool result reports command submission, not confirmed hardware state.
+     */
+    private function M11ProbeCommand(array $p, bool $lock, ?string &$detail = null): bool
     {
         $sender = (int) ($p['sender'] ?? 0);
+        $detail = 'Nicht ausgefuehrt.';
         if (!$this->IsOperationalLCNModule($sender)) {
+            $detail = 'LCN-Senderinstanz nicht betriebsbereit.';
             return false;
         }
         $cfg = $this->AutoCoolingInstanceConfig($sender);
-        if (!is_array($cfg) || (int) ($cfg['Target'] ?? -1) !== 11
-            || !IPS_FunctionExists($lock ? 'LCN_LockTargetValue' : 'LCN_ReleaseTargetValue')
-            || !IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 500)) {
+        if (!is_array($cfg) || (int) ($cfg['Target'] ?? -1) !== 11) {
+            $detail = 'LCN-Moduladresse nicht M11.';
+            return false;
+        }
+        $fn = $lock ? 'LCN_LockTargetValue' : 'LCN_ReleaseTargetValue';
+        if (!IPS_FunctionExists($fn)) {
+            $detail = $fn . ' fehlt.';
+            return false;
+        }
+        if (!IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 500)) {
+            $detail = 'LCN_BUS_SEND_GLOBAL 500 ms belegt; kein Befehl gesendet.';
             return false;
         }
         try {
-            return $lock
+            $ok = $lock
                 ? (bool) LCN_LockTargetValue($sender, 2)
                 : (bool) LCN_ReleaseTargetValue($sender, 2);
+            $detail = $fn . '(#' . $sender . ', 2) hat '
+                . ($ok ? 'TRUE' : 'FALSE') . ' zurueckgegeben.';
+            return $ok;
         } catch (Throwable $e) {
-            $this->SendDebug('M11-Sperrtest', $e->getMessage(), 0);
+            $detail = $fn . ' Exception: ' . $e->getMessage();
+            $this->SendDebug('M11-Sperrtest', $detail, 0);
             return false;
         } finally {
             IPS_SemaphoreLeave(self::GLOBAL_LCN_SEND_SEMAPHORE);
@@ -237,7 +271,9 @@ trait LCNClimateM11LockTest
                 $this->M11ProbeSetPhase($p, 'release', 'Sperrbefehl gestartet; Freigabe ausstehend.');
                 $p['lockSent'] = time();
                 $this->M11ProbeWrite($p);
-                $ok = $this->M11ProbeCommand($p, true);
+                $detail = null;
+                $ok = $this->M11ProbeCommand($p, true, $detail);
+                $p['lockCommandDetail'] = (string) $detail;
                 $p['lockCommandAccepted'] = $ok;
                 $p['lockCommandAt'] = time();
                 $this->M11ProbeSetPhase($p, $ok ? 'lock_wait' : 'release',
@@ -265,7 +301,9 @@ trait LCNClimateM11LockTest
                 $p['releaseSent'] = time();
                 $this->M11ProbeSetPhase($p, 'release_wait', 'Freigabebefehl an M11 gesendet, Rueckmeldung ausstehend.');
                 $this->M11ProbeWrite($p);
-                $accepted = $this->M11ProbeCommand($p, false);
+                $detail = null;
+                $accepted = $this->M11ProbeCommand($p, false, $detail);
+                $p['releaseCommandDetail'] = (string) $detail;
                 $p['releaseCommandAccepted'] = $accepted;
                 if (!$accepted) {
                     $p['message'] = 'Freigabebefehl nicht angenommen; erneuter Versuch folgt.';
@@ -386,7 +424,14 @@ trait LCNClimateM11LockTest
             . "\nSperrzustand waehrend Test bestaetigt: "
             . ((bool) ($p['lockConfirmed'] ?? false) ? 'JA' : 'NEIN')
             . "\nFreigabebefehl angenommen: " . $releaseAccepted
-            . "\nFreigabeversuche: " . (int) ($p['tries'] ?? 0);
+            . "\nFreigabeversuche: " . (int) ($p['tries'] ?? 0)
+            . "\nWiederholungstests: " . (int) ($p['retestCount'] ?? 0);
+        foreach (['lockCommandDetail' => 'Sperr-API-Diagnose',
+            'releaseCommandDetail' => 'Freigabe-API-Diagnose'] as $key => $title) {
+            if (isset($p[$key])) {
+                $status .= "\n" . $title . ': ' . (string) $p[$key];
+            }
+        }
         foreach (['started' => 'Startzeit', 'lockSent' => 'Sperrversuch',
             'lastLockFeedbackAt' => 'Letzte Sperrstatusmeldung',
             'releaseSent' => 'Letzter Freigabeversuch'] as $key => $label) {
