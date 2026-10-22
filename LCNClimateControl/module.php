@@ -372,7 +372,15 @@ class LCNClimateControl extends IPSModuleStrict
 
         try {
             if ($this->M11ProbeActive()) {
-                throw new RuntimeException('M11-Sperrtest: erst Reglerfreigabe bestaetigen; Bedienung gesperrt.');
+                $probeTarget = (int) ($this->M11ProbeSession()['target'] ?? 0);
+                if ($Ident === 'Mode'
+                    || ($probeTarget > 0
+                        && in_array($Ident, [
+                            $this->HeatIdent($probeTarget),
+                            $this->CoolIdent($probeTarget)
+                        ], true))) {
+                    throw new RuntimeException('M11-Sperrtest: Betriebsart und M11-Bedienung bis zur Freigabe gesperrt.');
+                }
             }
             if ($this->GetBuffer('ConfigurationValid') === '0') {
                 $this->SendDebug('Config', $this->GetVisualizationErrorSummary() . ' Aus Sicherheitsgründen werden keine LCN-Befehle gesendet.', 0);
@@ -416,10 +424,6 @@ class LCNClimateControl extends IPSModuleStrict
         }
 
         try {
-            if ($this->M11ProbeActive()) {
-                $this->SetTimerInterval('Worker', 0);
-                return;
-            }
             // Fail-closed auch für bereits wartende Worker-Aufträge.
             if ($this->GetBuffer('ConfigurationValid') === '0') {
                 $this->SetTimerInterval('Worker', 0);
