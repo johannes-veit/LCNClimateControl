@@ -96,6 +96,12 @@ trait LCNClimateM11LockTest
             return 'ABBRUCH: Climate-Modul beschaeftigt.';
         }
         try {
+            $previous = $this->M11ProbeSession();
+            if (in_array((string) ($previous['phase'] ?? ''), ['passed', 'failed_safe'], true)) {
+                return 'ABBRUCH: M11 wurde bereits getestet ('
+                    . (string) $previous['phase']
+                    . '). Erst Diagnose auswerten; keine automatische Wiederholung.';
+            }
             if ($this->M11ProbeActive()
                 || $this->GetMode() !== self::MODE_HEATING
                 || $this->GetPendingMode() !== null || $this->IsBusy()
@@ -232,10 +238,17 @@ trait LCNClimateM11LockTest
                 $p['lockSent'] = time();
                 $this->M11ProbeWrite($p);
                 $ok = $this->M11ProbeCommand($p, true);
+                $p['lockCommandAccepted'] = $ok;
+                $p['lockCommandAt'] = time();
                 $this->M11ProbeSetPhase($p, $ok ? 'lock_wait' : 'release',
                     $ok ? 'Sperrbefehl gesendet; Rueckmeldung wird erwartet.'
                         : 'Sperrbefehl fehlgeschlagen; Freigabe wird sicherheitshalber versucht.');
             } elseif ($phase === 'lock_wait') {
+                $p['lastLockSample'] = IPS_VariableExists($lockId)
+                    ? ((bool) GetValue($lockId) ? 'GESPERRT' : 'FREI') : 'FEHLT';
+                $p['lastLockSampleAt'] = time();
+                $p['lastLockFeedbackAt'] = IPS_VariableExists($lockId)
+                    ? (int) (IPS_GetVariable($lockId)['VariableUpdated'] ?? 0) : 0;
                 if (IPS_VariableExists($lockId)
                     && (bool) GetValue($lockId)
                     && (int) (IPS_GetVariable($lockId)['VariableUpdated'] ?? 0)
@@ -252,7 +265,9 @@ trait LCNClimateM11LockTest
                 $p['releaseSent'] = time();
                 $this->M11ProbeSetPhase($p, 'release_wait', 'Freigabebefehl an M11 gesendet, Rueckmeldung ausstehend.');
                 $this->M11ProbeWrite($p);
-                if (!$this->M11ProbeCommand($p, false)) {
+                $accepted = $this->M11ProbeCommand($p, false);
+                $p['releaseCommandAccepted'] = $accepted;
+                if (!$accepted) {
                     $p['message'] = 'Freigabebefehl nicht angenommen; erneuter Versuch folgt.';
                 }
             } elseif ($phase === 'release_wait') {
@@ -361,6 +376,31 @@ trait LCNClimateM11LockTest
                         (int) (IPS_GetVariable($id)['VariableUpdated'] ?? 0));
             }
         }
-        return $status . "\nNur M11 S1 (Reglerindex 2); keine Relais- und Sollwertbefehle.";
+        $lockAccepted = array_key_exists('lockCommandAccepted', $p)
+            ? ((bool) $p['lockCommandAccepted'] ? 'JA' : 'NEIN')
+            : 'NICHT PROTOKOLLIERT (alter Testlauf v0.3.16)';
+        $releaseAccepted = array_key_exists('releaseCommandAccepted', $p)
+            ? ((bool) $p['releaseCommandAccepted'] ? 'JA' : 'NEIN')
+            : 'NICHT PROTOKOLLIERT (alter Testlauf v0.3.16)';
+        $status .= "\nSperrbefehl angenommen: " . $lockAccepted
+            . "\nSperrzustand waehrend Test bestaetigt: "
+            . ((bool) ($p['lockConfirmed'] ?? false) ? 'JA' : 'NEIN')
+            . "\nFreigabebefehl angenommen: " . $releaseAccepted
+            . "\nFreigabeversuche: " . (int) ($p['tries'] ?? 0);
+        foreach (['started' => 'Startzeit', 'lockSent' => 'Sperrversuch',
+            'lastLockFeedbackAt' => 'Letzte Sperrstatusmeldung',
+            'releaseSent' => 'Letzter Freigabeversuch'] as $key => $label) {
+            $v = (int) ($p[$key] ?? 0);
+            if ($v > 0) {
+                $status .= "\n" . $label . ': ' . date('H:i:s', $v);
+            }
+        }
+        if (isset($p['lastLockSample'])) {
+            $status .= "\nLetzte Sperr-Rueckmeldung im Test: "
+                . (string) $p['lastLockSample'];
+        }
+        return $status
+            . "\nNur M11 S1 (Reglerindex 2); keine Relais- und Sollwertbefehle."
+            . "\nEin angenommener Befehl beweist NICHT die tatsaechliche Reglersperre.";
     }
 }
