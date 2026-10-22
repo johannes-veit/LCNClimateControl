@@ -787,3 +787,49 @@ Rueckgabewerte, Wiederholungsschutz und erfolgreiche
 Wiederfreigabe ergaenzt. Reale Tests der Hardware sowie
 CI-Ausfuehrung bleiben separat nachzuweisen.
 
+
+
+## v0.3.19 Build 35 – Diagnose statt weiterer Sperrversuche
+
+Live-Ergebnis des EINMALIGEN M11-Wiederholungstests am 22.10.2026:
+LCN_LockTargetValue(#37617,2) = FALSE,
+LCN_ReleaseTargetValue(#37617,2) = FALSE.
+S1TargetLock #46746 danach FREIGEGEBEN,
+S1Target #34107 nach der Freigabe 21,0 Grad,
+kein S1-Sperrzustand nachgewiesen.
+Die LCN-PRO-Option "Sperrung zulassen" wurde laut Betreiber inzwischen
+in allen elf Modulen aktiviert. Dies ist keine Bestaetigung eines
+funktionierenden IPS-Befehls.
+
+Ein weiteres blindes Sperren, Entsperren oder Wechseln auf Reglerindex 0
+ist nicht zu verantworten: In LCN-PRO ist Regler 1 dokumentiert,
+Symcon liest S1Target. Ob diese Objekte in der bestehenden Konfiguration
+denselben Regler bezeichnen, muss erst technisch identifiziert werden.
+Die offiziellen IPS-Zielwerte sind 0=R1, 1=R2, 2=S1, 3=S2,
+doch API-Aufruf und tatsächliche Firmwareunterstuetzung sind getrennte Fragen.
+
+NEUER reiner Lesebutton:
+"LCN-Regler: R1/S1-Schnittstellen und Verbindungen prüfen (nur lesen)"
+
+Der neue Bericht zeigt fuer alle elf konfigurierten LCN-Raeume
+die Hardwareadresse, Segment, native IPS-Modul-GUID, InstanceStatus,
+ConnectionID, native LCN-Value-Instanz, R1TargetEnabled/S1TargetEnabled
+und vorhandene Sperr-Rueckmeldungen R1TargetLock/S1TargetLock.
+Gateway-Konfiguration wird auf fest definierte, unkritische technische
+Felder begrenzt; Kennwoerter, Benutzernamen und IP-Adressen werden nicht
+ausgegeben. Alle Daten werden rein in Symcon gelesen.
+**Weder Bus-Anfragen noch Sperr-, Freigabe-, Relais- oder TS-Befehle.**
+
+Der bestehende ChatGPT-Snapshot nennt konfigurierte, bislang ungepruefte
+Raeume jetzt "DIREKT VORBEREITET (Reglersperre noch nicht nachgewiesen)"
+anstelle von "DIREKT BEREIT". Die zusammenfassende Zahl bezeichnet
+technische Zuordnungen, nicht durchgeführte Sperrtests.
+
+Die bisherige M11-Testsession und die ausgefallenen API-Ergebnisse
+bleiben unveraendert gespeichert. Insbesondere keine Wiederholung
+durch Update oder durch den neuen Diagnoseknopf.
+
+Regressionstest test_native_interface_audit.php prueft, dass native
+R1/S1-Objekte und Konfiguration korrekt auslesbar sind und keine
+vertraulichen Gateway-Felder ausgegeben werden. LCN-Live-Funktionstest
+wurde nicht durchgefuehrt.
