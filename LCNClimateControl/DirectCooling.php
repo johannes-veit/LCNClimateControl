@@ -271,7 +271,7 @@ trait LCNDirectCooling
             $this->SendDebug('DirectCooling', 'Relaiskommando: ' . $e->getMessage(), 0);
             return false;
         } finally {
-            IPS_SemaphoreLeave(self::GLOBAL_LCN_SEND_SEMAPHORE);
+            $this->ReleaseLCNBusSlot();
         }
     }
 
@@ -295,7 +295,7 @@ trait LCNDirectCooling
             $this->SendDebug('DirectCooling', $name . ': ' . $e->getMessage(), 0);
             return false;
         } finally {
-            IPS_SemaphoreLeave(self::GLOBAL_LCN_SEND_SEMAPHORE);
+            $this->ReleaseLCNBusSlot();
         }
     }
 
@@ -979,7 +979,7 @@ trait LCNDirectCooling
             } catch (Throwable $e) {
                 $this->SendDebug('DirectCooling', 'Relais-Statusabfrage: ' . $e->getMessage(), 0);
             } finally {
-                IPS_SemaphoreLeave(self::GLOBAL_LCN_SEND_SEMAPHORE);
+                $this->ReleaseLCNBusSlot();
             }
         }
         return $job;
@@ -1019,7 +1019,7 @@ trait LCNDirectCooling
             } catch (Throwable $e) {
                 $this->SendDebug('DirectCooling', 'S1Target-Statusabfrage: ' . $e->getMessage(), 0);
             } finally {
-                IPS_SemaphoreLeave(self::GLOBAL_LCN_SEND_SEMAPHORE);
+                $this->ReleaseLCNBusSlot();
             }
         }
         return $job;
