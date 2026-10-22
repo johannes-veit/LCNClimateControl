@@ -156,6 +156,17 @@ for($i=0;$i<4;$i++){$m->M11ProbeWorker();}
 t(($m->attrs['M11ProbeSession']['phase']??'')==='failed_safe','unconfirmed lock is test failure');
 t($GLOBALS['probeCommands']===[['lock',37617,2],['release',37617,2]],'release even after missing lock feedback');
 echo "PASS unconfirmed lock still releases, not marked passed\n";
+t(str_contains($m->M11ProbeStatus(), 'Sperrbefehl angenommen: JA'),
+  'lock API acknowledgement must be included in retrospective status');
+t(str_contains($m->M11ProbeStatus(), 'Sperrzustand waehrend Test bestaetigt: NEIN'),
+  'read-only status distinguishes command acceptance from physical evidence');
+$before = count($GLOBALS['probeCommands']);
+t(str_starts_with($m->StartM11RegulatorTest(), 'ABBRUCH'),
+  'failed test cannot silently repeat another lock attempt');
+t(count($GLOBALS['probeCommands']) === $before,
+  'failed test re-opening is strictly passive');
+echo "PASS retrospective and no repeated lock after failed_safe\n";
+
 
 // If S1 release is never confirmed, keep uncertain marker & alert.
 $m=initProbe();$m->StartM11RegulatorTest();
@@ -180,4 +191,4 @@ $m->mode=1;$m->M11ProbeWorker();
 t(count(array_filter($GLOBALS['probeCommands'], fn($cmd)=>$cmd[0]==='lock'))===0,
   'unexpected mode switch must never send a lock');
 echo "PASS duplicate suppression and changed-mode guard\n";
-echo "ALL SIX M11 PROBE TEST CASES PASSED\n";
+echo "ALL SEVEN M11 PROBE TEST CASES PASSED\n";
