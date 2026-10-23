@@ -34,6 +34,9 @@ final class AutoProbe {
     private function ReadJsonAttribute(string $name): array { return $this->attrs[$name] ?? []; }
     private function WriteJsonAttribute(string $name, array $value): void { $this->attrs[$name]=$value; }
     private function IsOperationalLCNModule(int $id): bool { return in_array($id, [11,21,31,41,51,61,111,121,131,141,151,92,192], true); }
+    // Other mock suites validate real native S1 action ownership.
+    private function DirectCoolingLockActionID(array $room,array $mapping): int
+    { return (int) ($mapping['UnlockedVariable'] ?? 0); }
     private function AppendJob(array $job): void { $this->jobs[]=$job; }
     private function YieldCurrentJob(array $job): void { $this->jobs[]=$job; }
     public array $rooms = [];
