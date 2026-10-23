@@ -66,6 +66,7 @@ class LCNClimateControl extends IPSModuleStrict
 
     private const PROFILE_MODE = 'LCNC.Mode';
     private const PROFILE_HEAT = 'LCNC.HeatSetpoint';
+    private const PROFILE_HEAT_OG_SLEEP = 'LCNC.HeatSetpointOGSleep';
     private const PROFILE_COOL = 'LCNC.Cooling';
 
     public function Create(): void
@@ -292,7 +293,9 @@ class LCNClimateControl extends IPSModuleStrict
             $heatIdent = $this->HeatIdent($targetID);
             $coolIdent = $this->CoolIdent($targetID);
 
-            $this->MaintainVariable($heatIdent, $room['Name'] . ' – Soll', VARIABLETYPE_FLOAT, self::PROFILE_HEAT, $position + 1, true);
+            $heatProfile = $this->IsOGSleepingRoom($room)
+                ? self::PROFILE_HEAT_OG_SLEEP : self::PROFILE_HEAT;
+            $this->MaintainVariable($heatIdent, $room['Name'] . ' – Soll', VARIABLETYPE_FLOAT, $heatProfile, $position + 1, true);
             $this->EnableAction($heatIdent);
 
             $this->MaintainVariable($coolIdent, $room['Name'] . ' – Kühlung', VARIABLETYPE_BOOLEAN, self::PROFILE_COOL, $position + 1, true);
@@ -725,6 +728,21 @@ class LCNClimateControl extends IPSModuleStrict
         $this->PushVisualizationState();
     }
 
+    /** Native LCN-PRO regulator limits for the two OG bedrooms only. */
+    private function IsOGSleepingRoom(array $room): bool
+    {
+        return in_array((string) ($room['Name'] ?? ''), [
+            'OG Schlafen 1', 'OG Schlafen 2'
+        ], true);
+    }
+
+    private function HeatingLimits(array $room): array
+    {
+        return $this->IsOGSleepingRoom($room)
+            ? ['min' => 12, 'max' => 22]
+            : ['min' => 18, 'max' => 24];
+    }
+
     private function RequestHeatingTarget(array $Room, float $Value): void
     {
         if ($this->DirectCoolingLockState((int) $Room['TargetVariable']) !== '') {
@@ -738,8 +756,13 @@ class LCNClimateControl extends IPSModuleStrict
         }
 
         $rounded = round($Value);
-        if ($rounded < 18.0 || $rounded > 24.0 || abs($Value - $rounded) > 0.01) {
-            throw new InvalidArgumentException('Symcon erlaubt im Heizbetrieb nur ganze Sollwerte von 18 bis 24 °C.');
+        $limits = $this->HeatingLimits($Room);
+        if ($rounded < $limits['min'] || $rounded > $limits['max']
+            || abs($Value - $rounded) > 0.01) {
+            throw new InvalidArgumentException(sprintf(
+                '%s: Heizungssollwert nur von %d bis %d °C (ganze Grad).',
+                $Room['Name'], $limits['min'], $limits['max']
+            ));
         }
 
         $targetID = $Room['TargetVariable'];
@@ -1802,6 +1825,8 @@ class LCNClimateControl extends IPSModuleStrict
             'displayTarget' => $displayTarget,
             'cooling' => $displayCooling,
             'heatIdent' => $this->HeatIdent($targetID),
+            'heatMin' => $this->HeatingLimits($Room)['min'],
+            'heatMax' => $this->HeatingLimits($Room)['max'],
             'coolIdent' => $this->CoolIdent($targetID),
             'busy' => $roomBusy,
             'error' => $this->GetRoomError($targetID)
@@ -1925,6 +1950,15 @@ class LCNClimateControl extends IPSModuleStrict
         IPS_SetVariableProfileValues(self::PROFILE_HEAT, 18.0, 24.0, 1.0);
         IPS_SetVariableProfileDigits(self::PROFILE_HEAT, 0);
         IPS_SetVariableProfileText(self::PROFILE_HEAT, '', ' °C');
+
+        // Dedicated profile: only OG Schlafen 1/2 may use 12–22 °C.
+        // All nine other rooms keep their existing 18–24 °C profile.
+        if (!IPS_VariableProfileExists(self::PROFILE_HEAT_OG_SLEEP)) {
+            IPS_CreateVariableProfile(self::PROFILE_HEAT_OG_SLEEP, VARIABLETYPE_FLOAT);
+        }
+        IPS_SetVariableProfileValues(self::PROFILE_HEAT_OG_SLEEP, 12.0, 22.0, 1.0);
+        IPS_SetVariableProfileDigits(self::PROFILE_HEAT_OG_SLEEP, 0);
+        IPS_SetVariableProfileText(self::PROFILE_HEAT_OG_SLEEP, '', ' °C');
 
         if (!IPS_VariableProfileExists(self::PROFILE_COOL)) {
             IPS_CreateVariableProfile(self::PROFILE_COOL, VARIABLETYPE_BOOLEAN);
