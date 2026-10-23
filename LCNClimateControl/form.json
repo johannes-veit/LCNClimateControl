@@ -2,13 +2,13 @@
   "elements": [
     {
       "type": "Label",
-      "caption": "Heizbetrieb unverändert, GT8 A7/A8 unverändert. Bei Kühlen erfolgt pro Raum automatische, passive Erkennung der nativen LCN-Relaise und Regler-Rückmeldungen. Fehlt eine Voraussetzung, bleibt die bisherige A7/A8-Kühlsteuerung aktiv. Keine elf manuell einzutragenden Symcon-IDs nötig."
+      "caption": "HEIZEN bleibt unveraendert (LCN-Regler / GT8 A7/A8). KUEHLEN wird erst nach 11 bestandenen S1-Tests, 11 Ventilrelaistests und nachgewiesenem Hardware-Taupunktschutz freigegeben. Kein ungepruefter A7/A8-Kuehlrueckfall."
     },
     {
       "type": "List",
       "name": "Rooms",
       "caption": "Räume",
-      "rowCount": 10,
+      "rowCount": 11,
       "add": true,
       "delete": true,
       "changeOrder": true,
@@ -120,25 +120,34 @@
     },
     {
       "type": "ExpansionPanel",
-      "caption": "LCN-Kuehlung: Automatische Erkennung (optional)",
+      "caption": "Kuehlen – Sicherheit und native Relais (Inbetriebnahme)",
       "expanded": false,
       "items": [
         {
           "type": "CheckBox",
           "name": "DirectCoolingEnabled",
-          "caption": "Automatisch neue Steuerung pruefen (fehlende Zuordnungen = bisheriger Betrieb)"
+          "caption": "Direkte Kuehlsteuerung verwenden (nur nach vollstaendiger Inbetriebnahme)"
         },
         {
           "type": "SelectVariable",
           "name": "CoolingSafetyVariable",
-          "caption": "Optionale externe Freigabe (Boolean, leer=kein Software-Gate; Hardware-Taupunktwächter separat)",
+          "caption": "PFLICHT: Externe Kuehlfreigabe (Boolean TRUE = Freigabe; FALSE = sofort sperren)",
           "validVariableTypes": [
             0
           ]
         },
         {
+          "type": "CheckBox",
+          "name": "CoolingHardwareInterlockConfirmed",
+          "caption": "PFLICHT: Unabhaengiger Taupunktwaechter sperrt Kaltwasser physisch – vor Ort geprueft"
+        },
+        {
           "type": "Label",
-          "caption": "Bekannt und bestätigt: NC-Stellantriebe (stromlos ZU), Relais EIN versorgt den Antrieb (Ventil AUF). Die Symcon-Relaisinstanz, der einzelne Kanal sowie Status und Entriegelt werden automatisch anhand nativer LCN-IDs/Verbindungen gesucht. Keine manuelle 11-Raum-Zuordnung nötig. Fehlt eine native Instanz oder Rückmeldung, bleibt der betroffene Raum auf der bisherigen A7/A8-Steuerung. Physischer Taupunktwächter gehört in die Kühlwasserfreigabe."
+          "caption": "Ohne Kuehlfreigabe UND abgenommenen Hardware-Taupunktwaechter bleibt KUEHLEN gesperrt. LCN-S1-Pruefung und Einzelrelaispruefung nur im HEIZEN-Modus; bei Relaistest wird das einzelne Ventil kurz bestromt und danach wieder abgeschaltet. Bei Fehlern STOP statt A7/A8-Rueckfall."
+        },
+        {
+          "type": "Label",
+          "caption": "NC-Stellantriebe: Relais EIN = Ventil AUF, AUS = Ventil ZU. Die elf LCN-Relais-Units und S1TargetLock werden aus ihren nativen Symcon-Instanzen zugeordnet. Die echte Stellung muss fuer jede Unit separat bestaetigt werden."
         },
         {
           "type": "List",
@@ -292,11 +301,11 @@
     },
     {
       "type": "Label",
-      "caption": "Die automatische Regelung arbeitet ausschließlich mit den laufenden S1Target-Rückmeldungen. Eine zyklische oder gebündelte LCN_RequestRead-Abfrage wird bewusst nicht verwendet, um den LCN-Bus nicht unnötig zu belasten."
+      "caption": "LCN-Bus: Befehle und aktive Rueckfragen aus diesem Modul werden mit mindestens 750 ms Abstand ausgefuehrt. Keine dauerhafte zusaetzliche Polling-Last."
     },
     {
       "type": "Label",
-      "caption": "Heizen: Bedienbereich 18-24 Grad C und A7/A8 wie bisher. Kuehlen: Standard (Direkt-Aus) wie 0.2.10; Direkt-Ein nutzt bestaetigte LCN-Reglersperre und Relaisrueckmeldung. Bei Rueckmeldungsfehlern STOP und manuelle Pruefung."
+      "caption": "Heizen: A7/A8 und S1Target unveraendert. Kuehlen: nach Regler-/Relaisabnahme ausschliesslich S1TargetLock via RequestAction, dann bestaetigtes Einzelrelais, vor Heizbetrieb erst Relais AUS und Regler FREI."
     }
   ],
   "actions": [
@@ -322,18 +331,28 @@
     },
     {
       "type": "Button",
-      "caption": "M11 EG Büro: RequestAction-Sperrtest EINMALIG starten (mit automatischer Freigabe)",
-      "onClick": "echo LCNC_StartM11ViaActionTest($id);"
-    },
-    {
-      "type": "Button",
       "caption": "M11 EG Büro: Sperrtest-Status anzeigen (nur lesen)",
       "onClick": "echo LCNC_M11ProbeStatus($id);"
     },
     {
       "type": "Button",
-      "caption": "M11 EG Büro: NOT-FREIGABE erneut auslösen (nur S1 entsperren)",
-      "onClick": "echo LCNC_M11ProbeEmergencyRelease($id);"
+      "caption": "Inbetriebnahme: naechsten S1-Regler pruefen (ein Raum, automatisch freigeben)",
+      "onClick": "echo LCNC_CoolingCommissionStartNext($id);"
+    },
+    {
+      "type": "Button",
+      "caption": "Inbetriebnahme: naechstes Ventilrelais testen (kurz EIN/AUS; HEIZEN)",
+      "onClick": "echo LCNC_CoolingCommissionStartRelay($id);"
+    },
+    {
+      "type": "Button",
+      "caption": "Inbetriebnahme: 11 Regler, 11 Relais und Kuehlfreigabe anzeigen (nur lesen)",
+      "onClick": "echo LCNC_CoolingCommissionStatus($id);"
+    },
+    {
+      "type": "Button",
+      "caption": "NOT-AUS/FREIGABE: aktives Testventil AUS, dann S1 FREIGEBEN",
+      "onClick": "echo LCNC_CoolingCommissionEmergencyRelease($id);"
     }
   ],
   "status": [
