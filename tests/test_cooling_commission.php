@@ -200,6 +200,64 @@ chk(str_starts_with($m->CoolingCommissionRetryFailedRegulator(),'ABBRUCH:'),
     'second retry is blocked even after one successful guarded attempt');
 echo "PASS one explicit fail-safe retry, same-room only, zero relays, no second attempt\n";
 
+
+// Manual plant mode must NOT bypass the independently tested interlocks.
+// The IPS mode switch provides the operator's deliberate cooling consent,
+// while an optional external Boolean always retains veto authority.
+require_once __DIR__.'/../LCNClimateControl/DirectCooling.php';
+final class ManualCoolingGuardMock
+{
+    use LCNDirectCooling;
+    public array $flags = [
+        'ManualCoolingApproval'=>false,
+        'CoolingHardwareInterlockConfirmed'=>false,
+        'CoolingHeatingResumeConfirmed'=>false
+    ];
+    public int $safetyID = 0;
+    private function ReadPropertyBoolean(string $name): bool
+    {
+        return (bool) ($this->flags[$name] ?? false);
+    }
+    private function ReadPropertyInteger(string $name): int
+    {
+        return $name === 'CoolingSafetyVariable' ? $this->safetyID : 0;
+    }
+    private function GetRuntimeRooms(): array { return []; }
+    public function safe(): bool { return $this->DirectCoolingSafe(); }
+    public function preflight(): array { return $this->DirectCoolingPreflight(); }
+}
+$guard = new ManualCoolingGuardMock();
+chk(!$guard->safe(), 'default fail closed');
+chk($guard->preflight()!==[], 'manual and external permission absent');
+$guard->flags['ManualCoolingApproval']=true;
+chk(!$guard->safe(), 'manual authorization cannot bypass dewpoint hardware');
+$guard->flags['CoolingHardwareInterlockConfirmed']=true;
+chk(!$guard->safe(), 'manual authorization cannot bypass heater restart signoff');
+$guard->flags['CoolingHeatingResumeConfirmed']=true;
+chk($guard->safe(), 'manual operator opt-in with both hardware acknowledgements');
+chk($guard->preflight()===[], 'external Boolean not required in opt-in manual mode');
+$guard->flags['CoolingHardwareInterlockConfirmed']=false;
+chk(!$guard->safe(), 'hardware signoff revoked: no cooling');
+$guard->flags['CoolingHardwareInterlockConfirmed']=true;
+$guard->flags['CoolingHeatingResumeConfirmed']=false;
+chk(!$guard->safe(), 'heating resume signoff revoked: no cooling');
+$guard->flags['CoolingHeatingResumeConfirmed']=true;
+$guard->safetyID=50001;
+$GLOBALS['cVars'][50001]=['VariableUpdated'=>time(), 'VariableType'=>VARIABLETYPE_BOOLEAN];
+$GLOBALS['cVals'][50001]=false;
+chk(!$guard->safe(), 'external Boolean FALSE vetoes manual approval');
+$GLOBALS['cVals'][50001]=true;
+chk($guard->safe(), 'external Boolean TRUE allows if hardware commissioned');
+$guard->flags['ManualCoolingApproval']=false;
+chk($guard->safe(), 'prior external Boolean mode continues to work');
+$guard->flags['ManualCoolingApproval']=true;
+$GLOBALS['cVars'][50001]['VariableType']=2;
+chk(!$guard->safe(), 'invalid external variable type cannot be overridden');
+chk($guard->preflight()!==[], 'invalid external Boolean is reported');
+unset($GLOBALS['cVars'][50001],$GLOBALS['cVals'][50001]);
+chk(!$guard->safe(), 'missing configured external Boolean never falls back to manual');
+echo "PASS manual Symcon authorization with physical safety + heater resume; optional external veto\n";
+
 $source=file_get_contents(__DIR__.'/../LCNClimateControl/DirectCooling.php');
 $module=file_get_contents(__DIR__.'/../LCNClimateControl/module.php');
 chk(str_contains($source,'// Every room must have its LCN heater regulator held LOCKED'),
