@@ -573,6 +573,19 @@ class LCNClimateControl extends IPSModuleStrict
                         );
                     }
                 }
+                if ($this->GetMode() === self::MODE_COOLING) {
+                    // Aborting a pending cooling run must NOT leave an open
+                    // NC valve energized merely because the worker stopped.
+                    // Queue safe OFF-only jobs; never automatically unlock S1.
+                    foreach ($this->GetRuntimeRooms() as $room) {
+                        $target = (int) $room['TargetVariable'];
+                        if ($this->DirectCoolingLockState($target) !== '') {
+                            $this->DirectCoolingEnqueueEmergencyClose($room,
+                                $this->GetStoredCoolingState($target));
+                        }
+                    }
+                    $this->StartWorkerIfNeeded();
+                }
 
                 $this->RefreshRuntimeStatus();
                 $this->SendDebug(
