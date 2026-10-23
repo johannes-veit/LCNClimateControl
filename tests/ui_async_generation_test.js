@@ -56,7 +56,7 @@ assert(ogControls.includes('clamp(raw + 1, min, max)'), 'plus can exceed room-sp
 assert(ogControls.includes('clamp(raw - 1, min, max)'), 'minus can exceed room-specific floor');
 assert(ogControls.includes('plus.disabled = Number(slider.value) >= max'), 'slider plus not disabled at native maximum');
 assert(ogUpdate.includes('ref.slider.max = String(max)'), 'backend row updates not reflected in slider');
-assert(ogUpdate.includes('ref.plus.disabled = raw >= max'), 'plus remains enabled beyond 22');
+assert(ogUpdate.includes('ref.plus.disabled = switching || raw >= max'), 'plus must disable when switching or beyond 22');
 console.log('PASS: heater tile uses backend 12..22 limits only for OG bedrooms; 18..24 remains default');
 
 const guardCtx={
