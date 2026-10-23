@@ -96,6 +96,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterAttributeString('CoolingStates', '{}');
         $this->RegisterAttributeString('DirectCoolingLocks', '{}');
         $this->RegisterAttributeString('DirectCoolingLockMappings', '{}');
+        $this->RegisterAttributeString('DirectCoolingReleaseAttempts', '{}');
         $this->RegisterAttributeString('CoolingFallbackReasons', '{}');
         $this->RegisterAttributeString('DirectCoolingRoomHealth', '{}');
         $this->RegisterAttributeString('RegisteredTargetMessages', '[]');
@@ -745,12 +746,6 @@ class LCNClimateControl extends IPSModuleStrict
 
     private function RequestHeatingTarget(array $Room, float $Value): void
     {
-        if ($this->DirectCoolingLockState((int) $Room['TargetVariable']) !== '') {
-            throw new RuntimeException(
-                'Raumregler ist noch gesperrt oder Rueckmeldung unklar. '
-                . 'Vor neuer Sollwertfahrt S1-Freigabe pruefen.'
-            );
-        }
         if ($this->GetMode() !== self::MODE_HEATING) {
             throw new RuntimeException('Solltemperatur ist nur im Heizbetrieb bedienbar.');
         }
@@ -765,7 +760,23 @@ class LCNClimateControl extends IPSModuleStrict
             ));
         }
 
-        $targetID = $Room['TargetVariable'];
+        $targetID = (int) $Room['TargetVariable'];
+        if ($this->DirectCoolingLockState($targetID) !== '') {
+            // Do not throw a fatal error or send a heating TS key to the
+            // locked S1 regulator. Retain only this room's latest user
+            // setpoint until relay OFF + native S1 RELEASE are proven.
+            $this->StoreLastHeatingTarget($targetID, (float) $rounded);
+            $this->SetValueIfChanged($this->HeatIdent($targetID), (float) $rounded);
+            $this->DirectCoolingRecoverHeatingLocks();
+            $this->SetRoomError($targetID, (string) $Room['Name']
+                . ': Heizsollwert vorgemerkt; S1-Regler wird vor der Stellfahrt'
+                . ' sicher freigegeben. Bis zur Bestaetigung kein TS-Befehl.');
+            $this->RefreshRuntimeStatus();
+            $this->PushVisualizationRow($Room);
+            $this->PushVisualizationMeta();
+            return;
+        }
+
         $this->ClearRoomError($targetID);
         $this->RefreshRuntimeStatus();
         $this->SetValueIfChanged($this->HeatIdent($targetID), (float) $rounded);
@@ -1776,6 +1787,16 @@ class LCNClimateControl extends IPSModuleStrict
         $displayTarget = $actualTarget;
         $displayCooling = $this->GetStoredCoolingState($targetID);
         $roomBusy = false;
+        if ($this->GetMode() === self::MODE_HEATING
+            && $this->DirectCoolingLockState((int) $targetID) !== '') {
+            // Present the pending user setpoint while retaining the lock
+            // marker. Backend still sends no A7/A8 until S1 is released.
+            $pendingHeat = $this->GetLastHeatingTarget((int) $targetID);
+            if ($pendingHeat !== null) {
+                $displayTarget = $pendingHeat;
+            }
+            $roomBusy = true;
+        }
 
         $jobsToInspect = [];
         $currentJob = $this->GetCurrentJob();
