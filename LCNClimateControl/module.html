@@ -374,6 +374,15 @@ function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
 }
 
+// The server owns each room's LCN target range. Never infer it from a
+// global slider or from a room label in the HTML visualization.
+function heatingLimits(row) {
+    const min = Number(row?.heatMin ?? 18);
+    const max = Number(row?.heatMax ?? 24);
+    return Number.isFinite(min) && Number.isFinite(max) && min <= max
+        ? {min, max} : {min: 18, max: 24};
+}
+
 function formatTemp(value, digits = 1) {
     if (value === null || value === undefined || Number.isNaN(Number(value))) return '–';
     return Number(value).toLocaleString('de-DE', {
@@ -688,8 +697,9 @@ function createHeatRow(row) {
 
     const slider = document.createElement('input');
     slider.type = 'range';
-    slider.min = '18';
-    slider.max = '24';
+    const limits = heatingLimits(row);
+    slider.min = String(limits.min);
+    slider.max = String(limits.max);
     slider.step = '1';
     slider.setAttribute('aria-label', (row.name || 'Raum') + ' Solltemperatur');
 
@@ -705,11 +715,12 @@ function createHeatRow(row) {
     minus.addEventListener('click', () => {
         const current = getRow(targetId);
         if (!current) return;
+        const {min, max} = heatingLimits(current);
         const raw = current.displayTarget === null || current.displayTarget === undefined
-            ? 18
+            ? min
             : Math.round(Number(current.displayTarget));
         const previousValue = current.displayTarget;
-        const desired = clamp(raw - 1, 18, 24);
+        const desired = clamp(raw - 1, min, max);
         current.displayTarget = desired;
         patchHeatRow(current);
         sendAction({
@@ -724,11 +735,12 @@ function createHeatRow(row) {
     plus.addEventListener('click', () => {
         const current = getRow(targetId);
         if (!current) return;
+        const {min, max} = heatingLimits(current);
         const raw = current.displayTarget === null || current.displayTarget === undefined
-            ? 18
+            ? min
             : Math.round(Number(current.displayTarget));
         const previousValue = current.displayTarget;
-        const desired = raw < 18 ? 18 : clamp(raw + 1, 18, 24);
+        const desired = clamp(raw + 1, min, max);
         current.displayTarget = desired;
         patchHeatRow(current);
         sendAction({
@@ -751,8 +763,9 @@ function createHeatRow(row) {
         if (!current) return;
         current.displayTarget = Number(slider.value);
         targetValue.textContent = formatTarget(current.displayTarget);
-        minus.disabled = Number(slider.value) <= 18;
-        plus.disabled = Number(slider.value) >= 24;
+        const {min, max} = heatingLimits(current);
+        minus.disabled = Number(slider.value) <= min;
+        plus.disabled = Number(slider.value) >= max;
     });
     slider.addEventListener('change', () => {
         const current = getRow(targetId);
@@ -855,10 +868,13 @@ function patchHeatRow(row) {
     const ref = ui.rows.get(rowKey(row));
     if (!ref || ref.type !== 'heat') return;
 
+    const {min, max} = heatingLimits(row);
     const raw = row.displayTarget === null || row.displayTarget === undefined
-        ? 18
+        ? min
         : Math.round(Number(row.displayTarget));
-    const sliderValue = clamp(raw, 18, 24);
+    const sliderValue = clamp(raw, min, max);
+    ref.slider.min = String(min);
+    ref.slider.max = String(max);
 
     ref.grid.classList.toggle('busy', Boolean(row.busy));
     ref.grid.classList.toggle('error', Boolean(row.error));
@@ -873,8 +889,8 @@ function patchHeatRow(row) {
     ref.targetValue.textContent = formatTarget(row.displayTarget);
     ref.actual.textContent = formatTemp(row.temperature, 1);
     ref.slider.disabled = false;
-    ref.minus.disabled = raw <= 18;
-    ref.plus.disabled = raw >= 24;
+    ref.minus.disabled = raw <= min;
+    ref.plus.disabled = raw >= max;
 }
 
 function patchCoolRow(row) {
