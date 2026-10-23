@@ -1,6 +1,6 @@
 # LCN Climate Control – IP-Symcon 9
 
-**Stand: v0.3.22 Build 38 – HEIZEN produktiv, native KÜHLEN-Freigabe weiterhin gesperrt.**
+**Stand: v0.3.23 Build 39 – HEIZEN produktiv, M11-Sperr-/Freigabetest bestanden; KÜHLEN weiterhin gesperrt.**
 
 ## Einfache Architektur
 
@@ -40,13 +40,19 @@ Konfigurationsvariablen und keine Umprogrammierung der GT8.**
 - Bei allen elf LCN-Modulen wurde die Option
   "Sperrung zulassen" laut Betreiber in LCN-PRO aktiviert;
   Symcon kann diese Konfigurationsoption nicht auslesen.
-- Der neu vorbereitete, nur ausdruecklich aufrufbare
-  M11-Einzeltest sperrt und gibt den Regler ueber dieselbe
-  Standardaktion wieder frei; dabei werden unabhaengige
-  frische Statusrueckmeldungen gefordert.
-- Bis dieser Test bestanden ist, bleibt produktive
-  Direktkuehlung blockiert. Auch ein bestandener M11-Test
-  allein ist KEINE Freigabe der anderen zehn Regler.
+- **M11 (EG Buero) hat den realen Test am 23.10.2026 bestanden**:
+  `RequestAction(#46746,true)` erfolgreich, S1TargetLock
+  anschliessend GESPERRT, `RequestAction(#46746,false)`
+  erfolgreich, S1TargetLock wieder FREI und S1Target = 21,0 Grad.
+  Lockversuch 06:28:19, Sperrstatus-Rueckmeldung 06:28:21,
+  Freigabeversuch 06:28:24. Keine Relaisbefehle.
+- Die anderen **zehn Regler** sind eindeutig zugeordnet, aber
+  ihr echter Sperr-/Freigabe-Zyklus ist noch nicht nachgewiesen.
+  Der einzelne M11-Test wird **nicht** ungeprueft auf sie
+  uebertragen.
+- Produktive Direktkuehlung bleibt trotz des M11-Erfolgs
+  absichtlich gesperrt: Die anderen zehn Regler und die reale
+  Ventil-/Hydraulikfunktion sind noch nicht endgueltig geprueft.
 - Eine vom Symcon-System unabhaengige Taupunkt- und
   Kuehlwasserverriegelung bleibt Voraussetzung
   fuer echten Kuehlwasserbetrieb.
@@ -1010,3 +1016,27 @@ Auch diese beiden Leseaufrufe verwenden die 750-ms-Sendesperre.
 Der vorhandene Benutzer-Test `RequestAction(#46746, false) = TRUE`
 belegt nur den angenommenen Freigabeversuch im Zustand FREI.
 Der physische TRUE/FALSE-Rundlauf ist damit noch nicht getestet.
+
+
+## v0.3.23 Build 39 – Read-only-Bericht erkennt M11-Funktionstest
+
+Der gespeicherte, nach zwei nativen Fehlversuchen erstmals erfolgreiche
+M11-RequestAction-Test ist die erste **real nachgewiesene** LCN-S1-
+Sperr-/Freigabefunktion in diesem System. Der bestehende ChatGPT-Bericht
+hatte trotzdem alle elf Raeume als noch ungetestet ausgewiesen.
+
+Ohne neue Symcon-Variablen, Timer oder LCN-Befehle wertet der Bericht
+jetzt `M11ProbeSession` mit passendem Sender #37617, Sollwertvariable
+#34107, Sperrstatusvariable #46746, Befehlspfad RequestAction,
+beiden API-Bestaetigungen und bestaetigtem Lock-Ereignis aus.
+
+Nur **EG Buero** wird dann als `S1-Sperr-/Freigabetest BESTANDEN`
+bezeichnet, sofern der aktuelle Status zugleich FREI meldet.
+Die restlichen zehn Raeume bleiben korrekt als nicht getestet.
+Eine getrennte Zusammenfassung meldet die Zahl technisch erkannter
+Raeume und die Zahl **tatsaechlich gepruefter** Sperr-/Freigaben.
+
+Technische Zuordnung 11/11 bedeutet weiterhin **nicht** aktive
+Kuehlfreigabe. Der aktuelle M11-Test schaltete kein Ventilrelais.
+Im HEIZEN-Modus darf beispielsweise OG Bad weiter elektrisch EIN
+melden, wenn die LCN-Heizregelung Waerme anfordert.
