@@ -8,6 +8,7 @@ require_once __DIR__ . '/LockRecovery.php';
 require_once __DIR__ . '/M11LockTest.php';
 require_once __DIR__ . '/NativeInterfaceAudit.php';
 require_once __DIR__ . '/TrafficPacing.php';
+require_once __DIR__ . '/CoolingCommission.php';
 
 /**
  * LCN Heizung / Kühlung für IP-Symcon 9
@@ -32,6 +33,7 @@ class LCNClimateControl extends IPSModuleStrict
     use LCNClimateM11LockTest;
     use LCNClimateNativeInterfaceAudit;
     use LCNClimateTrafficPacing;
+    use LCNClimateCoolingCommission;
 
     private const STATUS_ACTIVE = 102;
     private const STATUS_INACTIVE = 104;
@@ -94,11 +96,14 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterAttributeString('RegisteredReferences', '[]');
         $this->RegisterAttributeString('LastError', '');
         $this->RegisterAttributeString('M11ProbeSession', '{}');
+        $this->RegisterAttributeString('CoolingCommissionSession', '{}');
+        $this->RegisterAttributeString('CoolingCommissionVerified', '{}');
 
         $this->RegisterTimer('Worker', 0, 'LCNC_Worker($_IPS[\'TARGET\']);');
         $this->RegisterTimer('DirectCoolingGuard', 0, 'LCNC_DirectCoolingWatchdog($_IPS[\'TARGET\']);');
         $this->RegisterTimer('ChatGPTDiagnosticTimer', 0, 'LCNC_UpdateChatGPTDiagnostic($_IPS[\'TARGET\']);');
         $this->RegisterTimer('M11ProbeTimer', 0, 'LCNC_M11ProbeWorker($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('CoolingCommissionTimer', 0, 'LCNC_CoolingCommissionWorker($_IPS[\'TARGET\']);');
 
         $this->EnsureProfiles();
 
@@ -160,6 +165,17 @@ class LCNClimateControl extends IPSModuleStrict
             $this->M11ProbeWrite($probe);
         } else {
             $this->SetTimerInterval('M11ProbeTimer', 0);
+        }
+        // After interrupted commissioning NEVER lock again on restart:
+        // first issue an S1 RELEASE for the affected room.
+        if ($this->CoolingCommissionActive()) {
+            $probe = $this->CoolingCommissionSession();
+            $this->CoolingCommissionPhase($probe, 'release',
+                'Update/Neustart: vorsorgliche S1-Freigabe.');
+            $probe['releaseTries'] = 0;
+            $this->CoolingCommissionSave($probe);
+        } else {
+            $this->SetTimerInterval('CoolingCommissionTimer', 0);
         }
         $this->SetBuffer('Queue', '[]');
         $this->SetBuffer('CurrentJob', '');
@@ -377,6 +393,17 @@ class LCNClimateControl extends IPSModuleStrict
         }
 
         try {
+            if ($this->CoolingCommissionActive()) {
+                $probeTarget = (int) ($this->CoolingCommissionSession()['target'] ?? 0);
+                if ($Ident === 'Mode'
+                    || ($probeTarget > 0
+                        && in_array($Ident, [
+                            $this->HeatIdent($probeTarget),
+                            $this->CoolIdent($probeTarget)
+                        ], true))) {
+                    throw new RuntimeException('S1-Einzelraumtest: Betriebsart und getesteter Raum bis zur Freigabe gesperrt.');
+                }
+            }
             if ($this->M11ProbeActive()) {
                 $probeTarget = (int) ($this->M11ProbeSession()['target'] ?? 0);
                 if ($Ident === 'Mode'
@@ -567,21 +594,16 @@ class LCNClimateControl extends IPSModuleStrict
 
     private function RequestMode(int $Mode): void
     {
+        if ($this->CoolingCommissionActive()) {
+            throw new RuntimeException('LCN-Reglerpruefung laeuft: Betriebsartenwechsel gesperrt.');
+        }
         if (!in_array($Mode, [self::MODE_HEATING, self::MODE_COOLING], true)) {
             throw new InvalidArgumentException('Ungültige Betriebsart.');
         }
-        // A failed real native lock/release test must NOT result in eleven
-        // blind automatic cooling attempts. Keep ordinary heating running.
-        if ($Mode === self::MODE_COOLING && $this->UsesDirectCooling()) {
-            $m11Probe = $this->M11ProbeSession();
-            $phase = (string) ($m11Probe['phase'] ?? '');
-            $path = (string) ($m11Probe['commandPath'] ?? '');
-            if ($phase === 'failed_safe' || $path === 'RequestAction') {
-                throw new RuntimeException(
-                    'KUEHLEN weiterhin gesperrt: M11-Diagnose ist keine Freigabe '
-                    . 'fuer alle elf Raumregler und die produktive Kuehlsteuerung '
-                    . 'nutzt bisher die fehlgeschlagene native LCN-Funktion.'
-                );
+        if ($Mode === self::MODE_COOLING) {
+            $faults = $this->CoolingCommissionReadinessErrors();
+            if ($faults !== []) {
+                throw new RuntimeException('KUEHLEN gesperrt: ' . implode('; ', $faults));
             }
         }
 
@@ -609,6 +631,9 @@ class LCNClimateControl extends IPSModuleStrict
 
     private function ApplyModeChange(int $Mode): void
     {
+        if ($Mode === self::MODE_COOLING && $this->CoolingCommissionReadinessErrors() !== []) {
+            throw new RuntimeException('KUEHLEN gesperrt: Inbetriebnahme/Taupunktschutz unvollstaendig.');
+        }
         if ($Mode === $this->GetMode()) {
             $this->ClearPendingMode();
             $this->PushVisualizationMeta();
