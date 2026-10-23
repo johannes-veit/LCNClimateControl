@@ -76,6 +76,7 @@ class LCNClimateControl extends IPSModuleStrict
         // Opt-in: bestehender Kuehlbetrieb bleibt bei Updates unveraendert.
         $this->RegisterPropertyBoolean('DirectCoolingEnabled', true);
         $this->RegisterPropertyInteger('CoolingSafetyVariable', 0);
+        $this->RegisterPropertyBoolean('CoolingHardwareInterlockConfirmed', false);
         $this->RegisterPropertyString('CoolingRelays', '[]');
         $this->RegisterPropertyBoolean('AutoCoolingPolarityConfirmed', false);
         $this->RegisterPropertyBoolean('AutoCoolingOpenRelayOn', true);
@@ -98,6 +99,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterAttributeString('M11ProbeSession', '{}');
         $this->RegisterAttributeString('CoolingCommissionSession', '{}');
         $this->RegisterAttributeString('CoolingCommissionVerified', '{}');
+        $this->RegisterAttributeString('CoolingCommissionRelays', '{}');
 
         $this->RegisterTimer('Worker', 0, 'LCNC_Worker($_IPS[\'TARGET\']);');
         $this->RegisterTimer('DirectCoolingGuard', 0, 'LCNC_DirectCoolingWatchdog($_IPS[\'TARGET\']);');
@@ -170,8 +172,14 @@ class LCNClimateControl extends IPSModuleStrict
         // first issue an S1 RELEASE for the affected room.
         if ($this->CoolingCommissionActive()) {
             $probe = $this->CoolingCommissionSession();
-            $this->CoolingCommissionPhase($probe, 'release',
-                'Update/Neustart: vorsorgliche S1-Freigabe.');
+            $mustClose = (string) ($probe['kind'] ?? '') === 'relay'
+                && !(bool) ($probe['relayOffConfirmed'] ?? false);
+            $this->CoolingCommissionPhase($probe,
+                $mustClose ? 'relay_off' : 'release',
+                $mustClose
+                    ? 'Update/Neustart: zuerst Ventilrelais AUS, danach S1 freigeben.'
+                    : 'Update/Neustart: vorsorgliche S1-Freigabe.');
+            $probe['relayOffTries'] = 0;
             $probe['releaseTries'] = 0;
             $this->CoolingCommissionSave($probe);
         } else {
