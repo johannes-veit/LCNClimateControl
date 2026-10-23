@@ -76,6 +76,9 @@ class LCNClimateControl extends IPSModuleStrict
         // Opt-in: bestehender Kuehlbetrieb bleibt bei Updates unveraendert.
         $this->RegisterPropertyBoolean('DirectCoolingEnabled', true);
         $this->RegisterPropertyInteger('CoolingSafetyVariable', 0);
+        // Explicit one-time opt-in: user handles plant HEIZEN/KUEHLEN manually.
+        // The Symcon mode selection then authorizes cooling; no extra IPS variable.
+        $this->RegisterPropertyBoolean('ManualCoolingApproval', false);
         $this->RegisterPropertyBoolean('CoolingHardwareInterlockConfirmed', false);
         $this->RegisterPropertyBoolean('CoolingHeatingResumeConfirmed', false);
         $this->RegisterPropertyString('CoolingRelays', '[]');
