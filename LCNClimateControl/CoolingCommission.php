@@ -557,10 +557,14 @@ trait LCNClimateCoolingCommission
         }
         $rows[] = 'Reglerpruefung: nur S1 sperren/freigeben; Relaispruefung: S1 sperren, Einzelrelais EIN/AUS, S1 freigeben.';
         $safetyID = (int) $this->ReadPropertyInteger('CoolingSafetyVariable');
-        $rows[] = 'Kuehlfreigabe Boolean: '
-            . ($safetyID > 0 ? ('#' . $safetyID
-                . ' / ' . ($this->DirectCoolingSafe() ? 'TRUE' : 'FALSE/FEHLT'))
-                : 'NICHT KONFIGURIERT');
+        $manual = $this->ReadPropertyBoolean('ManualCoolingApproval');
+        $rows[] = $safetyID > 0
+            ? ('Kuehlfreigabe Boolean: #' . $safetyID
+                . ' / ' . ($this->DirectCoolingSafe() ? 'TRUE' : 'FALSE/FEHLT')
+                . ' (externe Freigabe hat Vorrang)')
+            : ($manual
+                ? 'Kuehlfreigabe: MANUELL – Betriebsart KUEHLEN in Symcon ist Betreiberfreigabe'
+                : 'Kuehlfreigabe Boolean: NICHT KONFIGURIERT (manuelle Freigabe nicht aktiviert)');
         $rows[] = 'Hardware-Taupunktschutz vor Ort abgenommen: '
             . ($this->ReadPropertyBoolean('CoolingHardwareInterlockConfirmed') ? 'JA' : 'NEIN');
         $rows[] = 'LCN-Heizregler nach S1-Freigabe wieder funktionsfaehig: '
@@ -594,7 +598,10 @@ trait LCNClimateCoolingCommission
             $errors[] = 'Noch offene/ungewisse Reglersperrung';
         }
         $safetyID = (int) $this->ReadPropertyInteger('CoolingSafetyVariable');
-        if ($safetyID <= 0 || !$this->DirectCoolingSafe()) {
+        $manual = $this->ReadPropertyBoolean('ManualCoolingApproval');
+        if ($safetyID <= 0 && !$manual) {
+            $errors[] = 'Kuehlfreigabe fehlt (manuelle Freigabe nicht aktiviert, externe Boolean fehlt)';
+        } elseif ($safetyID > 0 && !$this->DirectCoolingSafe()) {
             $errors[] = 'Externe Software-Kuehlfreigabe fehlt oder FALSE';
         }
         if (!$this->ReadPropertyBoolean('CoolingHardwareInterlockConfirmed')) {
