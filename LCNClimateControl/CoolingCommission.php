@@ -141,6 +141,12 @@ trait LCNClimateCoolingCommission
                 if ((bool) GetValue($lockID)) {
                     return 'ABBRUCH: ' . (string) $room['Name'] . ' ist bereits GESPERRT.';
                 }
+                if (!array_key_exists('OpenRelayOn', $map)
+                    || !(bool) $map['OpenRelayOn']
+                    || !(bool) ($map['PolarityConfirmed'] ?? false)) {
+                    return 'ABBRUCH: ' . (string) $room['Name']
+                        . ' Relais-/NC-Polaritaet nicht bestaetigt.';
+                }
                 if ((bool) GetValue($relayID)) {
                     $skipped[] = (string) $room['Name'] . ' (Heizrelais EIN)';
                     continue;
@@ -223,7 +229,7 @@ trait LCNClimateCoolingCommission
         $lockID = (int) ($p['lockID'] ?? 0);
         $sent = (int) ($locked ? ($p['lockAt'] ?? 0) : ($p['releaseAt'] ?? 0));
         $read = (int) ($p['lastReadAt'] ?? 0);
-        if (!$p['lastReadAck'] || $read <= $sent
+        if (!(bool) ($p['lastReadAck'] ?? false) || $read <= $sent
             || !IPS_VariableExists($lockID)
             || (bool) GetValue($lockID) !== $locked) {
             return false;
@@ -487,21 +493,36 @@ trait LCNClimateCoolingCommission
     public function CoolingCommissionStatus(): string
     {
         $p = $this->CoolingCommissionSession();
-        $rows = ['LCN KUEHLUNG – S1-INBETRIEBNAHME (NUR LESEN)'];
+        $rows = ['LCN KUEHLUNG – INBETRIEBNAHME (NUR LESEN)'];
         $passed = 0;
+        $relayPassed = 0;
         foreach ($this->GetRuntimeRooms() as $room) {
             $cert = $this->CoolingCommissionVerified($room);
             if ($cert) { $passed++; }
-            $rows[] = (string) ($room['Name'] ?? 'Raum') . ': '
-                . ($cert ? 'S1-GEPRUEFT' : 'NOCH NICHT GEPRUEFT');
+            $relayOK = $this->CoolingCommissionRelayRoomVerified($room);
+            if ($relayOK) { $relayPassed++; }
+            $rows[] = (string) ($room['Name'] ?? 'Raum') . ': S1 '
+                . ($cert ? 'BESTANDEN' : 'OFFEN')
+                . ', Relais ' . ($relayOK ? 'BESTANDEN' : 'OFFEN');
         }
         $rows[] = 'Reglersperrungen nachgewiesen: ' . $passed . '/11';
+        $rows[] = 'Einzelrelais EIN/AUS nachgewiesen: ' . $relayPassed . '/11';
         $rows[] = 'Letzter/aktueller Einzeltest: '
             . (string) ($p['name'] ?? 'keiner') . ' / '
             . (string) ($p['phase'] ?? 'noch keiner');
         $rows[] = (string) ($p['message'] ?? '');
-        $rows[] = 'WICHTIG: Die Reglertests schalten KEIN Relais.';
-        $rows[] = 'Produktive Kuehlung braucht auch Relais-/Taupunktschutz-Abnahme.';
+        $rows[] = 'Reglerpruefung: nur S1 sperren/freigeben; Relaispruefung: S1 sperren, Einzelrelais EIN/AUS, S1 freigeben.';
+        $safetyID = (int) $this->ReadPropertyInteger('CoolingSafetyVariable');
+        $rows[] = 'Kuehlfreigabe Boolean: '
+            . ($safetyID > 0 ? ('#' . $safetyID
+                . ' / ' . ($this->DirectCoolingSafe() ? 'TRUE' : 'FALSE/FEHLT'))
+                : 'NICHT KONFIGURIERT');
+        $rows[] = 'Hardware-Taupunktschutz vor Ort abgenommen: '
+            . ($this->ReadPropertyBoolean('CoolingHardwareInterlockConfirmed') ? 'JA' : 'NEIN');
+        $issues = $this->CoolingCommissionReadinessErrors();
+        $rows[] = 'Produktiver Kuehlmodus: ' . ($issues === [] ? 'SOFTWARESEITIG FREIGABEBEREIT'
+            : 'GESPERRT – ' . implode('; ', $issues));
+        $rows[] = 'Physischer Ventilhub/Taupunktschutz ist aus Software-Rueckmeldungen nicht beweisbar.';
         return implode("\n", $rows);
     }
 
