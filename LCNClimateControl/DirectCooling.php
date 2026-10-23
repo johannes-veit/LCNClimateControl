@@ -110,11 +110,11 @@ trait LCNDirectCooling
     private function DirectCoolingSafe(): bool
     {
         $id = $this->ReadPropertyInteger('CoolingSafetyVariable');
-        // Optionaler SOFTWARE-Schutzeingang. Taupunkt-Wasserabschaltung
-        // wird unabhaengig ueber einen potentialfreien mechanischen
-        // Taupunktwächter / Kuehlkreisfreigabe realisiert.
-        if ($id === 0) {
-            return true;
+        // Fail closed: software permission is mandatory for cooling.
+        // It supplements, NEVER replaces, the independent mechanical
+        // dewpoint switch interlocking the cold-water hydraulic circuit.
+        if ($id <= 0) {
+            return false;
         }
         if (!IPS_VariableExists($id)) {
             return false;
@@ -804,7 +804,9 @@ trait LCNDirectCooling
         }
         $previousFallback = $this->DirectCoolingFallbacks()[(string) $target] ?? null;
         if (is_array($previousFallback) && ($previousFallback['kind'] ?? '') === 'legacy') {
-            $this->EnqueueLegacyCoolingJob($room, $state, $previous);
+            $this->DirectCoolingFallbackSet($target, 'Alter TS-Kuehlrueckfall deaktiviert', 'blocked');
+            $this->SetValueIfChanged($this->CoolIdent($target), $previous);
+            $this->SetRoomError($target, 'Kein Kuehlbefehl: bisheriger TS-Rueckfall ist aus Sicherheitsgruenden deaktiviert.');
             return;
         }
         $reason = $this->DirectCoolingEligibility($room);
@@ -831,8 +833,12 @@ trait LCNDirectCooling
             }
             return;
         }
-        $this->DirectCoolingFallbackSet($target, $reason);
-        $this->EnqueueLegacyCoolingJob($room, $state, $previous);
+        // No fallback from proven/attempted direct cooling to TS
+        // upper/lower travel. A failed interlock must not open a valve.
+        $this->DirectCoolingFallbackSet($target, $reason, 'blocked');
+        $this->SetValueIfChanged($this->CoolIdent($target), $previous);
+        $this->SetRoomError($target, $room['Name']
+            . ': Direkter Kuehlweg ungueltig; kein automatischer TS-Rueckfall: ' . $reason);
     }
 
     /**
