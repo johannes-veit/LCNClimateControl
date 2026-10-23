@@ -143,6 +143,8 @@ trait LCNClimateChatGPTDiagnostic
         $blocked = 0;
         $lockedCount = 0;
         $provenRooms = 0;
+        $regulatorVerified = 0;
+        $relayVerified = 0;
         foreach ($rooms as $room) {
             $name = (string) ($room['Name'] ?? '(Raum ohne Name)');
             $target = (int) ($room['TargetVariable'] ?? 0);
@@ -156,6 +158,10 @@ trait LCNClimateChatGPTDiagnostic
                 $persisted = (string) ($locks[(string) $target] ?? '');
                 $locked = $this->AutoCoolingLockFeedbackForRoom($room);
 
+                $roomS1Passed = $this->CoolingCommissionVerified($room);
+                $roomRelayPassed = $this->CoolingCommissionRelayRoomVerified($room);
+                if ($roomS1Passed) { $regulatorVerified++; }
+                if ($roomRelayPassed) { $relayVerified++; }
                 $directReady = $this->UsesDirectCooling() && $eligibility === '' && $mapping !== null;
                 $isBlocked = $persisted === 'uncertain' || $fallbackKind === 'blocked'
                     || str_contains($eligibility, 'bereits gesperrt');
@@ -184,6 +190,8 @@ trait LCNClimateChatGPTDiagnostic
 
                 $lines[] = '';
                 $lines[] = $name . ' | Weg: ' . $route;
+                $lines[] = '  ABNAHME S1: ' . ($roomS1Passed ? 'BESTANDEN' : 'OFFEN')
+                    . ' | Relais EIN/AUS: ' . ($roomRelayPassed ? 'BESTANDEN' : 'OFFEN');
                 $lines[] = '  LCN Sender #' . $sender . ', S1Target #' . $target
                     . ', IST ' . $this->ChatGPTDiagnosticTemperature(
                         $this->ReadFloatVariable((int) ($room['TemperatureVariable'] ?? 0)))
@@ -254,6 +262,12 @@ trait LCNClimateChatGPTDiagnostic
         if ($lastError !== '') {
             $lines[] = 'Modulfehler: ' . $lastError;
         }
+        $lines[] = 'S1-Test (11 erforderlich): ' . $regulatorVerified
+            . '/11; Einzelrelais-Test: ' . $relayVerified . '/11.';
+        $coolingGate = $this->CoolingCommissionReadinessErrors();
+        $lines[] = 'KUEHLEN: ' . ($coolingGate === []
+            ? 'SOFTWARE-FREIGABEBEREIT (physische Abnahme vorausgesetzt)'
+            : 'GESPERRT – ' . implode('; ', $coolingGate));
         $lines[] = 'LCN-PRO Sperrerlaubnis und echte mechanische Ventilstellung: durch diese Diagnose NICHT bestaetigt.';
         $lines[] = '--- ENDE – kompletten Text an ChatGPT senden ---';
         return implode("\n", $lines);
