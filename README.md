@@ -1,6 +1,58 @@
 # LCN Climate Control – IP-Symcon 9
 
-**Stand: v0.4.0 Build 40 – Kuehlsoftware fertig vorbereitet, Kuehlwasser-Freigabe bis zur realen Abnahme gesperrt.**
+**Stand: v0.4.1 Build 41 – Kuehlsoftware abgesichert, Inbetriebnahme noch offen; KUEHLEN bis zur realen Abnahme gesperrt.**
+
+
+## 0.4.1 Build 41 – Schutz vor unvollstaendiger Inbetriebnahme
+
+Neuer Hinweis fuer LCN-Firmware 1F0715: In der LCN-Community
+wird berichtet, dass nach dem Entsperren eines zuvor
+gesperrten Reglers ggf. zusaetzlich "Setze Regler Heizen"
+notwendig ist, um dessen regulaere Ausgangssteuerung
+wiederaufzunehmen. Die bisherige reine FREE-Boolean- und
+S1Target-Rueckmeldung beweist den Heizungs-Wiederanlauf
+NICHT. Der Softwarecode sendet daher kein geratenes,
+undokumentiertes LCN-Heizen-Kommando. Stattdessen ist eine
+explizite Heizwiederanlauf-Abnahme vorgesehen
+(CoolingHeatingResumeConfirmed, standardmaessig FALSE).
+Nach dem kontrollierten LCN-Sperrtest muss vor Ort bei
+tatsaechlich anliegender Heizanforderung nachgewiesen werden,
+dass der LCN-Regler den Relaisausgang wieder selbststaendig
+steuert. Erst anschliessend diesen Schalter bestaetigen.
+
+Wegen des automatischen Heizbetriebs gilt vor und nach
+S1-Tests die unveraenderte Verantwortung der LCN-Heizregler.
+Kuehlwasser darf waehrend der Regler- und Relais-Pruefungen
+NICHT in die Fussbodenheizung eingespeist werden.
+
+- Softwarefreigabe (`CoolingSafetyVariable`) ist nun
+  Pflicht statt "optional". Ohne Boolean TRUE bleibt
+  KUEHLEN blockiert.
+- `CoolingHardwareInterlockConfirmed`: notwendige physische
+  Abnahme des unabhaengigen hydraulischen Taupunktwaechters.
+- `CoolingHeatingResumeConfirmed`: notwendige separate
+  Abnahme des realen Heiz-Wiederanlaufs nach Entsperrung.
+- Die neuere Diagnose nennt technisch zugeordnete
+  S1-/Relaisinstanzen trotz fehlender Kuehlfreigabe
+  DIREKT VORBEREITET statt irrefuehrend ALTE A7/A8.
+- Kein Rueckfall auf die alte A7/A8-Kuehlsteuerung.
+- Im laufenden KUEHLEN wird bei fehlender Softwarefreigabe
+  versucht, alle offenen NC-Ventile zu schliessen; eine
+  hydraulische Sperre MUSS unabhaengig wirken.
+- Bei Fehlern eines neuen S1- oder Relaisauftrags
+  versucht das Modul OFF-first, anschliessend erst S1-FREI.
+  Bei einem Abbruch werden fuer noch gesperrte Raeume
+  OFF-only-Arbeiten eingeplant.
+- Die Modifikation veraendert keine Hardware und greift
+  im Zustand HEIZEN nicht selbsttaetig ein.
+- Eine leere GitHub-Statusmeldung ist keine bestaetigte
+  PHP-CI-Gruenmeldung. Reale Funktionstests bleiben offen.
+
+Offizielle Anbindung: 
+https://www.symcon.de/de/service/dokumentation/modulreferenz/geraete/lcn/lcn-requestread/
+https://www.symcon.de/de/service/dokumentation/modulreferenz/geraete/lcn/lcn-requeststatus/
+Bekannter FW-1F0715-Hinweis:
+https://forum.lcn.eu/showthread.php?tid=1862
 
 ## 1. Produktiver HEIZEN-Modus
 
