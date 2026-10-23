@@ -102,7 +102,7 @@ trait LCNClimateChatGPTDiagnostic
             && (bool) ($m11['lockCommandAccepted'] ?? false)
             && (bool) ($m11['releaseCommandAccepted'] ?? false);
         $safeVar = (int) $this->ReadPropertyInteger('CoolingSafetyVariable');
-        $safeLabel = 'nicht konfiguriert (Software-Gate optional)';
+        $safeLabel = 'NICHT KONFIGURIERT – KUEHLBETRIEB GESPERRT (Pflicht)';
         if ($safeVar > 0) {
             $safeLabel = 'Boolean #' . $safeVar . ' = ';
             try {
@@ -162,7 +162,8 @@ trait LCNClimateChatGPTDiagnostic
                 $roomRelayPassed = $this->CoolingCommissionRelayRoomVerified($room);
                 if ($roomS1Passed) { $regulatorVerified++; }
                 if ($roomRelayPassed) { $relayVerified++; }
-                $directReady = $this->UsesDirectCooling() && $eligibility === '' && $mapping !== null;
+                $directReady = $this->UsesDirectCooling() && $mapping !== null
+                    && $this->DirectCoolingLockActionID($room, $mapping) > 0;
                 $isBlocked = $persisted === 'uncertain' || $fallbackKind === 'blocked'
                     || str_contains($eligibility, 'bereits gesperrt');
                 $m11VerifiedHere = $m11ActionPassed && $sender === 37617 && $target === 34107
@@ -175,11 +176,10 @@ trait LCNClimateChatGPTDiagnostic
                 }
                 $route = $isBlocked ? 'GESTOPPT/PRUEFEN'
                     : ($persisted !== '' ? 'DIREKT / REGLER ' . strtoupper($persisted)
-                    : ($fallbackKind === 'legacy' ? 'ALTE A7/A8 (Rueckfall)'
                     : ($directReady ? ($m11VerifiedHere
                         ? 'DIREKT VORBEREITET (M11-S1-Sperr-/Freigabetest BESTANDEN)'
                         : 'DIREKT VORBEREITET (S1-Sperr-/Freigabetest noch ausstehend)')
-                    : 'ALTE A7/A8')));
+                    : 'DIREKT NICHT BEREIT – ZUORDNUNG PRUEFEN'));
                 if ($isBlocked) {
                     $blocked++;
                 } elseif ($directReady || $persisted !== '') {
@@ -257,7 +257,8 @@ trait LCNClimateChatGPTDiagnostic
             . '; alte Steuerung: ' . $legacy
             . '; blockiert/Pruefung: ' . $blocked
             . '; zuletzt als gesperrt gemeldet: ' . $lockedCount . '.';
-        $lines[] = 'WICHTIG: Ein bestandener M11-Test ist KEINE Freigabe fuer produktive Kuehlung oder andere Raeume.';
+        $lines[] = 'WICHTIG: Technisch vorbereitet bedeutet NICHT betriebsbereit. '
+            . 'Bis zur Gesamtfreigabe keine Kuehlschaltung und KEIN A7/A8-Rueckfall.';
         $lastError = trim((string) $this->ReadAttributeString('LastError'));
         if ($lastError !== '') {
             $lines[] = 'Modulfehler: ' . $lastError;
