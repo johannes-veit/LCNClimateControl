@@ -142,8 +142,13 @@
           "caption": "PFLICHT: Unabhaengiger Taupunktwaechter sperrt Kaltwasser physisch – vor Ort geprueft"
         },
         {
+          "type": "CheckBox",
+          "name": "CoolingHeatingResumeConfirmed",
+          "caption": "PFLICHT: Nach S1-Freigabe arbeitet LCN-Heizregler wieder (FW 1F0715 vor Ort geprüft)"
+        },
+        {
           "type": "Label",
-          "caption": "Ohne Kuehlfreigabe UND abgenommenen Hardware-Taupunktwaechter bleibt KUEHLEN gesperrt. LCN-S1-Pruefung und Einzelrelaispruefung nur im HEIZEN-Modus; bei Relaistest wird das einzelne Ventil kurz bestromt und danach wieder abgeschaltet. Bei Fehlern STOP statt A7/A8-Rueckfall."
+          "caption": "VOR KUEHLEN: alle elf S1-Pruefungen, elf Ventil-EIN/AUS-Pruefungen, unabhaengiger Taupunktwaechter mit echter Wasserabschaltung, Software-Kuehlfreigabe UND Heizregler-Wiederanlauf nach S1-Freigabe bestaetigen. Ohne diese Nachweise GESPERRT."
         },
         {
           "type": "Label",
