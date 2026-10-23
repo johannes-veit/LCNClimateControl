@@ -19,6 +19,8 @@ class IPSModuleStrict {
  public function WriteAttributeString(string $s,string $v): void {$this->attrs[$s]=$v;}
  public function ReadPropertyInteger(string $s): int {return match($s){'StepWaitMs'=>900,'MaxSteps'=>25,'NoChangeConfirmations'=>2,default=>0};}
  public function ReadPropertyBoolean(string $s): bool {return false;}
+ public array $stringProps=[];
+ public function ReadPropertyString(string $s): string {return $this->stringProps[$s]??'[]';}
  public function GetValue(string $s): mixed {return $this->own[$s]??0;}
  public function SetValue(string $s,mixed $v): void {$this->own[$s]=$v;}
  public function SetTimerInterval(string $name,int $ms): void {$this->interval=$ms;}
@@ -143,3 +145,35 @@ test(count($egJobs)===1 && (float)$egJobs[0]['Desired']===24.0,
     'other heating rooms must retain 24 degree capacity');
 test(count($sendLog)===$before,'test must not send extra TS commands');
 echo "PASS: OG Schlafen 1/2 accept only 12..22, other rooms preserve 18..24, no forbidden TS.\n";
+
+
+// A previously locked room must accept a new 16 degree heating request
+// without an uncaught exception, while TS remains completely suppressed.
+// The safe recovery job closes the NC valve before requesting S1 release.
+$mod->SetBuffer('Queue','[]');
+$mod->SetBuffer('CurrentJob','');
+$mod->SetBuffer('RuntimeRooms',json_encode([$og1]));
+$mod->attrs['DirectCoolingLocks']=json_encode(['49519'=>'locked']);
+$mod->attrs['DirectCoolingReleaseAttempts']='{}';
+$mapping=['TargetVariable'=>49519,'RegulatorIndex'=>2,'UnlockedVariable'=>46283,
+  'RelayStatusVariable'=>35734,'RelayModule'=>25610,'RelayChannel'=>4,
+  'RelayUnit'=>11148,'OpenRelayOn'=>true,'LockFeedbackIsLocked'=>true,
+  'PolarityConfirmed'=>true];
+$mod->stringProps['CoolingRelays']=json_encode([$mapping]);
+$before=count($sendLog);
+$mod->RequestAction('Heat_49519',16.0);
+test(count($sendLog)===$before,'locked S1 must never receive heating TS');
+$active=json_decode($mod->GetBuffer('CurrentJob'),true);
+test(is_array($active) && $active['Type']==='direct_release'
+  && $active['Phase']==='close' && $active['TargetVariable']===49519,
+  'locked regulator must queue safe relay-close-first release');
+$attrs=json_decode($mod->attrs['LastHeatingTargets'],true);
+test((float)$attrs['49519']===16.0,'16 degree heating request retained');
+$mod->RequestAction('Heat_49519',17.0);
+$attrs=json_decode($mod->attrs['LastHeatingTargets'],true);
+test((float)$attrs['49519']===17.0,'latest heating request replaces earlier pending target');
+$attempts=json_decode($mod->attrs['DirectCoolingReleaseAttempts'],true);
+test($attempts['49519']===1,'one bounded recovery job, no repeated scheduling');
+test(count(pendingFor($mod,49519))===1,'one release job per locked room');
+test(count($sendLog)===$before,'no TS commands before native release confirmation');
+echo "PASS: stranded S1 lock queues bounded safe release, remembers new heat target, no fatal exception or TS.\n";
