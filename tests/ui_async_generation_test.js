@@ -58,3 +58,54 @@ assert(ogControls.includes('plus.disabled = Number(slider.value) >= max'), 'slid
 assert(ogUpdate.includes('ref.slider.max = String(max)'), 'backend row updates not reflected in slider');
 assert(ogUpdate.includes('ref.plus.disabled = raw >= max'), 'plus remains enabled beyond 22');
 console.log('PASS: heater tile uses backend 12..22 limits only for OG bedrooms; 18..24 remains default');
+
+const guardCtx={
+  state:{pendingMode:null},
+  actionInFlight:null, actionQueue:[],
+  rowKey:row=>String(row.targetId)
+};
+vm.createContext(guardCtx);
+vm.runInContext(extract('isRoomSwitching','upsertRow'),guardCtx);
+const roomA={targetId:49519,busy:false},roomB={targetId:34041,busy:false};
+assert.equal(guardCtx.isRoomSwitching(roomA),false,'idle room must be operable');
+assert.equal(guardCtx.isRoomSwitching({...roomA,busy:true}),true,'active heating/cooling room blocked');
+assert.equal(guardCtx.isRoomSwitching(roomB),false,'independent idle room stays operable');
+guardCtx.actionInFlight={ident:'Heat_49519',targetId:49519};
+assert.equal(guardCtx.isRoomSwitching(roomA),true,'local send must lock target immediately');
+assert.equal(guardCtx.isRoomSwitching(roomB),false,'a second room must stay operable');
+guardCtx.actionInFlight=null;
+guardCtx.actionQueue=[{ident:'Cool_49519',targetId:49519}];
+assert.equal(guardCtx.isRoomSwitching(roomA),true,'queued command keeps same room locked');
+assert.equal(guardCtx.isRoomSwitching(roomB),false,'different rooms not globally locked');
+guardCtx.actionQueue=[];
+assert.equal(guardCtx.isRoomSwitching(roomA),false,'room unlocks without arbitrary timeout');
+guardCtx.state.pendingMode=0;
+assert.equal(guardCtx.isRoomSwitching(roomA),true,'mode transition locks all affected rooms');
+assert.equal(guardCtx.isRoomSwitching(roomB),true,'mode transition blocks rapid room switches');
+guardCtx.state.pendingMode=null;
+assert.equal(guardCtx.isRoomSwitching(roomA),false,'mode completion unlocks immediately');
+guardCtx.actionInFlight={ident:'Mode',value:1};
+assert.equal(guardCtx.isRoomSwitching(roomA),true,'in-flight mode switch locks rooms');
+guardCtx.actionInFlight=null;
+guardCtx.actionQueue=[{ident:'Mode',value:1}];
+assert.equal(guardCtx.isRoomSwitching(roomA),true,'queued mode switch locks rooms');
+guardCtx.actionQueue=[];
+const rowHtml=extract('createHeatRow','createCoolRow');
+const coolingHtml=extract('createCoolRow','patchHeatRow');
+const patchHeatHtml=extract('patchHeatRow','patchCoolRow');
+const patchCoolHtml=extract('patchCoolRow','patchMode');
+assert(rowHtml.includes('if (!current || isRoomSwitching(current)) return;'),
+ 'heating +/- and slider need a command guard');
+assert(coolingHtml.includes('isRoomSwitching(current)'),
+ 'cooling on/off needs a command guard');
+assert(patchHeatHtml.includes('ref.slider.disabled = switching') &&
+       patchHeatHtml.includes('ref.plus.disabled = switching || raw >= max'),
+ 'heating controls must truly disable, not merely grey');
+assert(patchCoolHtml.includes('ref.on.disabled = switching') &&
+       patchCoolHtml.includes('ref.off.disabled = switching'),
+ 'both cooling states disabled during physical operation');
+assert(html.includes('.room-row.switching .slider-wrap'),
+ 'busy row visual greying missing');
+assert(html.includes("else patchUI();"),
+ 'a backend meta event must update all pending mode locks');
+console.log('PASS: rooms are greyed/blocked only during live or locally queued operations and unlock immediately');
