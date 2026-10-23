@@ -309,7 +309,8 @@ class LCNClimateControl extends IPSModuleStrict
             }
 
             $currentTarget = $this->ReadTarget($targetID);
-            if ($currentTarget !== null && $this->GetMode() === self::MODE_HEATING) {
+            if ($currentTarget !== null && $this->GetMode() === self::MODE_HEATING
+                && $this->DirectCoolingLockState((int) $targetID) === '') {
                 $this->SetValueIfChanged($heatIdent, $currentTarget);
                 $this->StoreLastHeatingTarget($targetID, $currentTarget);
             }
@@ -379,7 +380,10 @@ class LCNClimateControl extends IPSModuleStrict
                 if ($value !== null) {
                     $jobOwnsTarget = $this->HasJobForTarget($SenderID);
 
-                    if ($this->GetMode() === self::MODE_HEATING && !$jobOwnsTarget) {
+                    if ($this->GetMode() === self::MODE_HEATING && !$jobOwnsTarget
+                        && $this->DirectCoolingLockState($SenderID) === '') {
+                        // During an S1 release, old LCN target feedback must
+                        // not overwrite the user's queued heating setpoint.
                         $this->SetValueIfChanged($this->HeatIdent($SenderID), $value);
                         $this->StoreLastHeatingTarget($SenderID, $value);
                     }
@@ -2301,10 +2305,14 @@ class LCNClimateControl extends IPSModuleStrict
         }
 
         foreach ($this->GetRuntimeRooms() as $room) {
-            $actual = $this->ReadTarget($room['TargetVariable']);
+            $target = (int) $room['TargetVariable'];
+            if ($this->DirectCoolingLockState($target) !== '') {
+                continue;
+            }
+            $actual = $this->ReadTarget($target);
             if ($actual !== null) {
-                $this->SetValueIfChanged($this->HeatIdent($room['TargetVariable']), $actual);
-                $this->StoreLastHeatingTarget($room['TargetVariable'], $actual);
+                $this->SetValueIfChanged($this->HeatIdent($target), $actual);
+                $this->StoreLastHeatingTarget($target, $actual);
             }
         }
     }
