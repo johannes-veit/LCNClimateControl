@@ -448,15 +448,19 @@ trait LCNDirectCooling
                 return;
             }
             if ($phase === 'lock_wait') {
-                if (!$unlocked && $this->DirectCoolingFeedbackFresh($unlockID, $job)) {
+                if (!$unlocked && $this->DirectCoolingFeedbackFresh($unlockID, $job)
+                    && $this->DirectCoolingLockFeedbackAfterRead($unlockID, $job)) {
                     $this->DirectCoolingSetLockState($target, 'locked');
+                    $this->DirectCoolingWait($job, 'relay', 'Reglersperre', false, false, $unlockID);
+                    return;
                 }
-                $this->DirectCoolingWait($job, 'relay', 'Reglersperre', $unlocked, false, $unlockID);
+                $job = $this->DirectCoolingRequestFreshLock($job);
+                $this->DirectCoolingWait($job, 'relay', 'Reglersperre', true, false, $unlockID);
                 return;
             }
             if ($phase === 'relay') {
-                if ($unlocked) {
-                    $this->FailCurrentJob($job, 'Regler unerwartet entsperrt; Relaisbefehl unterdrueckt.');
+                if ($unlocked || $this->DirectCoolingLockState($target) !== 'locked') {
+                    $this->FailCurrentJob($job, 'Regler nicht nachweislich gesperrt; Relaisbefehl unterdrueckt.');
                     return;
                 }
                 if (!$this->DirectCoolingRelaySet($m, $open)) {
@@ -516,13 +520,15 @@ trait LCNDirectCooling
             }
             if ($phase === 'unlock_wait') {
                 if ($unlocked && $this->DirectCoolingFeedbackFresh($unlockID, $job)
+                    && $this->DirectCoolingLockFeedbackAfterRead($unlockID, $job)
                     && $this->NowMs() - (int) ($job['SentAtMs'] ?? 0) >= 500) {
                     $job['Phase'] = 'restore_target_wait';
                     $job['SentAtMs'] = $this->NowMs();
                     $this->YieldCurrentJob($job);
                     return;
                 }
-                $this->DirectCoolingWait($job, 'unlock_wait', 'Regler freigegeben', $unlocked, true, $unlockID);
+                $job = $this->DirectCoolingRequestFreshLock($job);
+                $this->DirectCoolingWait($job, 'unlock_wait', 'Regler freigegeben', false, true, $unlockID);
                 return;
             }
             if ($phase === 'restore_target_wait') {
@@ -926,6 +932,7 @@ trait LCNDirectCooling
         }
         if ($phase === 'unlock_wait') {
             if ($this->DirectCoolingFeedbackFresh($unlockId, $job)
+                && $this->DirectCoolingLockFeedbackAfterRead($unlockId, $job)
                 && $this->DirectCoolingRegulatorUnlocked($m)
                 && $this->NowMs() - (int) ($job['SentAtMs'] ?? 0) >= 500) {
                 $job['Phase'] = 'normal_target_wait';
@@ -938,6 +945,7 @@ trait LCNDirectCooling
                 $this->FailCurrentJob($job, 'Regler nicht sicher entsperrt: kein automatischer Rueckfall.');
                 return;
             }
+            $job = $this->DirectCoolingRequestFreshLock($job);
             $this->YieldCurrentJob($job);
             return;
         }
@@ -1053,6 +1061,54 @@ trait LCNDirectCooling
             } finally {
                 $this->ReleaseLCNBusSlot();
             }
+        }
+        return $job;
+    }
+
+    /** Independent native LCN read: RequestAction's local Boolean update alone is insufficient. */
+    private function DirectCoolingLockFeedbackAfterRead(int $lockID, array $job): bool
+    {
+        $readAt = (int) ($job['LockReadAtEpoch'] ?? 0);
+        $sentAt = (int) ($job['SentAtEpoch'] ?? 0);
+        return (bool) ($job['LockReadOK'] ?? false)
+            && $readAt > $sentAt
+            && IPS_VariableExists($lockID)
+            && (int) (IPS_GetVariable($lockID)['VariableUpdated'] ?? 0) >= $readAt;
+    }
+
+    private function DirectCoolingRequestFreshLock(array $job): array
+    {
+        $now = $this->NowMs();
+        if ($now - (int) ($job['LastLockReadAtMs'] ?? 0) < 5000
+            || !IPS_FunctionExists('LCN_RequestRead')) {
+            return $job;
+        }
+        $target = (int) ($job['TargetVariable'] ?? 0);
+        if (!IPS_VariableExists($target)) {
+            return $job;
+        }
+        $valueInstance = (int) IPS_GetParent($target);
+        if (!IPS_InstanceExists($valueInstance)) {
+            return $job;
+        }
+        $data = IPS_GetInstance($valueInstance);
+        if ((int) ($data['ConnectionID'] ?? 0) !== (int) ($job['SendModule'] ?? 0)
+            || strtoupper((string) ($data['ModuleInfo']['ModuleID'] ?? ''))
+                !== strtoupper(self::LCN_VALUE_MODULE_ID)) {
+            return $job;
+        }
+        $job['LastLockReadAtMs'] = $now;
+        $job['LockReadAtEpoch'] = time();
+        $job['LockReadOK'] = false;
+        if (!IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 2000)) {
+            return $job;
+        }
+        try {
+            $job['LockReadOK'] = (bool) LCN_RequestRead($valueInstance);
+        } catch (Throwable $e) {
+            $this->SendDebug('DirectCooling', 'S1TargetLock-Leseabfrage: ' . $e->getMessage(), 0);
+        } finally {
+            $this->ReleaseLCNBusSlot();
         }
         return $job;
     }
