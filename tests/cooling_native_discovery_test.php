@@ -200,7 +200,7 @@ check($GLOBALS['readRequests']===[], 'status report cannot emit any bus commands
 $result=$p->readLocks();
 check(count($GLOBALS['readRequests'])===1
     && $GLOBALS['readRequests'][0]===800
-    && str_contains($result,'1 reine Leseanfragen'),
+    && str_contains($result,'LCN-Regler: 1/1 Leseanfragen angenommen'),
     'request native LCN Value only, never sender/relay switching');
 $p->busy=true;
 check(str_contains($p->readLocks(),'ABBRUCH')
