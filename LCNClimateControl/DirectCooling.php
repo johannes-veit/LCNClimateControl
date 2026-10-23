@@ -63,6 +63,13 @@ trait LCNDirectCooling
         $map = $this->ReadJsonAttribute('DirectCoolingLocks');
         if ($state === '') {
             unset($map[(string) $target]);
+            // A genuinely confirmed release resets the bounded automatic
+            // recovery counter; never clear it on mere command acceptance.
+            $retries = $this->ReadJsonAttribute('DirectCoolingReleaseAttempts');
+            if (isset($retries[(string) $target])) {
+                unset($retries[(string) $target]);
+                $this->WriteJsonAttribute('DirectCoolingReleaseAttempts', $retries);
+            }
             $saved = $this->ReadJsonAttribute('DirectCoolingLockMappings');
             unset($saved[(string) $target]);
             $this->WriteJsonAttribute('DirectCoolingLockMappings', $saved);
@@ -540,10 +547,28 @@ trait LCNDirectCooling
                 return;
             }
             if ($phase === 'unlock') {
-                if (!$this->DirectCoolingControllerCommand($job, $m, false)) {
-                    $this->FailCurrentJob($job, 'Regler konnte nicht freigegeben werden.');
+                // Brief IP-Symcon/LCN bus contention must not permanently
+                // strand this room in S1 LOCKED after switching to HEIZEN.
+                // RELEASE is idempotent, limited and still verified by a
+                // fresh native read before ANY heating TS command is allowed.
+                $retryNotBefore = (int) ($job['ReleaseRetryNotBeforeMs'] ?? 0);
+                if ($retryNotBefore > $this->NowMs()) {
+                    $this->YieldCurrentJob($job);
                     return;
                 }
+                $attempts = (int) ($job['ReleaseCommandAttempts'] ?? 0) + 1;
+                $job['ReleaseCommandAttempts'] = $attempts;
+                if (!$this->DirectCoolingControllerCommand($job, $m, false)) {
+                    if ($attempts >= 3) {
+                        $this->FailCurrentJob($job,
+                            'S1-Freigabebefehl 3-mal nicht angenommen; Heizfahrt bleibt gesperrt.');
+                        return;
+                    }
+                    $job['ReleaseRetryNotBeforeMs'] = $this->NowMs() + 5000;
+                    $this->YieldCurrentJob($job);
+                    return;
+                }
+                unset($job['ReleaseRetryNotBeforeMs']);
                 $job['Phase'] = 'unlock_wait';
                 $job['SentAtMs'] = $this->NowMs();
                 $job['SentAtEpoch'] = time();
@@ -577,8 +602,11 @@ trait LCNDirectCooling
                     $this->SetBuffer('CurrentJob', '');
                     $this->ClearRoomError($target);
                     $room = $this->FindRoomByTarget($target);
-                    if ($room !== null && isset($job['RestoreTarget'])) {
-                        $this->EnqueueHeatJob($room, (float) $job['RestoreTarget']);
+                    // A heating setpoint selected while the regulator was
+                    // locked supersedes the original switch-back target.
+                    $restore = $this->GetLastHeatingTarget($target);
+                    if ($room !== null && $restore !== null) {
+                        $this->EnqueueHeatJob($room, $restore);
                     }
                     $this->RefreshRuntimeStatus();
                     $this->PushVisualizationRowByTarget($target);
@@ -596,11 +624,81 @@ trait LCNDirectCooling
         $this->FailCurrentJob($job, 'Unbekannte Direktkuehlungsphase: ' . $phase);
     }
 
+    /**
+     * Restore HEATING after transient failed S1 release, including failures
+     * persisted before a module update. At most three scheduled recovery
+     * jobs per room. Never unlock in COOLING or when the worker owns a job.
+     * The actual release always starts with NC relay OFF confirmation.
+     */
+    private function DirectCoolingRecoverHeatingLocks(): void
+    {
+        if ($this->GetMode() !== self::MODE_HEATING
+            || $this->GetPendingMode() !== null
+            || $this->CoolingCommissionActive()
+            || $this->M11ProbeActive()) {
+            return;
+        }
+        $locks = $this->ReadJsonAttribute('DirectCoolingLocks');
+        if ($locks === []) {
+            return;
+        }
+        $attempts = $this->ReadJsonAttribute('DirectCoolingReleaseAttempts');
+        $scheduled = false;
+        foreach ($this->GetRuntimeRooms() as $room) {
+            $target = (int) ($room['TargetVariable'] ?? 0);
+            if ($target <= 0 || !isset($locks[(string) $target])
+                || $this->HasJobForTarget($target)) {
+                continue;
+            }
+            $count = (int) ($attempts[(string) $target] ?? 0);
+            if ($count >= 3) {
+                $this->SetRoomError($target, (string) $room['Name']
+                    . ': S1-Freigabe nach drei sicheren Versuchen nicht bestaetigt;'
+                    . ' Heizbefehle bleiben blockiert. LCN-Status pruefen.');
+                continue;
+            }
+            $mapping = $this->DirectCoolingMapping($target)
+                ?? ($this->ReadJsonAttribute('DirectCoolingLockMappings')[(string) $target] ?? null);
+            if (!is_array($mapping)
+                || (int) ($mapping['UnlockedVariable'] ?? 0) <= 0
+                || (int) ($mapping['RelayStatusVariable'] ?? 0) <= 0) {
+                $this->SetRoomError($target, (string) $room['Name']
+                    . ': S1-Freigabe nicht moeglich, LCN-Zuordnung fehlt; kein Heizbefehl.');
+                continue;
+            }
+            $attempts[(string) $target] = $count + 1;
+            // Persist the bounded attempt BEFORE enqueueing the hardware job.
+            $this->WriteJsonAttribute('DirectCoolingReleaseAttempts', $attempts);
+            $this->DirectCoolingEnqueueRelease($room, $this->GetLastHeatingTarget($target));
+            $scheduled = true;
+        }
+        if ($scheduled) {
+            $this->StartWorkerIfNeeded();
+            $this->PushVisualizationState();
+        }
+    }
+
     /** Der externe Sensor MUSS zusaetzlich die Kuehlhydraulik hardwareseitig sperren. */
     public function DirectCoolingWatchdog(): void
     {
-        if (!$this->UsesDirectCooling() || $this->GetMode() !== self::MODE_COOLING
-            || $this->DirectCoolingSafe()) {
+        if (!$this->UsesDirectCooling()) {
+            return;
+        }
+        if ($this->GetMode() === self::MODE_HEATING) {
+            // The user switches HEIZEN manually. A stranded LCN S1 lock
+            // must be restored automatically rather than breaking the tile.
+            if ($this->ReadJsonAttribute('DirectCoolingLocks') === []
+                || !IPS_SemaphoreEnter('LCNC_' . $this->InstanceID, 1000)) {
+                return;
+            }
+            try {
+                $this->DirectCoolingRecoverHeatingLocks();
+            } finally {
+                IPS_SemaphoreLeave('LCNC_' . $this->InstanceID);
+            }
+            return;
+        }
+        if ($this->GetMode() !== self::MODE_COOLING || $this->DirectCoolingSafe()) {
             return;
         }
         // Die optionale Direktsteuerung darf niemals alte TS-Kuehlauftraege
