@@ -151,6 +151,55 @@ chk($GLOBALS['cCommands']===$previousCommands, 'diagnostic emitted no hardware c
 echo "PASS read-only failed-safe diagnosis, no automatic retries\n";
 
 
+
+// One explicit retry is allowed only for the ORIGINAL failed room, in
+// unchanged HEATING mode, with current free S1 and relay OFF feedback.
+chk(str_starts_with($m->CoolingCommissionRetryFailedRegulator(),'ABBRUCH:'),
+    'cannot silently retarget an OG failed-safe to another room');
+$m->attrs['CoolingCommissionVerified'] = [];
+$m->attrs['CoolingCommissionSession'] = [
+    'phase'=>'failed_safe','kind'=>'regulator',
+    'name'=>'EG Bad','sender'=>15856,'target'=>21099,
+    'lockID'=>19580,'lockAck'=>false,'lockConfirmed'=>false,
+    'releaseAck'=>false,'releaseTries'=>1,
+];
+foreach ([21099,19580,35710] as $vid) {
+    $GLOBALS['cVars'][$vid]['VariableUpdated'] = time()-2;
+}
+$previousCommands=$GLOBALS['cCommands'];
+$GLOBALS['cVals'][19580]=true;
+chk(str_starts_with($m->CoolingCommissionRetryFailedRegulator(),'ABBRUCH:'),
+    'refuse repeat if S1 is locked');
+$GLOBALS['cVals'][19580]=false;
+$GLOBALS['cVals'][35710]=true;
+chk(str_starts_with($m->CoolingCommissionRetryFailedRegulator(),'ABBRUCH:'),
+    'refuse repeat if NC relay currently on');
+$GLOBALS['cVals'][35710]=false;
+chk($GLOBALS['cCommands']===$previousCommands,
+    'blocked retries issue zero commands');
+chk(str_contains($m->CoolingCommissionRetryFailedRegulator(),'EINMALIGE WIEDERHOLUNG EG Bad'),
+    'single correct-room repeat can be staged');
+chk(($m->attrs['CoolingCommissionSession']['retryCount']??-1)===1,
+    'one retry marker persisted before any command');
+chk($GLOBALS['cCommands']===$previousCommands,
+    'repeat start never directly sends S1 or relay commands');
+$m->CoolingCommissionWorker();
+$m->attrs['CoolingCommissionSession']['lockAt']=time()-2;
+$m->CoolingCommissionWorker();
+$m->CoolingCommissionWorker();
+$m->CoolingCommissionWorker();
+$m->attrs['CoolingCommissionSession']['releaseAt']=time()-2;
+$m->CoolingCommissionWorker();
+$m->CoolingCommissionWorker();
+chk(($m->attrs['CoolingCommissionSession']['phase']??'')==='passed',
+    'approved same-room retry completes two confirmed S1 states');
+chk($GLOBALS['cCommands']===array_merge($previousCommands,[[21099,true],[21099,false]]),
+    'retry only sends S1 lock then S1 release');
+$m->attrs['CoolingCommissionSession']['phase']='failed_safe';
+chk(str_starts_with($m->CoolingCommissionRetryFailedRegulator(),'ABBRUCH:'),
+    'second retry is blocked even after one successful guarded attempt');
+echo "PASS one explicit fail-safe retry, same-room only, zero relays, no second attempt\n";
+
 $source=file_get_contents(__DIR__.'/../LCNClimateControl/DirectCooling.php');
 $module=file_get_contents(__DIR__.'/../LCNClimateControl/module.php');
 chk(str_contains($source,'// Every room must have its LCN heater regulator held LOCKED'),
