@@ -144,3 +144,5 @@ chk(str_contains($module,'CoolingCommissionReadinessErrors()'),
 chk(str_contains($module,'CoolingHardwareInterlockConfirmed'),
     'hardware dewpoint signoff property registered');
 echo "PASS source safety invariants\n";
+
+// CI branch smoke marker: release 0.4.1 Build 41 (all tests executed on PR).
