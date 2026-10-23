@@ -511,6 +511,19 @@ trait LCNClimateCoolingCommission
             . (string) ($p['name'] ?? 'keiner') . ' / '
             . (string) ($p['phase'] ?? 'noch keiner');
         $rows[] = (string) ($p['message'] ?? '');
+        if ((string) ($p['phase'] ?? '') === 'failed_safe') {
+            $rows[] = 'S1-Fehlerdiagnose: Sperrbefehl '
+                . ((bool) ($p['lockAck'] ?? false) ? 'ANGENOMMEN' : 'NICHT ANGENOMMEN')
+                . ', Sperre bestaetigt '
+                . ((bool) ($p['lockConfirmed'] ?? false) ? 'JA' : 'NEIN')
+                . ', Freigabebefehl '
+                . ((bool) ($p['releaseAck'] ?? false) ? 'ANGENOMMEN' : 'NICHT ANGENOMMEN')
+                . ', Freigabeversuche ' . (int) ($p['releaseTries'] ?? 0);
+            $rows[] = 'S1-Testobjekte: LCN-Modul #' . (int) ($p['sender'] ?? 0)
+                . ', S1-Sollwert #' . (int) ($p['target'] ?? 0)
+                . ', Sperre #' . (int) ($p['lockID'] ?? 0)
+                . '; S1 steht laut letztem Test FREI. Kein automatischer Neustart.';
+        }
         $rows[] = 'Reglerpruefung: nur S1 sperren/freigeben; Relaispruefung: S1 sperren, Einzelrelais EIN/AUS, S1 freigeben.';
         $safetyID = (int) $this->ReadPropertyInteger('CoolingSafetyVariable');
         $rows[] = 'Kuehlfreigabe Boolean: '
