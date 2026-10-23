@@ -129,9 +129,14 @@
           "caption": "Direkte Kuehlsteuerung verwenden (nur nach vollstaendiger Inbetriebnahme)"
         },
         {
+          "type": "CheckBox",
+          "name": "ManualCoolingApproval",
+          "caption": "MANUELLE ANLAGE: Betriebsart KUEHLEN in Symcon ist meine Freigabe (Heizanlage zuvor im Heizraum umstellen)"
+        },
+        {
           "type": "SelectVariable",
           "name": "CoolingSafetyVariable",
-          "caption": "PFLICHT: Externe Kuehlfreigabe (Boolean TRUE = Freigabe; FALSE = sofort sperren)",
+          "caption": "Optional: externe Kuehlfreigabe (Boolean; wenn ausgewaehlt, MUSS sie TRUE sein)",
           "validVariableTypes": [
             0
           ]
@@ -148,7 +153,7 @@
         },
         {
           "type": "Label",
-          "caption": "VOR KUEHLEN: alle elf S1-Pruefungen, elf Ventil-EIN/AUS-Pruefungen, unabhaengiger Taupunktwaechter mit echter Wasserabschaltung, Software-Kuehlfreigabe UND Heizregler-Wiederanlauf nach S1-Freigabe bestaetigen. Ohne diese Nachweise GESPERRT."
+          "caption": "VOR KUEHLEN: Alle 11 S1- und 11 Ventil-EIN/AUS-Pruefungen, unabhaengigen Taupunktschutz und Heizregler-Wiederanlauf bestaetigen. Bei manueller Anlage ZUERST im Heizraum physisch auf KUEHLEN stellen, DANACH Symcon KUEHLEN waehlen. Symcon erkennt die Anlagenstellung NICHT automatisch. Eine konfigurierte externe Boolean-Sperre bleibt zwingend."
         },
         {
           "type": "Label",
