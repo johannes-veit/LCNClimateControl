@@ -103,35 +103,42 @@ $og2=['Enabled'=>true,'Name'=>'OG Schlafen 2','SendModule'=>501,
   'TargetVariable'=>34041,'TemperatureVariable'=>801,'Table'=>'A','UpKey'=>7,'DownKey'=>8];
 $mod->SetBuffer('RuntimeRooms',json_encode([$room,$og1,$og2]));
 $limits=new ReflectionMethod(LCNClimateControl::class,'HeatingLimits');
+function pendingFor(LCNClimateControl $mod,int $target): array {
+    $q=json_decode($mod->GetBuffer('Queue'),true)?:[];
+    $c=json_decode($mod->GetBuffer('CurrentJob'),true);
+    if (is_array($c)) array_unshift($q,$c);
+    return array_values(array_filter($q,
+        fn($job)=>($job['TargetVariable']??0)===$target));
+}
 foreach ([$og1,$og2] as $og) {
     $range=$limits->invoke($mod,$og);
     test($range===['min'=>12,'max'=>22],$og['Name'].' must match native LCN bounds');
     foreach ([11,23,24,25] as $invalid) {
         $countBefore=count($sendLog);
         $queueBefore=$mod->GetBuffer('Queue');
+        $currentBefore=$mod->GetBuffer('CurrentJob');
         $rejected=false;
         try { $mod->RequestAction('Heat_'.$og['TargetVariable'],(float)$invalid); }
         catch (InvalidArgumentException) {$rejected=true;}
         test($rejected,$og['Name'].': invalid heat setpoint '.$invalid.' was accepted');
-        test($queueBefore===$mod->GetBuffer('Queue'), 'invalid heat action modified queue');
+        test($queueBefore===$mod->GetBuffer('Queue')
+            && $currentBefore===$mod->GetBuffer('CurrentJob'),
+            'invalid heat action modified active or queued job');
         test(count($sendLog)===$countBefore,'invalid heat action sent TS command');
     }
     $mod->RequestAction('Heat_'.$og['TargetVariable'],22.0);
-    $q=json_decode($mod->GetBuffer('Queue'),true)?:[];
-    $rowJobs=array_values(array_filter($q,fn($x)=>($x['TargetVariable']??0)===$og['TargetVariable']));
+    $rowJobs=pendingFor($mod,$og['TargetVariable']);
     test(count($rowJobs)===1 && (float)$rowJobs[0]['Desired']===22.0,
         $og['Name'].' 22 degree request not queued');
     $mod->RequestAction('Heat_'.$og['TargetVariable'],12.0);
-    $q=json_decode($mod->GetBuffer('Queue'),true)?:[];
-    $rowJobs=array_values(array_filter($q,fn($x)=>($x['TargetVariable']??0)===$og['TargetVariable']));
+    $rowJobs=pendingFor($mod,$og['TargetVariable']);
     test(count($rowJobs)===1 && (float)$rowJobs[0]['Desired']===12.0,
         $og['Name'].' lower boundary request not retargeted');
 }
 test($limits->invoke($mod,$room)===['min'=>18,'max'=>24],
     'non-OG room heat range changed');
 $mod->RequestAction('Heat_701',24.0);
-$q=json_decode($mod->GetBuffer('Queue'),true)?:[];
-$egJobs=array_values(array_filter($q,fn($x)=>($x['TargetVariable']??0)===701));
+$egJobs=pendingFor($mod,701);
 test(count($egJobs)===1 && (float)$egJobs[0]['Desired']===24.0,
     'other heating rooms must retain 24 degree capacity');
 test(count($sendLog)===$before,'test must not send extra TS commands');
