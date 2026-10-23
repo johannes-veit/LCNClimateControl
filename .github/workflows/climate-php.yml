@@ -26,5 +26,7 @@ jobs:
         run: php tests/test_m11_lock_probe.php
       - name: Direct native S1 action simulation
         run: php tests/test_direct_s1_action.php
+      - name: Cooling commissioning and hard-stop regression
+        run: php tests/test_cooling_commission.php
       - name: Native R1 S1 read-only diagnostic simulation
         run: php tests/test_native_interface_audit.php
