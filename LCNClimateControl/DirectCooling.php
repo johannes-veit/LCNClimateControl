@@ -109,19 +109,23 @@ trait LCNDirectCooling
 
     private function DirectCoolingSafe(): bool
     {
-        // Neither a software Boolean nor a checkbox can replace
-        // an independently wired dewpoint switch. If the operator
-        // revokes physical-safety signoff at runtime, fail closed.
-        if (!$this->ReadPropertyBoolean('CoolingHardwareInterlockConfirmed')) {
+        // Independent physical dewpoint/hydraulic shutdown is mandatory in
+        // BOTH modes. Checkbox is an operator signoff, NOT the protection.
+        // The physical interlock cannot be verified remotely.
+        if (!$this->ReadPropertyBoolean('CoolingHardwareInterlockConfirmed')
+            || !$this->ReadPropertyBoolean('CoolingHeatingResumeConfirmed')) {
             return false;
         }
         $id = $this->ReadPropertyInteger('CoolingSafetyVariable');
-        // Fail closed: software permission is mandatory for cooling.
-        // It supplements, NEVER replaces, the independent mechanical
-        // dewpoint switch interlocking the cold-water hydraulic circuit.
         if ($id <= 0) {
-            return false;
+            // Manual hydraulic mode: the operator selects KUEHLEN in Symcon
+            // after switching the plant in the heating room. This explicit
+            // installation opt-in replaces ONLY the missing software Boolean.
+            // A user selection is not automatic feedback from the plant.
+            return $this->ReadPropertyBoolean('ManualCoolingApproval');
         }
+        // If configured, an external Boolean must always be respected:
+        // the manual option can NEVER override an explicit safety veto.
         if (!IPS_VariableExists($id)) {
             return false;
         }
@@ -137,8 +141,12 @@ trait LCNDirectCooling
     {
         $errors = [];
         $safetyID = $this->ReadPropertyInteger('CoolingSafetyVariable');
-        if ($safetyID <= 0 || !IPS_VariableExists($safetyID)) {
-            $errors[] = 'Externe Kuehlfreigabe (Boolean) fehlt.';
+        if ($safetyID <= 0) {
+            if (!$this->ReadPropertyBoolean('ManualCoolingApproval')) {
+                $errors[] = 'Weder manuelle Freigabe noch externe Kuehlfreigabe eingerichtet.';
+            }
+        } elseif (!IPS_VariableExists($safetyID)) {
+            $errors[] = 'Konfigurierte externe Kuehlfreigabe nicht gefunden.';
         } elseif ((int) (IPS_GetVariable($safetyID)['VariableType'] ?? -1) !== VARIABLETYPE_BOOLEAN) {
             $errors[] = 'Externe Kuehlfreigabe ist nicht Boolean.';
         }
@@ -653,7 +661,7 @@ trait LCNDirectCooling
             return 'keine Direktrelais-Zuordnung';
         }
         if (!$this->DirectCoolingSafe()) {
-            return 'externe Freigabe fehlt';
+            return 'manuelle/externe Kuehlfreigabe oder Sicherheitsabnahme fehlt';
         }
         if ($this->DirectCoolingLockActionID($room, $m) <= 0) {
             return 'native S1TargetLock-Standardaktion fehlt oder nicht eindeutig';
@@ -833,12 +841,11 @@ trait LCNDirectCooling
             $this->DirectCoolingEnqueue($room, $state, $previous);
             return;
         }
-        // Eine konfigurierte externe Kuehlfreigabe sperrt KUEHLEN EIN
-        // AUSNAHMSLOS, auch wenn dieser Raum bereits in der laufenden
-        // Kuehlsaison auf die bewahrte A7/A8-Variante zurueckgefallen ist.
-        $safetyID = (int) $this->ReadPropertyInteger('CoolingSafetyVariable');
-        if ($state && $safetyID > 0 && !$this->DirectCoolingSafe()) {
-            $this->DirectCoolingFallbackSet($target, 'Externe Kuehlfreigabe fehlt: Kuehlen EIN gesperrt', 'blocked');
+        // KUEHLEN EIN erfordert IMMER die gueltige Freigabe. In manueller
+        // Betriebsart ersetzt die explizite Symcon-Freigabe die fehlende
+        // externe Betriebsartmeldung, niemals den Taupunktschutz.
+        if ($state && !$this->DirectCoolingSafe()) {
+            $this->DirectCoolingFallbackSet($target, 'Kuehlfreigabe fehlt: Kuehlen EIN gesperrt', 'blocked');
             $this->SetValueIfChanged($this->CoolIdent($target), $previous);
             $this->SetRoomError($target, $room['Name'] . ': Kuehlfreigabe fehlt, keine Kuehlung eingeschaltet.');
             return;
