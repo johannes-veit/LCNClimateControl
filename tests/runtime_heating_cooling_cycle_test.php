@@ -18,6 +18,7 @@ class IPSModuleStrict {
  public function ReadAttributeString(string $s): string {return (string)($this->attrs[$s]??'');}
  public function WriteAttributeString(string $s,string $v): void {$this->attrs[$s]=$v;}
  public function ReadPropertyInteger(string $s): int {return match($s){'StepWaitMs'=>900,'MaxSteps'=>25,'NoChangeConfirmations'=>2,default=>0};}
+ public function ReadPropertyBoolean(string $s): bool {return false;}
  public function GetValue(string $s): mixed {return $this->own[$s]??0;}
  public function SetValue(string $s,mixed $v): void {$this->own[$s]=$v;}
  public function SetTimerInterval(string $name,int $ms): void {$this->interval=$ms;}
@@ -29,6 +30,7 @@ $values=[701=>20.0,801=>20.0];$sendLog=[];
 function IPS_GetKernelRunlevel(): int {return KR_READY;}
 function IPS_SemaphoreEnter(string $s,int $timeout): bool {return true;}
 function IPS_SemaphoreLeave(string $s): void {}
+function IPS_Sleep(int $ms): bool {return true;}
 function IPS_FunctionExists(string $s): bool {return true;}
 function IPS_InstanceExists(int $id): bool {return in_array($id,[501,601],true);}
 function IPS_GetInstance(int $id): array {
@@ -78,15 +80,16 @@ $mod->RequestAction('Heat_701',22.0);drain($mod);
 test($values[701]===22.0,'Heating target must be reached');
 test($mod->own['Mode']===0,'Heating mode changed unexpectedly');
 test(count($sendLog)===2,'Heating should take exactly 2 TS steps');
-$mod->RequestAction('Mode',1);drain($mod);
-test($mod->own['Mode']===1,'Cooling mode not activated');
-test($values[701]===18.0,'Cooling off must reach lower control bound');
-test($mod->own['Cool_701']===false,'Cooling off state must be confirmed');
-$mod->RequestAction('Cool_701',true);drain($mod);
-test($values[701]===24.0,'Cooling on must reach upper control bound');
-test($mod->own['Cool_701']===true,'Cooling on state must be confirmed');
-$mod->RequestAction('Mode',0);drain($mod);
-test($values[701]===22.0,'Heating target was not restored');
-test($mod->own['Mode']===0,'Heating mode not restored');
-foreach($sendLog as $command)test(in_array($command,['K---00000010','K---00000001'],true),'Invalid TS');
-echo 'PASS: real Worker + fake LCN feedback: heat 20→22, cool-off→18, cool-on→24, restore heat→22. '.count($sendLog).' TS steps.\n';
+// The obsolete TS/A7-A8 cooling-bound emulation is no longer a valid
+// operating mode. Production cooling must fail closed until ALL eleven
+// S1 tests, relay tests, software and physical interlocks are certified.
+$before=count($sendLog);
+try { $mod->RequestAction('Mode',1); } catch (Throwable) {
+    // Rejection may be raised as a module exception.
+}
+test($mod->own['Mode']===0,'Uncommissioned cooling MUST remain in HEIZEN');
+test(count($sendLog)===$before,'No additional legacy TS cooling commands');
+test($values[701]===22.0,'Cooling rejection must not disturb heating setpoint');
+foreach($sendLog as $command)
+    test(in_array($command,['K---00000010','K---00000001'],true),'Invalid heating TS');
+echo "PASS: heat 20->22 by TS; uncommissioned cooling blocked, no fallback.\n";
