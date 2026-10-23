@@ -823,14 +823,12 @@ trait LCNDirectCooling
         }
         if ($reason === '') {
             $this->DirectCoolingFallbackSet($target, '');
-            if ($state) {
-                $this->DirectCoolingEnqueue($room, true, $previous);
-            } else {
-                // Bereits AUS und noch nicht durch dieses Modul gesperrt:
-                // keine unnoetige Reglersperre fuer 11 Raeume am Kuehlstart.
-                // Der bestehende TS-Schliessweg bleibt identisch zu v0.2.10.
-                $this->EnqueueLegacyCoolingJob($room, false, $previous);
-            }
+            // Every room must have its LCN heater regulator held LOCKED
+            // throughout COOLING, including a room requested OFF.
+            // Otherwise an unlocked heating regulator may reenergize a
+            // supposedly closed relay when room temperature drops.
+            // No A7/A8 travel and no setpoint modifications in cooling.
+            $this->DirectCoolingEnqueue($room, $state, $previous);
             return;
         }
         // No fallback from proven/attempted direct cooling to TS
@@ -961,12 +959,12 @@ trait LCNDirectCooling
                 $room = $this->FindRoomByTarget($target);
                 if ($room !== null && $this->GetMode() === self::MODE_COOLING
                     && (!$restoreWanted || $this->DirectCoolingSafe())) {
-                    $this->EnqueueLegacyCoolingJob(
-                        $room,
-                        $restoreWanted,
-                        (bool) ($job['PreviousCoolingState'] ?? false)
-                    );
-                    $this->StartWorkerIfNeeded();
+                    // Deliberately do NOT fall back to TS/A7/A8 after
+                    // any direct-controller failure. Keep cooling stopped.
+                    $this->DirectCoolingFallbackSet($target,
+                        'Rueckfall auf alte TS-Kuehlsteuerung deaktiviert', 'blocked');
+                    $this->SetRoomError($target,
+                        'Kuehlraum blockiert nach Direkt-Fehler; kein A7/A8-Rueckfall.');
                 }
                 if ($restoreWanted && !$this->DirectCoolingSafe()) {
                     $this->DirectCoolingFallbackSet($target, 'Externe Kuehlfreigabe verloren: Kuehlung blockiert', 'blocked');
