@@ -557,6 +557,27 @@ trait LCNClimateCoolingCommission
         if ($errors === []) {
             $errors = $this->DirectCoolingPreflight();
         }
+        if ($errors === []) {
+            // Do not start cooling on stale or still-locked feedback.
+            foreach ($this->GetRuntimeRooms() as $room) {
+                $target = (int) ($room['TargetVariable'] ?? 0);
+                $m = $this->DirectCoolingMapping($target);
+                if (!is_array($m)) {
+                    $errors[] = (string) $room['Name'] . ': Zuordnung fehlt';
+                    break;
+                }
+                $lock = (int) ($m['UnlockedVariable'] ?? 0);
+                $relay = (int) ($m['RelayStatusVariable'] ?? 0);
+                if (!$this->CoolingCommissionFresh($target)
+                    || !$this->CoolingCommissionFresh($lock)
+                    || !$this->CoolingCommissionFresh($relay)
+                    || (bool) GetValue($lock)) {
+                    $errors[] = (string) $room['Name']
+                        . ': Rueckmeldungen veraltet oder Regler noch gesperrt';
+                    break;
+                }
+            }
+        }
         return $errors;
     }
 
