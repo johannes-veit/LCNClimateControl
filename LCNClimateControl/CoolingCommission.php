@@ -519,6 +519,8 @@ trait LCNClimateCoolingCommission
                 : 'NICHT KONFIGURIERT');
         $rows[] = 'Hardware-Taupunktschutz vor Ort abgenommen: '
             . ($this->ReadPropertyBoolean('CoolingHardwareInterlockConfirmed') ? 'JA' : 'NEIN');
+        $rows[] = 'LCN-Heizregler nach S1-Freigabe wieder funktionsfaehig: '
+            . ($this->ReadPropertyBoolean('CoolingHeatingResumeConfirmed') ? 'VOR ORT BESTAETIGT' : 'NICHT GEPRUEFT');
         $issues = $this->CoolingCommissionReadinessErrors();
         $rows[] = 'Produktiver Kuehlmodus: ' . ($issues === [] ? 'SOFTWARESEITIG FREIGABEBEREIT'
             : 'GESPERRT – ' . implode('; ', $issues));
@@ -553,6 +555,9 @@ trait LCNClimateCoolingCommission
         }
         if (!$this->ReadPropertyBoolean('CoolingHardwareInterlockConfirmed')) {
             $errors[] = 'Hardware-Taupunktwaechter/Wasserabschaltung nicht abgenommen';
+        }
+        if (!$this->ReadPropertyBoolean('CoolingHeatingResumeConfirmed')) {
+            $errors[] = 'Heizregler-Wiederanlauf nach S1-Freigabe nicht vor Ort bestaetigt (FW 1F0715)';
         }
         if ($errors === []) {
             $errors = $this->DirectCoolingPreflight();
