@@ -92,7 +92,16 @@ trait LCNClimateCoolingCommission
         return $this->CoolingCommissionStartKind('relay');
     }
 
-    private function CoolingCommissionStartKind(string $kind): string
+    /**
+     * Explicit same-room retry after failed_safe, never clears a safety error
+     * nor permits a different room. All normal HEATING/feedback guards apply.
+     */
+    public function CoolingCommissionRetryFailedRegulator(): string
+    {
+        return $this->CoolingCommissionStartKind('regulator', true);
+    }
+
+    private function CoolingCommissionStartKind(string $kind, bool $retryFailed = false): string
     {
         if (!in_array($kind, ['regulator','relay'], true)) {
             return 'ABBRUCH: Unbekannter Pruefmodus.';
@@ -102,8 +111,17 @@ trait LCNClimateCoolingCommission
         }
         try {
             $old = $this->CoolingCommissionSession();
+            $failed = (string) ($old['phase'] ?? '') === 'failed_safe';
+            if ($retryFailed && (!$failed
+                || (string) ($old['kind'] ?? '') !== 'regulator'
+                || (int) ($old['target'] ?? 0) <= 0
+                || (int) ($old['sender'] ?? 0) <= 0
+                || (int) ($old['lockID'] ?? 0) <= 0
+                || (int) ($old['retryCount'] ?? 0) >= 1)) {
+                return 'ABBRUCH: Keine einmalig wiederholbare S1-Reglerpruefung vorhanden.';
+            }
             if ($this->CoolingCommissionActive()
-                || (string) ($old['phase'] ?? '') === 'failed_safe'
+                || ($failed && !$retryFailed)
                 || $this->M11ProbeActive()
                 || $this->GetMode() !== self::MODE_HEATING
                 || $this->GetPendingMode() !== null || $this->IsBusy()
@@ -125,12 +143,19 @@ trait LCNClimateCoolingCommission
                     continue;
                 }
                 $target = (int) ($room['TargetVariable'] ?? 0);
+                if ($retryFailed && ($target !== (int) $old['target']
+                    || (int) ($room['SendModule'] ?? 0) !== (int) $old['sender'])) {
+                    continue;
+                }
                 $map = $this->DirectCoolingMapping($target);
                 if ($map === null || $this->DirectCoolingLockActionID($room, $map) <= 0) {
                     return 'ABBRUCH: ' . (string) $room['Name']
                         . ' hat keine validierte S1TargetLock-Standardaktion.';
                 }
                 $lockID = (int) $map['UnlockedVariable'];
+                if ($retryFailed && $lockID !== (int) $old['lockID']) {
+                    return 'ABBRUCH: S1-Sperrobjekt unterscheidet sich vom Fehlversuch.';
+                }
                 $relayID = (int) ($map['RelayStatusVariable'] ?? 0);
                 if (!$this->CoolingCommissionFresh($lockID)
                     || !$this->CoolingCommissionFresh($target)
@@ -165,17 +190,23 @@ trait LCNClimateCoolingCommission
                     'started'=>time(), 'phaseAt'=>time(),
                     'lockConfirmed'=>false, 'lockAck'=>false,
                     'releaseAck'=>false, 'releaseTries'=>0,
+                    'retryCount'=>$retryFailed ? 1 : 0,
                     'message'=>$kind === 'relay'
                         ? 'Einzelraum-Relaispruefung mit voruebergehender S1-Sperre. EIN/AUS und Freigabe.'
                         : 'Einzelraum-S1-Sperrtest gestartet (keine Relaisbefehle).'
                 ]);
                 $this->UpdateChatGPTDiagnostic();
-                return 'START ' . (string) $room['Name']
+                return ($retryFailed ? 'EINMALIGE WIEDERHOLUNG ' : 'START ')
+                    . (string) $room['Name']
                     . ($kind === 'relay'
                         ? ': S1 sperren, NUR zugeordnetes Heizventil kurz EIN/AUS, S1 freigeben. '
                         : ': genau ein S1-Sperr-/Freigabetest, KEIN Relaisbefehl. ')
                     . 'Automatische Freigabe nach bestaetigten Rueckmeldungen. '
                     . 'Anschliessend Teststatus anzeigen.';
+            }
+            if ($retryFailed) {
+                return 'ABBRUCH: Fehlraum derzeit nicht sicher pruefbar.'
+                    . (count($skipped) > 0 ? ' ' . implode(', ', $skipped) : '');
             }
             return 'Kein weiterer aktuell pruefbarer Raum. '
                 . (count($skipped) > 0 ? 'Heizventil offen: '

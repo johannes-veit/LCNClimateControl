@@ -346,6 +346,11 @@
     },
     {
       "type": "Button",
+      "caption": "Inbetriebnahme: fehlgeschlagenen S1-Test einmalig wiederholen (gleicher Raum)",
+      "onClick": "echo LCNC_CoolingCommissionRetryFailedRegulator($id);"
+    },
+    {
+      "type": "Button",
       "caption": "Inbetriebnahme: naechstes Ventilrelais testen (kurz EIN/AUS; HEIZEN)",
       "onClick": "echo LCNC_CoolingCommissionStartRelay($id);"
     },
