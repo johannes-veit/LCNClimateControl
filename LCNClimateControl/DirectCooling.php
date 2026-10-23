@@ -109,6 +109,12 @@ trait LCNDirectCooling
 
     private function DirectCoolingSafe(): bool
     {
+        // Neither a software Boolean nor a checkbox can replace
+        // an independently wired dewpoint switch. If the operator
+        // revokes physical-safety signoff at runtime, fail closed.
+        if (!$this->ReadPropertyBoolean('CoolingHardwareInterlockConfirmed')) {
+            return false;
+        }
         $id = $this->ReadPropertyInteger('CoolingSafetyVariable');
         // Fail closed: software permission is mandatory for cooling.
         // It supplements, NEVER replaces, the independent mechanical
