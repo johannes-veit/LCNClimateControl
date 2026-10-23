@@ -243,6 +243,11 @@ t(str_contains($m->M11ProbeStatus(), 'Sperr-API-Diagnose: LCN_LockTargetValue(#3
 t(str_starts_with($m->StartM11RegulatorTest(), 'ABBRUCH'),
   'normal start does not retrigger failed test');
 $GLOBALS['probeRejectLockCommand']=false;
+// Real clock advances after the preceding native release; this mock had
+// intentionally set the status timestamp one second into the future.
+// Normalize it before the preflight rechecks freshness.
+$GLOBALS['probeVars'][46746]['VariableUpdated'] = time();
+$GLOBALS['probeVars'][34107]['VariableUpdated'] = time();
 t(str_contains($m->RetestM11Regulator(), 'gestartet'),
   'separate deliberate retest can begin once');
 for($i=0;$i<5;$i++){$m->M11ProbeWorker();}
