@@ -68,14 +68,19 @@ function IPS_ApplyChanges(int $id):bool{
 }
 function IPS_DeleteInstance(int $id):bool{unset($GLOBALS['instances'][$id],$GLOBALS['configs'][$id]);return true;}
 require __DIR__.'/../LCNClimateControl/CoolingDiscovery.php';
+require __DIR__.'/../LCNClimateControl/TrafficPacing.php';
 class Probe{
     use LCNClimateCoolingDiscovery;
+    use LCNClimateTrafficPacing;
     public const LCN_VALUE_MODULE_ID=VALUE;
     private const GLOBAL_LCN_SEND_SEMAPHORE = 'mock_lcn_bus';
     public const MODE_HEATING=0;
     public int $InstanceID=900;
     public int $mode=0;
     public bool $busy=false;
+    private array $buffers=[];
+    public function GetBuffer(string $key): string {return $this->buffers[$key]??'';}
+    public function SetBuffer(string $key,string $value):void {$this->buffers[$key]=$value;}
     public array $locks=[];
     public function GetMode():int{return $this->mode;}
     public function IsBusy():bool{return $this->busy;}
