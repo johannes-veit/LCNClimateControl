@@ -172,6 +172,13 @@ html, body {
 }
 .room-row:last-child { border-bottom: 0; }
 .room-row:hover { background: var(--row-hover); }
+/* A switching room remains readable but cannot accept a second command. */
+.room-row.switching .slider-wrap,
+.room-row.switching .cool-switch { opacity: .42; }
+.room-row.switching:not(.error) .room-name { opacity: .65; }
+.room-row.switching .value { opacity: .72; }
+.room-row.switching .step,
+.room-row.switching .cool-switch button { cursor: default; }
 .room-name {
     min-width: 0;
     overflow: hidden;
@@ -410,6 +417,20 @@ function getRow(targetId) {
     return state.rows.find(row => String(row.targetId) === String(targetId)) || null;
 }
 
+// Only the affected room is blocked while its hardware operation is queued
+// or running. A mode transition blocks all rooms until their individual
+// backend operations complete. No additional Symcon variables or timers.
+function isRoomSwitching(row) {
+    if (state.pendingMode !== null && state.pendingMode !== undefined) return true;
+    if (actionInFlight && actionInFlight.ident === 'Mode') return true;
+    if (actionQueue.some(action => action.ident === 'Mode')) return true;
+    if (!row) return false;
+    if (Boolean(row.busy)) return true;
+    const key = rowKey(row);
+    return (actionInFlight && String(actionInFlight.targetId ?? '') === key)
+        || actionQueue.some(action => String(action.targetId ?? '') === key);
+}
+
 function upsertRow(nextRow) {
     if (!nextRow || nextRow.targetId === undefined || nextRow.targetId === null) return;
     const key = String(nextRow.targetId);
@@ -474,6 +495,7 @@ function clearActionInFlight(dispatchQueued = true) {
     if (dispatchQueued) {
         scheduleQueuedAction();
     }
+    if (typeof patchUI === 'function') patchUI();
 }
 
 function queueAction(action) {
@@ -561,6 +583,7 @@ function dispatchAction(action) {
     lastActionKey = key;
     lastActionTime = now;
     actionInFlight = {...action, time: now};
+    if (typeof patchUI === 'function') patchUI();
     actionGeneration += 1;
     const generation = actionGeneration;
 
@@ -604,6 +627,7 @@ function sendAction(action) {
 
     if (actionInFlight || queueTimer) {
         queueAction(action);
+        patchUI();
         return;
     }
 
@@ -641,7 +665,7 @@ function buildMode(root) {
         if (selected === 0 && state.pendingMode === null) return;
 
         state.pendingMode = Number(state.mode) === 0 ? null : 0;
-        patchMode();
+        patchUI();
         sendAction({ident: 'Mode', value: 0, kind: 'mode'});
     });
 
@@ -650,7 +674,7 @@ function buildMode(root) {
         if (selected === 1 && state.pendingMode === null) return;
 
         state.pendingMode = Number(state.mode) === 1 ? null : 1;
-        patchMode();
+        patchUI();
         sendAction({ident: 'Mode', value: 1, kind: 'mode'});
     });
 
@@ -714,7 +738,7 @@ function createHeatRow(row) {
 
     minus.addEventListener('click', () => {
         const current = getRow(targetId);
-        if (!current) return;
+        if (!current || isRoomSwitching(current)) return;
         const {min, max} = heatingLimits(current);
         const raw = current.displayTarget === null || current.displayTarget === undefined
             ? min
@@ -734,7 +758,7 @@ function createHeatRow(row) {
 
     plus.addEventListener('click', () => {
         const current = getRow(targetId);
-        if (!current) return;
+        if (!current || isRoomSwitching(current)) return;
         const {min, max} = heatingLimits(current);
         const raw = current.displayTarget === null || current.displayTarget === undefined
             ? min
@@ -754,13 +778,14 @@ function createHeatRow(row) {
 
     slider.addEventListener('pointerdown', () => {
         const current = getRow(targetId);
-        if (current) slider.dataset.startValue = String(current.displayTarget ?? slider.value);
+        if (!current || isRoomSwitching(current)) return;
+        slider.dataset.startValue = String(current.displayTarget ?? slider.value);
         draggingTargets.add(targetId);
     });
     slider.addEventListener('input', () => {
-        draggingTargets.add(targetId);
         const current = getRow(targetId);
-        if (!current) return;
+        if (!current || isRoomSwitching(current)) return;
+        draggingTargets.add(targetId);
         current.displayTarget = Number(slider.value);
         targetValue.textContent = formatTarget(current.displayTarget);
         const {min, max} = heatingLimits(current);
@@ -769,7 +794,11 @@ function createHeatRow(row) {
     });
     slider.addEventListener('change', () => {
         const current = getRow(targetId);
-        if (!current) return;
+        if (!current || isRoomSwitching(current)) {
+            draggingTargets.delete(targetId);
+            if (current) patchHeatRow(current);
+            return;
+        }
         const previousValue = slider.dataset.startValue !== undefined
             ? Number(slider.dataset.startValue)
             : current.displayTarget;
@@ -821,7 +850,7 @@ function createCoolRow(row) {
 
     off.addEventListener('click', () => {
         const current = getRow(targetId);
-        if (!current || current.cooling === false) return;
+        if (!current || isRoomSwitching(current) || current.cooling === false) return;
         const previousValue = current.cooling;
         current.cooling = false;
         patchCoolRow(current);
@@ -836,7 +865,7 @@ function createCoolRow(row) {
 
     on.addEventListener('click', () => {
         const current = getRow(targetId);
-        if (!current || current.cooling === true) return;
+        if (!current || isRoomSwitching(current) || current.cooling === true) return;
         const previousValue = current.cooling;
         current.cooling = true;
         patchCoolRow(current);
@@ -876,7 +905,9 @@ function patchHeatRow(row) {
     ref.slider.min = String(min);
     ref.slider.max = String(max);
 
-    ref.grid.classList.toggle('busy', Boolean(row.busy));
+    const switching = isRoomSwitching(row);
+    ref.grid.classList.toggle('busy', switching);
+    ref.grid.classList.toggle('switching', switching);
     ref.grid.classList.toggle('error', Boolean(row.error));
     ref.grid.title = row.error || '';
     ref.name.textContent = row.name || 'Raum';
@@ -888,16 +919,19 @@ function patchHeatRow(row) {
 
     ref.targetValue.textContent = formatTarget(row.displayTarget);
     ref.actual.textContent = formatTemp(row.temperature, 1);
-    ref.slider.disabled = false;
-    ref.minus.disabled = raw <= min;
-    ref.plus.disabled = raw >= max;
+    ref.slider.disabled = switching;
+    ref.minus.disabled = switching || raw <= min;
+    ref.plus.disabled = switching || raw >= max;
+    if (switching) draggingTargets.delete(rowKey(row));
 }
 
 function patchCoolRow(row) {
     const ref = ui.rows.get(rowKey(row));
     if (!ref || ref.type !== 'cool') return;
 
-    ref.grid.classList.toggle('busy', Boolean(row.busy));
+    const switching = isRoomSwitching(row);
+    ref.grid.classList.toggle('busy', switching);
+    ref.grid.classList.toggle('switching', switching);
     ref.grid.classList.toggle('error', Boolean(row.error));
     ref.grid.title = row.error || '';
     ref.name.textContent = row.name || 'Raum';
@@ -905,8 +939,8 @@ function patchCoolRow(row) {
     ref.actual.textContent = formatTemp(row.temperature, 1);
     ref.off.classList.toggle('active', !Boolean(row.cooling));
     ref.on.classList.toggle('active', Boolean(row.cooling));
-    ref.off.disabled = false;
-    ref.on.disabled = false;
+    ref.off.disabled = switching;
+    ref.on.disabled = switching;
 }
 
 function patchMode() {
@@ -1052,10 +1086,7 @@ function applyMessage(message) {
 
         const nextMode = Number(state.mode) === 1 ? 1 : 0;
         if (renderedMode !== nextMode) renderStructure();
-        else {
-            patchMode();
-            patchMeta();
-        }
+        else patchUI();
         return;
     }
 
