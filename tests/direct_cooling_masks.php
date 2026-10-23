@@ -1,13 +1,16 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/../LCNClimateControl/DirectCooling.php';
+require __DIR__ . '/../LCNClimateControl/TrafficPacing.php';
 $GLOBALS['lastMask'] = null;
 function IPS_FunctionExists(string $name): bool { return true; }
 function IPS_SemaphoreEnter(string $name, int $timeout): bool { return true; }
 function IPS_SemaphoreLeave(string $name): void {}
+function IPS_Sleep(int $ms): bool { return true; }
 function LCN_SetRelay(int $instance, string $mask): bool { $GLOBALS['lastMask'] = [$instance, $mask]; return true; }
 class Probe {
     use LCNDirectCooling;
+    use LCNClimateTrafficPacing;
     private const GLOBAL_LCN_SEND_SEMAPHORE = 'TEST';
     private function IsOperationalLCNModule(int $id): bool { return $id === 100; }
     private function SendDebug(string $name, string $message, int $format): void {}
