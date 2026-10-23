@@ -338,7 +338,9 @@ trait LCNDirectCooling
         // 11 Raeume teilen sich einen kooperativen 250-ms-Worker.
         // Starre 7 s haetten bei paralleler Umschaltung falsch-positive
         // Timeouts erzeugt.
-        return min(30000, max(8000, 5000 + count($this->GetRuntimeRooms()) * 1500));
+        // 750 ms bus cooldowns + up to 11 round-robin rooms + explicit
+        // independent LCN read confirmations. Avoid false timeouts.
+        return min(60000, max(20000, 8000 + count($this->GetRuntimeRooms()) * 3000));
     }
 
     private function DirectCoolingWait(array $job, string $next, string $name, bool $actual, bool $expected, int $statusID = 0): bool
@@ -611,10 +613,21 @@ trait LCNDirectCooling
                 $m = $this->DirectCoolingMapping($target)
                     ?? ($this->ReadJsonAttribute('DirectCoolingLockMappings')[(string) $target] ?? null);
                 if (is_array($m) && $this->DirectCoolingLockState($target) !== '') {
+                    $statusID = (int) ($m['RelayStatusVariable'] ?? 0);
+                    $expectedOff = !(bool) ($m['OpenRelayOn'] ?? true);
+                    $alreadyConfirmedOff = $statusID > 0 && IPS_VariableExists($statusID)
+                        && (bool) GetValue($statusID) === $expectedOff
+                        && (int) (IPS_GetVariable($statusID)['VariableUpdated'] ?? 0)
+                            > time() - 180;
+                    // No bus burst every 15 seconds for valves already
+                    // confirmed OFF; still resend if state is ON or stale.
+                    if ($alreadyConfirmedOff) {
+                        continue;
+                    }
                     $ok = $this->DirectCoolingRelaySet($m, false);
                     $this->SetRoomError($target, $ok
-                        ? 'Kuehlfreigabe verloren: Schliessbefehl gesendet; Stellung ungeprueft.'
-                        : 'ALARM: Kuehlfreigabe verloren; Schliessbefehl fehlgeschlagen!');
+                        ? 'Kuehlfreigabe verloren: Ventil-AUS angefordert, Rueckmeldung ausstehend.'
+                        : 'ALARM: Kuehlfreigabe verloren; Ventil-AUS fehlgeschlagen!');
                 }
             }
             $this->RefreshRuntimeStatus();
