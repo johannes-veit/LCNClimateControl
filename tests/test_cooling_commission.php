@@ -131,6 +131,26 @@ chk(str_contains($errors,'Kuehlmodus:') || str_contains($errors,'Produktiver Kue
     'cooling is explicitly locked');
 echo "PASS no cooling clearance from regulator only\n";
 
+// A failed-safe partial S1 test must remain blocked and be transparent
+// without issuing another lock or any relay instruction.
+$previousCommands = $GLOBALS['cCommands'];
+$m->attrs['CoolingCommissionSession'] = [
+    'phase'=>'failed_safe', 'kind'=>'regulator',
+    'name'=>'OG Schlafen 2', 'sender'=>41951, 'target'=>34041,
+    'lockID'=>33374, 'lockAck'=>true, 'lockConfirmed'=>false,
+    'releaseAck'=>true, 'releaseTries'=>1,
+    'message'=>'S1 ist FREI, aber Sperr-/Freigabetest NICHT bestanden.'
+];
+$diag = $m->CoolingCommissionStatus();
+chk(str_contains($diag,'S1-Fehlerdiagnose: Sperrbefehl ANGENOMMEN'), 'diagnose successful command receipt');
+chk(str_contains($diag,'Sperre bestaetigt NEIN'), 'diagnose missing physical read proof');
+chk(str_contains($diag,'Freigabebefehl ANGENOMMEN'), 'diagnose unlock command receipt');
+chk(str_contains($diag,'S1-Testobjekte: LCN-Modul #41951'), 'specific LCN module identified');
+chk(str_starts_with($m->CoolingCommissionStartNext(),'ABBRUCH:'), 'failed-safe lockout still active');
+chk($GLOBALS['cCommands']===$previousCommands, 'diagnostic emitted no hardware commands');
+echo "PASS read-only failed-safe diagnosis, no automatic retries\n";
+
+
 $source=file_get_contents(__DIR__.'/../LCNClimateControl/DirectCooling.php');
 $module=file_get_contents(__DIR__.'/../LCNClimateControl/module.php');
 chk(str_contains($source,'// Every room must have its LCN heater regulator held LOCKED'),
