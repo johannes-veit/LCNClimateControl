@@ -17,7 +17,9 @@ trait LCNClimateCoolingCommission
     private function CoolingCommissionActive(): bool
     {
         return in_array((string) ($this->CoolingCommissionSession()['phase'] ?? ''), [
-            'lock', 'lock_wait', 'release', 'release_wait', 'manual_release'
+            'lock', 'lock_wait', 'relay_on', 'relay_on_wait',
+            'relay_off', 'relay_off_wait', 'release', 'release_wait',
+            'manual_release', 'manual_relay_off'
         ], true);
     }
 
@@ -26,7 +28,8 @@ trait LCNClimateCoolingCommission
         $this->WriteJsonAttribute('CoolingCommissionSession', $p);
         $this->SetTimerInterval('CoolingCommissionTimer',
             in_array((string) ($p['phase'] ?? ''), [
-                'lock', 'lock_wait', 'release', 'release_wait'
+                'lock', 'lock_wait', 'relay_on', 'relay_on_wait',
+                'relay_off', 'relay_off_wait', 'release', 'release_wait'
             ], true) ? 1000 : 0);
     }
 
@@ -81,6 +84,19 @@ trait LCNClimateCoolingCommission
      */
     public function CoolingCommissionStartNext(): string
     {
+        return $this->CoolingCommissionStartKind('regulator');
+    }
+
+    public function CoolingCommissionStartRelay(): string
+    {
+        return $this->CoolingCommissionStartKind('relay');
+    }
+
+    private function CoolingCommissionStartKind(string $kind): string
+    {
+        if (!in_array($kind, ['regulator','relay'], true)) {
+            return 'ABBRUCH: Unbekannter Pruefmodus.';
+        }
         if (!IPS_SemaphoreEnter('LCNC_' . $this->InstanceID, 1500)) {
             return 'ABBRUCH: Climate-Instanz beschaeftigt.';
         }
@@ -96,9 +112,16 @@ trait LCNClimateCoolingCommission
                 || IPS_GetKernelRunlevel() !== KR_READY) {
                 return 'ABBRUCH: Nur ruhender HEIZEN-Modus ohne offene Sperren/Fehler.';
             }
+            if ($kind === 'relay' && !$this->CoolingCommissionAllRegulatorsVerified()) {
+                return 'ABBRUCH: Zuerst alle elf S1-Regler erfolgreich pruefen.';
+            }
             $skipped = [];
             foreach ($this->GetRuntimeRooms() as $room) {
-                if ($this->CoolingCommissionVerified($room)) {
+                if ($kind === 'regulator' && $this->CoolingCommissionVerified($room)) {
+                    continue;
+                }
+                if ($kind === 'relay' && (!$this->CoolingCommissionVerified($room)
+                    || $this->CoolingCommissionRelayRoomVerified($room))) {
                     continue;
                 }
                 $target = (int) ($room['TargetVariable'] ?? 0);
@@ -128,7 +151,7 @@ trait LCNClimateCoolingCommission
                 $this->DirectCoolingSaveLockMapping($target, $map);
                 $this->DirectCoolingSetLockState($target, 'uncertain');
                 $this->CoolingCommissionSave([
-                    'phase'=>'lock', 'target'=>$target,
+                    'phase'=>'lock', 'kind'=>$kind, 'target'=>$target,
                     'sender'=>(int) $room['SendModule'],
                     'name'=>(string) $room['Name'],
                     'lockID'=>$lockID, 'mapping'=>$map,
@@ -136,18 +159,24 @@ trait LCNClimateCoolingCommission
                     'started'=>time(), 'phaseAt'=>time(),
                     'lockConfirmed'=>false, 'lockAck'=>false,
                     'releaseAck'=>false, 'releaseTries'=>0,
-                    'message'=>'Einzelraum-S1-Sperrtest gestartet (keine Relaisbefehle).'
+                    'message'=>$kind === 'relay'
+                        ? 'Einzelraum-Relaispruefung mit voruebergehender S1-Sperre. EIN/AUS und Freigabe.'
+                        : 'Einzelraum-S1-Sperrtest gestartet (keine Relaisbefehle).'
                 ]);
                 $this->UpdateChatGPTDiagnostic();
                 return 'START ' . (string) $room['Name']
-                    . ': genau ein S1-Sperr-/Freigabetest. '
-                    . 'Automatische Freigabe, KEIN Relaisbefehl. '
+                    . ($kind === 'relay'
+                        ? ': S1 sperren, NUR zugeordnetes Heizventil kurz EIN/AUS, S1 freigeben. '
+                        : ': genau ein S1-Sperr-/Freigabetest, KEIN Relaisbefehl. ')
+                    . 'Automatische Freigabe nach bestaetigten Rueckmeldungen. '
                     . 'Anschliessend Teststatus anzeigen.';
             }
             return 'Kein weiterer aktuell pruefbarer Raum. '
                 . (count($skipped) > 0 ? 'Heizventil offen: '
                     . implode(', ', $skipped) . '. Bei Heizrelais AUS spaeter erneut pruefen.'
-                    : 'Alle 11 S1-Regler sind bereits erfolgreich geprueft.');
+                    : ($kind === 'relay'
+                        ? 'Alle 11 Ventilrelais sind geprueft.'
+                        : 'Alle 11 S1-Regler sind bereits erfolgreich geprueft.'));
         } finally {
             IPS_SemaphoreLeave('LCNC_' . $this->InstanceID);
         }
@@ -382,23 +411,28 @@ trait LCNClimateCoolingCommission
         return $errors;
     }
 
+    private function CoolingCommissionRelayRoomVerified(array $room): bool
+    {
+        $target = (int) ($room['TargetVariable'] ?? 0);
+        $map = $this->DirectCoolingMapping($target);
+        $all = $this->ReadJsonAttribute('CoolingCommissionRelays');
+        $record = $all[(string) $target] ?? null;
+        return $this->CoolingCommissionVerified($room)
+            && is_array($map) && is_array($record)
+            && (int) ($record['relayModule'] ?? 0) === (int) ($map['RelayModule'] ?? 0)
+            && (int) ($record['unit'] ?? 0) === (int) ($map['RelayUnit'] ?? 0)
+            && (int) ($record['channel'] ?? 0) === (int) ($map['RelayChannel'] ?? 0)
+            && (int) ($record['at'] ?? 0) > 0;
+    }
+
     private function CoolingCommissionAllRelaysVerified(): bool
     {
         $rooms = $this->GetRuntimeRooms();
         if (count($rooms) !== 11) {
             return false;
         }
-        $all = $this->ReadJsonAttribute('CoolingCommissionRelays');
         foreach ($rooms as $room) {
-            $target = (int) ($room['TargetVariable'] ?? 0);
-            $map = $this->DirectCoolingMapping($target);
-            $record = $all[(string) $target] ?? null;
-            if (!$this->CoolingCommissionVerified($room) || !is_array($map)
-                || !is_array($record)
-                || (int) ($record['relayModule'] ?? 0) !== (int) ($map['RelayModule'] ?? 0)
-                || (int) ($record['unit'] ?? 0) !== (int) ($map['RelayUnit'] ?? 0)
-                || (int) ($record['channel'] ?? 0) !== (int) ($map['RelayChannel'] ?? 0)
-                || (int) ($record['at'] ?? 0) <= 0) {
+            if (!$this->CoolingCommissionRelayRoomVerified($room)) {
                 return false;
             }
         }
