@@ -77,6 +77,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterPropertyBoolean('DirectCoolingEnabled', true);
         $this->RegisterPropertyInteger('CoolingSafetyVariable', 0);
         $this->RegisterPropertyBoolean('CoolingHardwareInterlockConfirmed', false);
+        $this->RegisterPropertyBoolean('CoolingHeatingResumeConfirmed', false);
         $this->RegisterPropertyString('CoolingRelays', '[]');
         $this->RegisterPropertyBoolean('AutoCoolingPolarityConfirmed', false);
         $this->RegisterPropertyBoolean('AutoCoolingOpenRelayOn', true);
