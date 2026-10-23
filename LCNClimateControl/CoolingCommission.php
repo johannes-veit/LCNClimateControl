@@ -348,6 +348,63 @@ trait LCNClimateCoolingCommission
         return implode("\n", $rows);
     }
 
+    /**
+     * HARD STOP until all hardware is commissioned.
+     * An IPS Boolean can gate software, but it NEVER substitutes
+     * for the independent dewpoint switch that physically stops cold water.
+     */
+    private function CoolingCommissionReadinessErrors(): array
+    {
+        $errors = [];
+        if (!$this->UsesDirectCooling()) {
+            $errors[] = 'Direkte Kuehlsteuerung nicht aktiviert';
+        }
+        if (!$this->CoolingCommissionAllRegulatorsVerified()) {
+            $errors[] = 'S1-Regler nicht vollstaendig getestet (11 erforderlich)';
+        }
+        if (!$this->CoolingCommissionAllRelaysVerified()) {
+            $errors[] = 'Ventilrelais nicht vollstaendig getestet (11 erforderlich)';
+        }
+        if ($this->CoolingCommissionActive() || $this->M11ProbeActive()
+            || $this->ReadJsonAttribute('DirectCoolingLocks') !== []) {
+            $errors[] = 'Noch offene/ungewisse Reglersperrung';
+        }
+        $safetyID = (int) $this->ReadPropertyInteger('CoolingSafetyVariable');
+        if ($safetyID <= 0 || !$this->DirectCoolingSafe()) {
+            $errors[] = 'Externe Software-Kuehlfreigabe fehlt oder FALSE';
+        }
+        if (!$this->ReadPropertyBoolean('CoolingHardwareInterlockConfirmed')) {
+            $errors[] = 'Hardware-Taupunktwaechter/Wasserabschaltung nicht abgenommen';
+        }
+        if ($errors === []) {
+            $errors = $this->DirectCoolingPreflight();
+        }
+        return $errors;
+    }
+
+    private function CoolingCommissionAllRelaysVerified(): bool
+    {
+        $rooms = $this->GetRuntimeRooms();
+        if (count($rooms) !== 11) {
+            return false;
+        }
+        $all = $this->ReadJsonAttribute('CoolingCommissionRelays');
+        foreach ($rooms as $room) {
+            $target = (int) ($room['TargetVariable'] ?? 0);
+            $map = $this->DirectCoolingMapping($target);
+            $record = $all[(string) $target] ?? null;
+            if (!$this->CoolingCommissionVerified($room) || !is_array($map)
+                || !is_array($record)
+                || (int) ($record['relayModule'] ?? 0) !== (int) ($map['RelayModule'] ?? 0)
+                || (int) ($record['unit'] ?? 0) !== (int) ($map['RelayUnit'] ?? 0)
+                || (int) ($record['channel'] ?? 0) !== (int) ($map['RelayChannel'] ?? 0)
+                || (int) ($record['at'] ?? 0) <= 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private function CoolingCommissionAllRegulatorsVerified(): bool
     {
         $rooms = $this->GetRuntimeRooms();
