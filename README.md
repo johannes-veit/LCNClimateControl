@@ -1,85 +1,142 @@
 # LCN Climate Control – IP-Symcon 9
 
-**Stand: v0.3.23 Build 39 – HEIZEN produktiv, M11-Sperr-/Freigabetest bestanden; KÜHLEN weiterhin gesperrt.**
+**Stand: v0.4.0 Build 40 – Kuehlsoftware fertig vorbereitet, Kuehlwasser-Freigabe bis zur realen Abnahme gesperrt.**
 
-## Einfache Architektur
+## 1. Produktiver HEIZEN-Modus
 
-**HEIZEN (unveraendert):**
-- LCN-Regler 1 und GT8 bleiben Master. Symcon schickt die bewaehrten
-  kurzen A7/A8-Tastenbefehle in kleinen, bestaetigten Schritten.
-- Die echte `S1Target`-Floatvariable bleibt die einzige
-  Quelle fuer den Heizsollwert. Keine direkten Relaisbefehle beim Heizen.
+Unveraendert: 11 bestehende LCN-Regler, GT8 A7/A8 als kurze
+TS-Tastensignale, S1Target als einziger echter Sollwert,
+Raum-Kachel ohne neue sichtbare Variablen.
+LCN steuert weiterhin die Stellantriebe. Kein zusaetzlicher
+Sensor, kein neuer Regler, kein Aendern bestehender Fremdmodule.
 
-**KÜHLEN (noch nicht freigegeben):**
-1. Raumregler per nativer LCN-Boolean-Standardaktion sperren:
-   `RequestAction(S1TargetLock-ID, true)`.
-2. Erst nach bestaetigter Sperre genau **ein** zugeordnetes
-   Ventilrelais auf AUF schalten.
-3. Bei Kuehlende erst Relais sicher auf ZU, dann
-   `RequestAction(S1TargetLock-ID, false)` und danach
-   regulären Heizsollwert bestaetigen.
-4. Unklare Rueckmeldung => **STOP** statt Raten oder endloses Wiederholen.
+## 2. KUEHLEN – neue einfache Betriebslogik
 
-Dafuer bleiben die vorhandenen elf S1-Sperr-Booleans,
-die bereits ermittelten M92/M192-Relais und die native
-Symcon-Funktion `RequestAction` ausreichend.
-**Kein Regler 2, keine 55 Tasten, keine weiteren
-Konfigurationsvariablen und keine Umprogrammierung der GT8.**
+- Vor JEDEM Umschalten prueft Symcon: genau 11 gueltige
+  S1-Regler- und Einzelrelais-Zuordnungen; bestandener
+  echter Lock/Release-Test je Regler; bestandener
+  EIN/AUS-Test je Relais; aktuelle native Statuswerte;
+  externe Boolean-Kuehlfreigabe TRUE; vor Ort bestaetigter
+  **unabhaengiger hydraulischer Taupunktschutz**.
+- Fehlt auch nur eine Voraussetzung, bleibt Betriebsart
+  **HEIZEN** aktiv und KUEHLEN wird abgelehnt.
+- Kuehlstart: Fuer jeden Raum S1TargetLock ueber die
+  native LCN-Variable mit `RequestAction(lockID,true)`
+  sperren und eine separate LCN-Statusabfrage bestaetigen.
+- Regler bleiben in KUEHLEN auch bei "Kuehlen AUS"
+  GESPERRT, damit die Heizregelung den Relaisausgang
+  nicht selbststaendig wieder einschalten kann.
+- Danach genau **ein** zugeordnetes Einzelrelais
+  je Raum schalten: KUEHLEN EIN = Ventil bestromt /
+  AUF; KUEHLEN AUS = stromlos / ZU.
+- Nur nach aktuellen Relais-Rueckmeldungen
+  Zustandswechsel als erfolgreich melden.
+- Zurueck auf HEIZEN: Erst jedes NC-Ventil AUS und
+  AUS-Rueckmeldung bestaetigen, danach S1-Freigabe
+  via `RequestAction(lockID,false)`; dann erst
+  normaler S1-Sollwert bzw. die bewaehrten GT8-TS-Befehle.
+- Bei Statusfehlern OFF-first-Sicherungsversuch und
+  keine ungetestete A7/A8-Kuehl-Endlagenfahrt.
+- 750 ms Mindestabstand zwischen aktiven LCN-Busaktionen.
+  Rotierende Einzelraum-Jobs statt 11 parallelen
+  Regler-/Relaiskommandos.
 
-## Was von den echten Tests bewiesen ist
+## 3. Inbetriebnahme – kein automatischer Sammeltest
 
-- Die bis v0.3.20 fuer M11 genutzten Aufrufe
-  `LCN_LockTargetValue(#37617,2)` und
-  `LCN_ReleaseTargetValue(#37617,2)` lieferten beide **FALSE**.
-  Deshalb werden sie nicht mehr fuer die kuenftige direkte
-  Kuehlsteuerung verwendet.
-- `RequestAction(#46746,false)` lieferte dagegen **TRUE**;
-  die LCN-Value-Instanz #19003 ist die vorhandene
-  Standardaktion. Das ist nur ein erfolgreich angenommener
-  FREIGABE-Aufruf, noch kein echter Sperrbeweis.
-- Bei allen elf LCN-Modulen wurde die Option
-  "Sperrung zulassen" laut Betreiber in LCN-PRO aktiviert;
-  Symcon kann diese Konfigurationsoption nicht auslesen.
-- **M11 (EG Buero) hat den realen Test am 23.10.2026 bestanden**:
-  `RequestAction(#46746,true)` erfolgreich, S1TargetLock
-  anschliessend GESPERRT, `RequestAction(#46746,false)`
-  erfolgreich, S1TargetLock wieder FREI und S1Target = 21,0 Grad.
-  Lockversuch 06:28:19, Sperrstatus-Rueckmeldung 06:28:21,
-  Freigabeversuch 06:28:24. Keine Relaisbefehle.
-- Die anderen **zehn Regler** sind eindeutig zugeordnet, aber
-  ihr echter Sperr-/Freigabe-Zyklus ist noch nicht nachgewiesen.
-  Der einzelne M11-Test wird **nicht** ungeprueft auf sie
-  uebertragen.
-- Produktive Direktkuehlung bleibt trotz des M11-Erfolgs
-  absichtlich gesperrt: Die anderen zehn Regler und die reale
-  Ventil-/Hydraulikfunktion sind noch nicht endgueltig geprueft.
-- Eine vom Symcon-System unabhaengige Taupunkt- und
-  Kuehlwasserverriegelung bleibt Voraussetzung
-  fuer echten Kuehlwasserbetrieb.
+Die vorhandene Konfiguration ist **11/11 eindeutig**:
+EG Bad, EG Buero, EG Gaeste WC, EG Kueche, EG Schlafen,
+EG Wohnen, OG Ankleide/HWR, OG Bad, OG Flur,
+OG Schlafen 1 und OG Schlafen 2.
+Einzig M11/EG Buero ist per `RequestAction(#46746,true/false)`
+bereits am 23.10.2026 nachweislich bestanden.
+Die anderen zehn S1-Regler sowie alle elf Relais
+muessen am realen LCN-Bus geprueft werden.
 
-## Reduzierte Bedienung
+Zwei neue Aktionen in der Modulkonfiguration:
 
-Das Modulkonfigurationsfenster zeigt nur sieben wichtige
-Aktionen (Abbruch, Fehler quittieren, Sperrstatus,
-Sperrvormerkungen pruefen, EINMALIGER M11-RequestAction-Test,
-M11-Teststatus, M11-Not-Freigabe).
-Die sechs ueberholten Diagnose-/Sperrtest-Knoepfe wurden
-ausgeblendet; ihre historischen Berichte/Methoden sind fuer
-Rueckwaertskompatibilitaet zunaechst erhalten.
-Keine neue sichtbare Symcon-Variable.
+1. `Inbetriebnahme: naechsten S1-Regler pruefen`:
+   nur ein Raum; im HEIZEN-Betrieb S1 SPERREN,
+   LCN_RequestRead pruefen, S1 FREIGEBEN und
+   Rueckmeldung/Sollwert pruefen. **Kein Relaisbefehl.**
+   M11 wird wegen bereits bestandener Pruefung
+   automatisch uebersprungen.
+2. `Inbetriebnahme: naechstes Ventilrelais testen`:
+   erst nachdem alle 11 S1-Regler erfolgreich
+   getestet wurden; im HEIZEN-Modus S1 SPERREN,
+   ausschliesslich das zugeordnete Relais kurz
+   EIN und Rueckmeldung pruefen, zwingend AUS
+   und Rueckmeldung pruefen, erst DANACH S1 FREI.
+   Der Test bestromt das betreffende NC-Ventil
+   kurzfristig! Nur vor Ort unter Aufsicht und
+   **ohne Kaltwasserzufuhr** pruefen.
+   Bei derzeit aktivem Heizrelais (z. B. OG Bad)
+   wird der Raum uebersprungen, bis das
+   Heizrelais natuerlich AUS meldet.
 
-Alle Busbefehle des Climate-Moduls sind mit der bereits
-vorhandenen gemeinsamen Sendesperre und **750 ms Abstand**
-koordiniert. Die nativen S1-Instanzen haben bereits ihren
-bestehenden 120-s-Abfragezyklus; es wird kein zusaetzlicher
-globaler LCN-Status-Polling-Timer eingefuehrt.
+Test- und Freigabe-Zustand werden platzsparend
+in Modul-Attributen abgelegt; keine neuen
+sichtbaren Symcon-Variablen. Einmal je Raum
+explizit den naechsten Test anklicken, dann
+Teststatus auslesen. Keine unbeaufsichtigte
+11-Raum-Automatik und keine Massenschaltbefehle.
+Bei Update waehrend einer aktiven Relaispruefung
+erfolgt zuerst Relais AUS und erst danach S1 FREI.
 
-Quellen:
-- https://www.symcon.de/de/service/dokumentation/befehlsreferenz/variablenzugriff/requestaction/
-- https://www.symcon.de/de/service/dokumentation/modulreferenz/geraete/lcn/lcn-requestread/
-- https://community.symcon.de/t/lcn-reglersperre-bei-offenem-fenster/133348
-- https://community.symcon.de/t/lcn-staendige-timeouts/134067
+Eine bestehende Aktion zeigt den allgemeinen
+Sperrstatus; die neue `Inbetriebnahme anzeigen`
+zeigt die Nachweise getrennt als S1 x/11 und
+Relais y/11 sowie den Grund, warum KUEHLEN noch
+gesperrt ist. Der Bericht `Senden an ChatGPT`
+enthaelt dieselben Abnahmezaehler.
 
+## 4. Wasserseitige Sicherheit – unabhaengige Pflicht
+
+- Externen Taupunktwaechter fachgerecht montieren.
+  Der Waechter muss **unabhaengig von Symcon**
+  die hydraulische Kaltwasserfreigabe unterbrechen,
+  bevor Tauwasser entstehen kann.
+- Die Kuehlwasserfreigabe zusaetzlich in Symcon
+  als vorhandene Boolean-Variable verknuepfen
+  (`CoolingSafetyVariable`, TRUE freigegeben,
+  FALSE nicht freigegeben).
+- Nach physischer Funktionspruefung den Checkbox-
+  Eintrag `CoolingHardwareInterlockConfirmed`
+  **bewusst** auf JA setzen. Nicht vorab setzen.
+- Sinkt die Softwarefreigabe auf FALSE oder wird
+  die Hardware-Abnahme widerrufen, versucht das
+  Modul offene Einzelrelais zu schliessen.
+  Entscheidend bleibt die **unabhaengige
+  mechanische/hydraulische Abschaltung**.
+- Die reale Ventilbewegung kann aus einem
+  elektrischen Relaisstatus allein NICHT
+  sicher abgeleitet werden. Bei jedem
+  Einzelrelais-Test vor Ort pruefen.
+
+Keine Einstellung "minimal 17/18 Grad C" ersetzt
+den echten Taupunktwaechter bei erhoehter
+Luftfeuchte. Bei Feuchtraeumen/Kuechen
+die Nutzungsfreigabe separat fachlich bewerten.
+
+## 5. Tests und Rollback
+
+Neue Tests `tests/test_cooling_commission.php`
+und bestehende Mock-Tests simulieren die
+verschachtelten S1-/Relais-Protokolle,
+R1/S1-Validierung und die Freigabesperre.
+GitHub CI lintet alle PHP-Dateien.
+Der Entwicklungsstand bedeutet **keine
+automatische Hardwarefreigabe** und keine
+behauptete bestandene Live-Pruefung.
+
+Bei Softwarefehlern HEIZEN weiterbetreiben,
+keine Kuehlwasserzufuhr erlauben und den
+letzten bestandenen Stand 0.3.23
+ueber GitHub-Commit wiederherstellen.
+Im Fall noch gespannter S1-Regler oder
+unklarer Relaisstatus zuvor die spezielle
+Not-AUS/S1-Freigabe abschliessen.
+
+---
 ## Ueberlieferte Dokumentation
 
 Die folgenden Abschnitte enthalten teils historische
