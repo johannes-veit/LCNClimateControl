@@ -90,6 +90,17 @@ trait LCNClimateChatGPTDiagnostic
         $currentJob = $this->GetCurrentJob();
         $queue = $this->GetQueue();
         $isBusy = $this->IsBusy();
+        $m11 = $this->M11ProbeSession();
+        // Evidence is tied to the proven M11 hardware and the exact S1
+        // action. A success on M11 must never certify the other ten rooms.
+        $m11ActionPassed = (string) ($m11['phase'] ?? '') === 'passed'
+            && (string) ($m11['commandPath'] ?? '') === 'RequestAction'
+            && (int) ($m11['sender'] ?? 0) === 37617
+            && (int) ($m11['target'] ?? 0) === 34107
+            && (int) ($m11['lockID'] ?? 0) === 46746
+            && (bool) ($m11['lockConfirmed'] ?? false)
+            && (bool) ($m11['lockCommandAccepted'] ?? false)
+            && (bool) ($m11['releaseCommandAccepted'] ?? false);
         $safeVar = (int) $this->ReadPropertyInteger('CoolingSafetyVariable');
         $safeLabel = 'nicht konfiguriert (Software-Gate optional)';
         if ($safeVar > 0) {
@@ -109,8 +120,8 @@ trait LCNClimateChatGPTDiagnostic
             'Symcon-Modulinstanz: #' . $this->InstanceID,
             'Betriebsart: ' . ($mode === self::MODE_HEATING ? 'HEIZEN' : 'KUEHLEN'),
             'DirectCoolingEnabled: ' . ($this->UsesDirectCooling() ? 'JA' : 'NEIN'),
-            'M11-Sperrtest: ' . (string) ($this->M11ProbeSession()['phase'] ?? 'nicht gestartet')
-                . ' | ' . (string) ($this->M11ProbeSession()['message'] ?? 'Keine Testfahrt.'),
+            'M11-Sperrtest: ' . (string) ($m11['phase'] ?? 'nicht gestartet')
+                . ' | ' . (string) ($m11['message'] ?? 'Keine Testfahrt.'),
             'Auftrag laeuft: ' . ($isBusy ? 'JA' : 'NEIN'),
             'Queue: ' . count($queue) . ' Eintraege'
                 . (is_array($currentJob)
@@ -131,6 +142,7 @@ trait LCNClimateChatGPTDiagnostic
         $legacy = 0;
         $blocked = 0;
         $lockedCount = 0;
+        $provenRooms = 0;
         foreach ($rooms as $room) {
             $name = (string) ($room['Name'] ?? '(Raum ohne Name)');
             $target = (int) ($room['TargetVariable'] ?? 0);
@@ -147,10 +159,20 @@ trait LCNClimateChatGPTDiagnostic
                 $directReady = $this->UsesDirectCooling() && $eligibility === '' && $mapping !== null;
                 $isBlocked = $persisted === 'uncertain' || $fallbackKind === 'blocked'
                     || str_contains($eligibility, 'bereits gesperrt');
+                $m11VerifiedHere = $m11ActionPassed && $sender === 37617 && $target === 34107
+                    && is_array($locked)
+                    && (int) ($locked['id'] ?? 0) === 46746
+                    && (bool) ($locked['lockedWhenTrue'] ?? false)
+                    && !(bool) GetValue(46746);
+                if ($m11VerifiedHere) {
+                    $provenRooms++;
+                }
                 $route = $isBlocked ? 'GESTOPPT/PRUEFEN'
                     : ($persisted !== '' ? 'DIREKT / REGLER ' . strtoupper($persisted)
                     : ($fallbackKind === 'legacy' ? 'ALTE A7/A8 (Rueckfall)'
-                    : ($directReady ? 'DIREKT VORBEREITET (Reglersperre noch nicht nachgewiesen)'
+                    : ($directReady ? ($m11VerifiedHere
+                        ? 'DIREKT VORBEREITET (M11-S1-Sperr-/Freigabetest BESTANDEN)'
+                        : 'DIREKT VORBEREITET (S1-Sperr-/Freigabetest noch ausstehend)')
                     : 'ALTE A7/A8')));
                 if ($isBlocked) {
                     $blocked++;
@@ -221,9 +243,13 @@ trait LCNClimateChatGPTDiagnostic
         }
         $lines[] = '';
         $lines[] = '--- ZUSAMMENFASSUNG ---';
-        $lines[] = 'Direkt technisch zugeordnet (KEIN Funktionstest): ' . $ready . '; alte Steuerung: ' . $legacy
+        $lines[] = 'Direkt technisch zugeordnet: ' . $ready
+            . '; S1-Sperr-/Freigabetest bestanden: ' . $provenRooms
+            . '; noch nicht erfolgreich getestet: ' . max(0, count($rooms) - $provenRooms)
+            . '; alte Steuerung: ' . $legacy
             . '; blockiert/Pruefung: ' . $blocked
             . '; zuletzt als gesperrt gemeldet: ' . $lockedCount . '.';
+        $lines[] = 'WICHTIG: Ein bestandener M11-Test ist KEINE Freigabe fuer produktive Kuehlung oder andere Raeume.';
         $lastError = trim((string) $this->ReadAttributeString('LastError'));
         if ($lastError !== '') {
             $lines[] = 'Modulfehler: ' . $lastError;
