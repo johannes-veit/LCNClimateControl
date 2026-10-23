@@ -232,6 +232,44 @@ trait LCNClimateCoolingCommission
         return $updated >= $read && $updated > $sent;
     }
 
+    /** One response must be newer than the just-issued relay command and read request. */
+    private function CoolingCommissionRelayFreshRead(array $p, bool $electric): bool
+    {
+        $map = $p['mapping'] ?? [];
+        $id = (int) ($map['RelayStatusVariable'] ?? 0);
+        $sent = (int) ($electric ? ($p['relayOnAt'] ?? 0) : ($p['relayOffAt'] ?? 0));
+        $read = (int) ($p['relayReadAt'] ?? 0);
+        if (!(bool) ($p['relayReadAck'] ?? false) || $read <= $sent
+            || !IPS_VariableExists($id) || (bool) GetValue($id) !== $electric) {
+            return false;
+        }
+        return (int) (IPS_GetVariable($id)['VariableUpdated'] ?? 0) >= $read;
+    }
+
+    private function CoolingCommissionRelayRead(array &$p): void
+    {
+        if (time() - (int) ($p['relayReadAt'] ?? 0) < 4
+            || !IPS_FunctionExists('LCN_RequestStatus')) {
+            return;
+        }
+        $id = (int) ($p['mapping']['RelayModule'] ?? 0);
+        if (!$this->IsOperationalLCNModule($id)) {
+            return;
+        }
+        $p['relayReadAt'] = time();
+        $p['relayReadAck'] = false;
+        if (!IPS_SemaphoreEnter(self::GLOBAL_LCN_SEND_SEMAPHORE, 2000)) {
+            return;
+        }
+        try {
+            $p['relayReadAck'] = (bool) LCN_RequestStatus($id);
+        } catch (Throwable $e) {
+            $this->SendDebug('Commission-RelayRead', $e->getMessage(), 0);
+        } finally {
+            $this->ReleaseLCNBusSlot();
+        }
+    }
+
     public function CoolingCommissionWorker(): void
     {
         if (!IPS_SemaphoreEnter('LCNC_' . $this->InstanceID, 150)) {
@@ -240,7 +278,10 @@ trait LCNClimateCoolingCommission
         try {
             $p = $this->CoolingCommissionSession();
             $phase = (string) ($p['phase'] ?? '');
-            if (!in_array($phase, ['lock','lock_wait','release','release_wait'], true)) {
+            if (!in_array($phase, [
+                'lock','lock_wait','relay_on','relay_on_wait','relay_off',
+                'relay_off_wait','release','release_wait'
+            ], true)) {
                 $this->SetTimerInterval('CoolingCommissionTimer', 0);
                 return;
             }
@@ -248,7 +289,8 @@ trait LCNClimateCoolingCommission
             $sender = (int) ($p['sender'] ?? 0);
             $map = $p['mapping'] ?? null;
             if (!is_array($map)) {
-                $this->CoolingCommissionPhase($p,'manual_release',
+                $this->CoolingCommissionPhase($p,
+                    ($p['kind'] ?? '') === 'relay' ? 'manual_relay_off' : 'manual_release',
                     'ALARM: Hardwarezuordnung fehlt. Regler in LCN-PRO kontrollieren.');
             } elseif ($phase === 'lock') {
                 // Durable release state BEFORE the physical lock.
@@ -267,15 +309,75 @@ trait LCNClimateCoolingCommission
             } elseif ($phase === 'lock_wait') {
                 if ($this->CoolingCommissionFreshRead($p, true)) {
                     $p['lockConfirmed'] = true;
-                    $this->CoolingCommissionPhase($p,'release',
-                        'Regler GESPERRT bestaetigt; sofort freigeben.');
+                    $relayTest = (string) ($p['kind'] ?? 'regulator') === 'relay';
+                    $this->CoolingCommissionPhase($p,
+                        $relayTest ? 'relay_on' : 'release',
+                        $relayTest ? 'S1 GESPERRT bestaetigt; Relais EIN pruefen.'
+                            : 'Regler GESPERRT bestaetigt; sofort freigeben.');
                 } elseif (time() - (int) ($p['lockAt'] ?? 0) >= 20) {
                     $this->CoolingCommissionPhase($p,'release',
                         'Sperre nicht bestaetigt; Freigabe hat Vorrang.');
                 } else {
                     $this->CoolingCommissionRead($p);
                 }
+            } elseif ($phase === 'relay_on') {
+                // On restart never repeat ON; perform OFF as the only
+                // permitted recovery. Only after a confirmed S1 lock.
+                $this->CoolingCommissionPhase($p,'relay_off',
+                    'Relais EIN gestartet: Rueckweg RELAIS AUS gesichert.');
+                $p['relayOnAt'] = time();
+                $this->CoolingCommissionSave($p);
+                $ok = (bool) $p['lockConfirmed']
+                    && $this->DirectCoolingRegulatorUnlocked($map) === false
+                    && $this->DirectCoolingRelaySet($map, true);
+                $p['relayOnAck'] = $ok;
+                $this->CoolingCommissionPhase($p, $ok ? 'relay_on_wait' : 'relay_off',
+                    $ok ? 'Relais EIN angefordert, LCN-Rueckmeldung ausstehend.'
+                        : 'Relais EIN nicht angenommen: sofort Relais AUS.');
+            } elseif ($phase === 'relay_on_wait') {
+                if ($this->CoolingCommissionRelayFreshRead($p, true)) {
+                    $p['relayOnConfirmed'] = true;
+                    $this->CoolingCommissionPhase($p,'relay_off',
+                        'Relais EIN bestaetigt, jetzt zwingend AUS.');
+                } elseif (time() - (int) ($p['relayOnAt'] ?? 0) >= 16) {
+                    $this->CoolingCommissionPhase($p,'relay_off',
+                        'Relais EIN nicht bestaetigt, AUS wird trotzdem angefordert.');
+                } else {
+                    $this->CoolingCommissionRelayRead($p);
+                }
+            } elseif ($phase === 'relay_off') {
+                $p['relayOffTries'] = (int) ($p['relayOffTries'] ?? 0) + 1;
+                $p['relayOffAt'] = time();
+                $p['relayReadAt'] = 0;
+                $p['relayReadAck'] = false;
+                $this->CoolingCommissionPhase($p,'relay_off_wait',
+                    'Relais AUS angefordert, Rueckmeldung ausstehend.');
+                $this->CoolingCommissionSave($p);
+                $p['relayOffAck'] = $this->DirectCoolingRelaySet($map, false);
+            } elseif ($phase === 'relay_off_wait') {
+                if ($this->CoolingCommissionRelayFreshRead($p, false)) {
+                    $p['relayOffConfirmed'] = true;
+                    $this->CoolingCommissionPhase($p,'release',
+                        'Ventilrelais AUS bestaetigt. Jetzt S1 freigeben.');
+                } elseif (time() - (int) ($p['relayOffAt'] ?? 0) >= 14) {
+                    if ((int) ($p['relayOffTries'] ?? 0) < 3) {
+                        $this->CoolingCommissionPhase($p,'relay_off',
+                            'Relais AUS nicht bestaetigt, erneut AUS senden.');
+                    } else {
+                        $this->CoolingCommissionPhase($p,'manual_relay_off',
+                            'ALARM: Ventilrelais AUS nicht bestaetigt! LCN-PRO/Relaishardware pruefen.');
+                    }
+                } else {
+                    $this->CoolingCommissionRelayRead($p);
+                }
             } elseif ($phase === 'release') {
+                if ((string) ($p['kind'] ?? '') === 'relay'
+                    && !(bool) ($p['relayOffConfirmed'] ?? false)) {
+                    $this->CoolingCommissionPhase($p,'relay_off',
+                        'Sicherheitsreihenfolge: erst Ventil AUS, dann S1 freigeben.');
+                    $this->CoolingCommissionSave($p);
+                    return;
+                }
                 $p['releaseTries'] = (int) ($p['releaseTries'] ?? 0) + 1;
                 $p['releaseAt'] = time();
                 $this->CoolingCommissionPhase($p,'release_wait',
@@ -296,15 +398,33 @@ trait LCNClimateCoolingCommission
                     && $this->ReadTarget($target) !== null;
                 if ($readOK && $targetFresh) {
                     $this->DirectCoolingSetLockState($target, '');
-                    if ($p['lockAck'] && $p['lockConfirmed'] && $p['releaseAck']) {
-                        $verified = $this->ReadJsonAttribute('CoolingCommissionVerified');
-                        $verified[(string) $target] = [
-                            'sender'=>$sender, 'lockID'=>(int) $p['lockID'],
-                            'path'=>'RequestAction','at'=>time()
-                        ];
-                        $this->WriteJsonAttribute('CoolingCommissionVerified', $verified);
+                    if ($p['lockAck'] && $p['lockConfirmed'] && $p['releaseAck']
+                        && ((string) ($p['kind'] ?? '') !== 'relay'
+                            || ((bool) ($p['relayOnAck'] ?? false)
+                                && (bool) ($p['relayOnConfirmed'] ?? false)
+                                && (bool) ($p['relayOffAck'] ?? false)
+                                && (bool) ($p['relayOffConfirmed'] ?? false)))) {
+                        if ((string) ($p['kind'] ?? '') === 'relay') {
+                            $verified = $this->ReadJsonAttribute('CoolingCommissionRelays');
+                            $verified[(string) $target] = [
+                                'relayModule'=>(int) ($map['RelayModule'] ?? 0),
+                                'unit'=>(int) ($map['RelayUnit'] ?? 0),
+                                'channel'=>(int) ($map['RelayChannel'] ?? 0),
+                                'at'=>time()
+                            ];
+                            $this->WriteJsonAttribute('CoolingCommissionRelays', $verified);
+                        } else {
+                            $verified = $this->ReadJsonAttribute('CoolingCommissionVerified');
+                            $verified[(string) $target] = [
+                                'sender'=>$sender, 'lockID'=>(int) $p['lockID'],
+                                'path'=>'RequestAction','at'=>time()
+                            ];
+                            $this->WriteJsonAttribute('CoolingCommissionVerified', $verified);
+                        }
                         $this->CoolingCommissionPhase($p,'passed',
-                            'BESTANDEN: GESPERRT und FREI mit LCN-Rueckmeldung bestaetigt. Keine Relaisbefehle.');
+                            (string) ($p['kind'] ?? '') === 'relay'
+                                ? 'BESTANDEN: S1 gesperrt, Relais EIN/AUS bestaetigt, S1 FREI.'
+                                : 'BESTANDEN: S1 GESPERRT und FREI bestaetigt. Keine Relaisbefehle.');
                     } else {
                         $this->CoolingCommissionPhase($p,'failed_safe',
                             'S1 ist FREI, aber Sperr-/Freigabetest NICHT bestanden.');
@@ -325,8 +445,10 @@ trait LCNClimateCoolingCommission
             $this->UpdateChatGPTDiagnostic();
         } catch (Throwable $e) {
             $p = $this->CoolingCommissionSession();
-            if ((string) ($p['phase'] ?? '') !== 'manual_release') {
-                $this->CoolingCommissionPhase($p,'release',
+            if (!in_array((string) ($p['phase'] ?? ''),
+                ['manual_release','manual_relay_off'], true)) {
+                $this->CoolingCommissionPhase($p,
+                    (string) ($p['kind'] ?? '') === 'relay' ? 'relay_off' : 'release',
                     'Interner Fehler; Freigabe erneut versuchen: ' . $e->getMessage());
                 $this->CoolingCommissionSave($p);
             }
@@ -343,12 +465,18 @@ trait LCNClimateCoolingCommission
         try {
             $p = $this->CoolingCommissionSession();
             if (!in_array((string) ($p['phase'] ?? ''),
-                ['lock','lock_wait','release','release_wait','manual_release'], true)) {
+                ['lock','lock_wait','relay_on','relay_on_wait','relay_off',
+                 'relay_off_wait','release','release_wait',
+                 'manual_release','manual_relay_off'], true)) {
                 return 'Keine offene Regler-Testsperre vorhanden; kein Befehl.';
             }
-            $this->CoolingCommissionPhase($p,'release',
-                'Manueller erneuter S1-Freigabeversuch eingeplant.');
+            $relayNeedsOff = (string) ($p['kind'] ?? '') === 'relay'
+                && !(bool) ($p['relayOffConfirmed'] ?? false);
+            $this->CoolingCommissionPhase($p, $relayNeedsOff ? 'relay_off' : 'release',
+                $relayNeedsOff ? 'Not-AUS Ventil vor Reglerfreigabe.'
+                    : 'Manueller erneuter S1-Freigabeversuch eingeplant.');
             $p['releaseTries'] = 0;
+            $p['relayOffTries'] = 0;
             $this->CoolingCommissionSave($p);
             return 'Freigabe eingeplant. Anschliessend Teststatus pruefen.';
         } finally {
