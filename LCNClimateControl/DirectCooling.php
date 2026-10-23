@@ -438,7 +438,10 @@ trait LCNDirectCooling
                 $this->DirectCoolingSaveLockMapping($target, $m);
                 $this->DirectCoolingSetLockState($target, 'uncertain');
                 if (!$this->DirectCoolingControllerCommand($job, $m, true)) {
-                    $this->FailCurrentJob($job, 'Reglersperre nicht gesendet; Ventil unveraendert.');
+                    // FALSE is not proof that no command reached LCN.
+                    // Always close the valve and try to release S1.
+                    $this->BeginDirectCoolingRecovery($job,
+                        'S1-Sperrbefehl nicht angenommen, sichere Rueckkehr');
                     return;
                 }
                 $job['Phase'] = 'lock_wait';
@@ -454,8 +457,14 @@ trait LCNDirectCooling
                     $this->DirectCoolingWait($job, 'relay', 'Reglersperre', false, false, $unlockID);
                     return;
                 }
+                if ($this->NowMs() - (int) ($job['SentAtMs'] ?? 0)
+                    > $this->DirectCoolingTimeoutMs()) {
+                    $this->BeginDirectCoolingRecovery($job,
+                        'S1-Sperre nicht bestaetigt, Ventil AUS und S1-Freigabe');
+                    return;
+                }
                 $job = $this->DirectCoolingRequestFreshLock($job);
-                $this->DirectCoolingWait($job, 'relay', 'Reglersperre', true, false, $unlockID);
+                $this->YieldCurrentJob($job);
                 return;
             }
             if ($phase === 'relay') {
@@ -464,7 +473,8 @@ trait LCNDirectCooling
                     return;
                 }
                 if (!$this->DirectCoolingRelaySet($m, $open)) {
-                    $this->FailCurrentJob($job, 'Relaisbefehl fehlgeschlagen.');
+                    $this->BeginDirectCoolingRecovery($job,
+                        'Relaisbefehl unbestaetigt, Rueckweg Ventil AUS');
                     return;
                 }
                 $job['Phase'] = 'relay_wait';
@@ -485,6 +495,12 @@ trait LCNDirectCooling
                     $this->RefreshRuntimeStatus();
                     $this->PushVisualizationRowByTarget($target);
                     $this->PushVisualizationMeta();
+                    return;
+                }
+                if ($this->NowMs() - (int) ($job['SentAtMs'] ?? 0)
+                    > $this->DirectCoolingTimeoutMs()) {
+                    $this->BeginDirectCoolingRecovery($job,
+                        'Relaisrueckmeldung fehlt, Rueckweg Ventil AUS');
                     return;
                 }
                 $this->DirectCoolingWait($job, 'relay_wait', 'Relaiszustand', $electric, $want, $statusID);
