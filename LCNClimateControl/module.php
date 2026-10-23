@@ -526,6 +526,10 @@ class LCNClimateControl extends IPSModuleStrict
 
     public function Abort(): void
     {
+        if ($this->CoolingCommissionActive()) {
+            $this->CoolingCommissionEmergencyRelease();
+            return;
+        }
         if ($this->M11ProbeActive()) {
             $this->M11ProbeEmergencyRelease();
             return;
@@ -706,6 +710,12 @@ class LCNClimateControl extends IPSModuleStrict
 
     private function RequestHeatingTarget(array $Room, float $Value): void
     {
+        if ($this->DirectCoolingLockState((int) $Room['TargetVariable']) !== '') {
+            throw new RuntimeException(
+                'Raumregler ist noch gesperrt oder Rueckmeldung unklar. '
+                . 'Vor neuer Sollwertfahrt S1-Freigabe pruefen.'
+            );
+        }
         if ($this->GetMode() !== self::MODE_HEATING) {
             throw new RuntimeException('Solltemperatur ist nur im Heizbetrieb bedienbar.');
         }
