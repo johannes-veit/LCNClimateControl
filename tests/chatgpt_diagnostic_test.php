@@ -36,6 +36,13 @@ class DiagnosticProbe {
         return $name==='DirectCoolingLocks'?$this->locks:[];
     }
     private function DirectCoolingFallbacks():array{if($this->throwOnFallback){throw new RuntimeException('Demo-Diagnosefehler');}return ['200'=>['kind'=>'legacy','reason'=>'Sperrfeedback zu alt']];}
+    private function M11ProbeSession():array{return [];}
+    private function CoolingCommissionVerified(array $room):bool{return false;}
+    private function CoolingCommissionRelayRoomVerified(array $room):bool{return false;}
+    private function CoolingCommissionReadinessErrors():array{return ['Hardwarepruefung ausstehend'];}
+    private function DirectCoolingLockActionID(array $room,array $mapping):int {
+        return (int) $room['TargetVariable'] === 100 ? 101 : 0;
+    }
     private function GetCurrentJob():?array{return null;}
     private function GetQueue():array{return [];}
     private function IsBusy():bool{return $this->busy;}
