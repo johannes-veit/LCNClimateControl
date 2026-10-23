@@ -48,7 +48,13 @@ trait LCNClimateNativeInterfaceAudit
             return '  ' . $ident . ': Value-Instanz fehlt.';
         }
         try {
-            $id = (int) @IPS_GetObjectIDByIdent($ident, $parent);
+            try {
+                $id = (int) @IPS_GetObjectIDByIdent($ident, $parent);
+            } catch (Throwable) {
+                // IP-Symcon can throw instead of returning zero when an
+                // optional R1TargetLock ident does not exist.
+                return '  ' . $ident . ': NICHT VORHANDEN';
+            }
             if ($id <= 0 || !IPS_VariableExists($id)) {
                 return '  ' . $ident . ': NICHT VORHANDEN';
             }
