@@ -353,7 +353,9 @@ let lastActionKey = '';
 let lastActionTime = 0;
 
 const ACTION_GUARD_MS = 180;
-const ACTION_TIMEOUT_MS = 6000;
+// A queued LCN room change is not a 6-second network roundtrip.
+// This timeout applies to the UI confirmation only, NEVER the hardware job.
+const ACTION_TIMEOUT_MS = 30000;
 const QUEUE_DELAY_MS = 45;
 
 function normalizeState(input) {
@@ -572,6 +574,26 @@ function showWarning(message) {
     }, 5000);
 }
 
+// A broken app connection does not prove that Symcon rejected an action.
+// Drop all unsent commands, never resend a possibly accepted command,
+// and retain the authoritative server values on subsequent updates.
+function stopQueuedActions() {
+    if (queueTimer) {
+        window.clearTimeout(queueTimer);
+        queueTimer = 0;
+    }
+    const abandoned = actionQueue;
+    actionQueue = [];
+    abandoned.forEach(item => rollbackOptimisticAction(item));
+}
+
+function rejectUnconfirmedAction(action, reason) {
+    stopQueuedActions();
+    rollbackOptimisticAction(action);
+    clearActionInFlight(false);
+    showWarning(reason);
+}
+
 function dispatchAction(action) {
     const now = Date.now();
     const key = actionKey(action.ident, action.value);
@@ -590,10 +612,9 @@ function dispatchAction(action) {
     if (actionTimeout) window.clearTimeout(actionTimeout);
     actionTimeout = window.setTimeout(() => {
         if (!actionInFlight || generation !== actionGeneration) return;
-        const failed = actionInFlight;
-        rollbackOptimisticAction(failed);
-        clearActionInFlight(true);
-        showWarning('Keine Rückmeldung von Symcon. Der lokale Anzeigewert wurde zurückgesetzt.');
+        rejectUnconfirmedAction(actionInFlight,
+            'Keine Statusbestätigung von Symcon. Bitte tatsächlichen Wert prüfen. ' +
+            'Kein Befehl wurde automatisch wiederholt.');
     }, ACTION_TIMEOUT_MS);
 
     try {
@@ -601,17 +622,15 @@ function dispatchAction(action) {
         if (result && typeof result.then === 'function') {
             result.catch(error => {
                 if (!actionInFlight || generation !== actionGeneration) return;
-                const failed = actionInFlight;
-                rollbackOptimisticAction(failed);
-                clearActionInFlight(true);
-                showWarning('Symcon-Kommunikation fehlgeschlagen: ' + String(error?.message || error));
+                rejectUnconfirmedAction(actionInFlight,
+                    'Symcon-Verbindung unterbrochen. Gerätestatus prüfen; ' +
+                    'weitere Befehle wurden nicht automatisch gesendet.');
             });
         }
     } catch (error) {
-        const failed = actionInFlight;
-        rollbackOptimisticAction(failed);
-        clearActionInFlight(true);
-        showWarning('Symcon-Kommunikation fehlgeschlagen: ' + String(error?.message || error));
+        rejectUnconfirmedAction(actionInFlight,
+            'Symcon-Verbindung unterbrochen. Gerätestatus prüfen; ' +
+            'weitere Befehle wurden nicht automatisch gesendet.');
     }
 }
 
@@ -1120,10 +1139,7 @@ function handleMessage(data) {
     // Fehlkonfiguration sofort anzeigen und optimistische Aktion zurückrollen.
     if (actionInFlight && (message.type === 'state' || message.type === 'meta') &&
         typeof message.error === 'string' && message.error.startsWith('Konfiguration fehlerhaft')) {
-        const rejected = actionInFlight;
-        rollbackOptimisticAction(rejected);
-        clearActionInFlight(true);
-        showWarning(message.error);
+        rejectUnconfirmedAction(actionInFlight, message.error);
         return;
     }
 
