@@ -463,6 +463,10 @@ function isActionAcknowledged(message, action) {
     const row = message.type === 'row' ? message.row : null;
 
     if (row && String(row.targetId) === targetId) {
+        // A real backend busy marker confirms the command entered the
+        // worker/queue. The room itself stays disabled until busy=false.
+        // Do not wait for a potentially long-running physical LCN step.
+        if (row.busy === true) return true;
         if (action.kind === 'heat') {
             return Math.abs(Number(row.displayTarget) - Number(action.value)) < 0.25;
         }
@@ -474,6 +478,7 @@ function isActionAcknowledged(message, action) {
     if (message.type === 'state') {
         const stateRow = (message.rows || []).find(item => String(item.targetId) === targetId);
         if (!stateRow) return false;
+        if (stateRow.busy === true) return true;
         if (action.kind === 'heat') {
             return Math.abs(Number(stateRow.displayTarget) - Number(action.value)) < 0.25;
         }
