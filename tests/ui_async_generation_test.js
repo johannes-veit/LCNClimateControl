@@ -38,7 +38,10 @@ assert.equal(ctx.rollbacks.length,1,'current failure rollback missing');
 const s2={actionInFlight:{ident:'Mode',value:1},rolled:0,cleared:0,warned:0,
  parseMessage:x=>x,applyMessage:()=>{},isActionAcknowledged:()=>false,
  rollbackOptimisticAction:()=>s2.rolled++,clearActionInFlight:()=>{s2.cleared++;s2.actionInFlight=null;},
- showWarning:()=>s2.warned++};
+ showWarning:()=>s2.warned++,
+ rejectUnconfirmedAction:()=>{
+   s2.rolled++;s2.cleared++;s2.actionInFlight=null;s2.warned++;
+ }};
 vm.createContext(s2);
 vm.runInContext(extract('handleMessage','END'),s2);
 s2.handleMessage({type:'meta',error:'Konfiguration fehlerhaft: EG Bad'});
