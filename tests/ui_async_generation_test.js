@@ -16,6 +16,10 @@ const ctx={
   actionKey:(id,value)=>id+value,
   scheduleQueuedAction:()=>{},rollbackOptimisticAction:(action)=>ctx.rollbacks.push(action.ident),
   rollbacks:[],showWarning:()=>{},
+  rejectUnconfirmedAction:(action,why)=>{
+    ctx.rollbacks.push(action.ident);
+    ctx.clearActionInFlight(false);
+  },
   clearActionInFlight:()=>{ctx.actionGeneration++;ctx.actionInFlight=null;},
 };
 vm.createContext(ctx);
@@ -109,3 +113,52 @@ assert(html.includes('.room-row.switching .slider-wrap'),
 assert(html.includes("else patchUI();"),
  'a backend meta event must update all pending mode locks');
 console.log('PASS: rooms are greyed/blocked only during live or locally queued operations and unlock immediately');
+
+const recoveryCtx={
+  queueTimer:42, actionQueue:[
+    {ident:'Heat_701',targetId:701,previousValue:20},
+    {ident:'Heat_49519',targetId:49519,previousValue:19}
+  ], actionInFlight:{ident:'Heat_34041',targetId:34041},
+  clearedTimers:[],rolledBack:[],queuedDispatches:0,warnings:[],
+  window:{clearTimeout(id){recoveryCtx.clearedTimers.push(id);}},
+  rollbackOptimisticAction(a){recoveryCtx.rolledBack.push(a.ident);},
+  clearActionInFlight(dispatch){assert.equal(dispatch,false,
+      'lost-connection handling must NOT dispatch queued actions');
+    recoveryCtx.actionInFlight=null;
+  },
+  showWarning(v){recoveryCtx.warnings.push(v);}
+};
+vm.createContext(recoveryCtx);
+vm.runInContext(extract('stopQueuedActions','dispatchAction'),recoveryCtx);
+recoveryCtx.rejectUnconfirmedAction(recoveryCtx.actionInFlight,'connection lost');
+assert.deepEqual(recoveryCtx.rolledBack,['Heat_701','Heat_49519','Heat_34041'],
+ 'no queued optimistic action should remain after disconnected request');
+assert.equal(recoveryCtx.actionQueue.length,0,'outstanding commands must be discarded');
+assert.equal(recoveryCtx.queueTimer,0,'no future queued dispatch may fire');
+assert.deepEqual(recoveryCtx.clearedTimers,[42],'queued timer must be cancelled');
+assert.equal(recoveryCtx.actionInFlight,null,'stale in-flight command must clear');
+assert.equal(recoveryCtx.warnings.length,1,'exactly one local warning per interruption');
+const acceptedCtx={};
+vm.createContext(acceptedCtx);
+vm.runInContext(extract('isActionAcknowledged','clearActionInFlight'),acceptedCtx);
+assert.equal(acceptedCtx.isActionAcknowledged(
+  {type:'row',row:{targetId:49519,busy:true,displayTarget:19}},
+  {ident:'Heat_49519',targetId:49519,kind:'heat',value:16}),true,
+  'worker busy already proves Symcon accepted the queued heating command');
+assert.equal(acceptedCtx.isActionAcknowledged(
+  {type:'row',row:{targetId:34041,busy:true,cooling:false}},
+  {ident:'Cool_34041',targetId:34041,kind:'cool',value:true}),true,
+  'cooling relay job acceptance must not wait for final relay switching');
+assert.equal(acceptedCtx.isActionAcknowledged(
+  {type:'row',row:{targetId:49519,busy:true,displayTarget:19}},
+  {ident:'Heat_34041',targetId:34041,kind:'heat',value:16}),false,
+  'different room must never acknowledge this command');
+assert.equal(acceptedCtx.isActionAcknowledged(
+  {type:'row',row:{targetId:49519,busy:false,displayTarget:19}},
+  {ident:'Heat_49519',targetId:49519,kind:'heat',value:16}),false,
+  'idle wrong target does not prove action acceptance');
+assert(/const ACTION_TIMEOUT_MS = 30000;/.test(html),
+ 'unrealistically short six-second action timeout must remain removed');
+assert(html.includes('rejectUnconfirmedAction(actionInFlight,'),
+ 'transport exceptions should abort queued actions without retries');
+console.log('PASS: async busy acknowledgement and interrupted transport fail safely without duplicate commands');
