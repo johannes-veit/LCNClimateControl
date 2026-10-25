@@ -44,7 +44,7 @@ check_learning(abs((float) ($after['mean'] ?? 0) - 0.18) < 0.01, 'afterheat star
 // The next stable off-window learns natural cooling, but not active floor cooling.
 $s = record_at($s, $start + 29 * 300, 20.44, false);
 for ($i = 30; $i <= 41; $i++) {
-    $s = record_at($s, $start + $i * 300, 20.44 - 0.1 * (($i - 29) / 12), false);
+    $s = record_at($s, $start + $i * 300, 20.44 - 0.22 * (($i - 29) / 12), false);
 }
 check_learning((int) ($s['rates']['passive_cooling']['all']['n'] ?? 0) >= 1,
     'natural cooling estimated from stable valve-off episode');
