@@ -316,6 +316,32 @@
     {
       "type": "Label",
       "caption": "Heizen: A7/A8 und S1Target unveraendert. Kuehlen: nach Regler-/Relaisabnahme ausschliesslich S1TargetLock via RequestAction, dann bestaetigtes Einzelrelais, vor Heizbetrieb erst Relais AUS und Regler FREI."
+    },
+    {
+      "type": "ExpansionPanel",
+      "caption": "SMART-FBH – eigenständiges passives Lernen (optional)",
+      "expanded": false,
+      "items": [
+        {
+          "type": "CheckBox",
+          "name": "ThermalLearningEnabled",
+          "caption": "Passives Lernprogramm aktivieren (keine LCN-Befehle)"
+        },
+        {
+          "type": "NumberSpinner",
+          "name": "ThermalWeatherCenterInstance",
+          "caption": "Vorhandene WetterZentrale (0 = ohne Wetter)",
+          "minimum": 0
+        },
+        {
+          "type": "Label",
+          "caption": "Beobachtet alle 5 Minuten nur gültige Ist-/Solltemperaturen und native Ventil-Rückmeldungen. Fehlende oder alte Werte werden verworfen. Lernstand getrennt von der Regelung gespeichert; kein Einfluss auf HEIZEN/KUEHLEN."
+        },
+        {
+          "type": "Label",
+          "caption": "Nach Aktivierung Übernehmen drücken. Anschließend unten den Lernstatus (nur lesen) anzeigen. Erste belastbare Trends entstehen erst über mehrere vollständige Heiz-/Abkühlzyklen."
+        }
+      ]
     }
   ],
   "actions": [
@@ -368,6 +394,11 @@
       "type": "Button",
       "caption": "NOT-AUS/FREIGABE: aktives Testventil AUS, dann S1 FREIGEBEN",
       "onClick": "echo LCNC_CoolingCommissionEmergencyRelease($id);"
+    },
+    {
+      "type": "Button",
+      "caption": "SMART-FBH: Passiven Lernstatus anzeigen (nur lesen)",
+      "onClick": "echo LCNC_ThermalLearningReport($id);"
     }
   ],
   "status": [
