@@ -21,6 +21,8 @@ jobs:
       - name: PHP syntax checks
         run: |
           find LCNClimateControl tests -name '*.php' -print0 | xargs -0 -n1 php -l
+      - name: SMART-FBH passive learning simulation
+        run: php tests/test_thermal_learning.php
       - name: Lock recovery simulation
         run: php tests/test_lock_recovery.php
       - name: M11 isolated lock and release simulation
