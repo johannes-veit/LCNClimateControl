@@ -9,6 +9,7 @@ require_once __DIR__ . '/M11LockTest.php';
 require_once __DIR__ . '/NativeInterfaceAudit.php';
 require_once __DIR__ . '/TrafficPacing.php';
 require_once __DIR__ . '/CoolingCommission.php';
+require_once __DIR__ . '/ThermalLearning.php';
 
 /**
  * LCN Heizung / Kühlung für IP-Symcon 9
@@ -34,6 +35,7 @@ class LCNClimateControl extends IPSModuleStrict
     use LCNClimateNativeInterfaceAudit;
     use LCNClimateTrafficPacing;
     use LCNClimateCoolingCommission;
+    use LCNClimateThermalLearning;
 
     private const STATUS_ACTIVE = 102;
     private const STATUS_INACTIVE = 104;
@@ -88,6 +90,9 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterPropertyInteger('StepWaitMs', 900);
         $this->RegisterPropertyInteger('MaxSteps', 25);
         $this->RegisterPropertyInteger('NoChangeConfirmations', 2);
+        // Eigenständiger, passiver Lern-Timer: Opt-in, keine Steuerungseingriffe.
+        $this->RegisterPropertyBoolean('ThermalLearningEnabled', false);
+        $this->RegisterPropertyInteger('ThermalWeatherCenterInstance', 40477);
 
         // OperatingMode dient nur der verlustfreien Migration aus der fehlerhaften
         // 0.2.0-Vorschau, in der die sichtbare Betriebsart-Variable entfernt wurde.
@@ -106,12 +111,14 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterAttributeString('CoolingCommissionSession', '{}');
         $this->RegisterAttributeString('CoolingCommissionVerified', '{}');
         $this->RegisterAttributeString('CoolingCommissionRelays', '{}');
+        $this->RegisterAttributeString('ThermalLearningState', '{}');
 
         $this->RegisterTimer('Worker', 0, 'LCNC_Worker($_IPS[\'TARGET\']);');
         $this->RegisterTimer('DirectCoolingGuard', 0, 'LCNC_DirectCoolingWatchdog($_IPS[\'TARGET\']);');
         $this->RegisterTimer('ChatGPTDiagnosticTimer', 0, 'LCNC_UpdateChatGPTDiagnostic($_IPS[\'TARGET\']);');
         $this->RegisterTimer('M11ProbeTimer', 0, 'LCNC_M11ProbeWorker($_IPS[\'TARGET\']);');
         $this->RegisterTimer('CoolingCommissionTimer', 0, 'LCNC_CoolingCommissionWorker($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('ThermalLearningTimer', 0, 'LCNC_ThermalLearningTick($_IPS[\'TARGET\']);');
 
         $this->EnsureProfiles();
 
@@ -163,6 +170,8 @@ class LCNClimateControl extends IPSModuleStrict
         $this->SetTimerInterval('Worker', 0);
         $this->SetTimerInterval('DirectCoolingGuard', $this->UsesDirectCooling() ? 15000 : 0);
         $this->SetTimerInterval('ChatGPTDiagnosticTimer', 60000);
+        $this->SetTimerInterval('ThermalLearningTimer',
+            $this->ReadPropertyBoolean('ThermalLearningEnabled') ? 5 * 60 * 1000 : 0);
         // Persistent test is not discarded on ApplyChanges / kernel restart.
         // If interrupted, RE-ISSUE RELEASE; NEVER re-issue LOCK.
         if ($this->M11ProbeActive()) {
