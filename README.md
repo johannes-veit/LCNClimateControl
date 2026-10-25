@@ -1,5 +1,17 @@
 # LCN Climate Control – IP-Symcon 9
 
+**Stand: v0.5.4 Build 54 – optionale passive SMART-FBH-Lernphase, bestehende HEIZ-/KÜHL-Regelung unverändert.**
+
+## 0.5.4 Build 54 – SMART-FBH lernt nur lesend
+
+- Neues, separat getaktetes PHP-Lernmodell. **Standardmäßig AUS**, ausdrücklich in der Modulkonfiguration aktivieren.
+- Alle fünf Minuten werden nur frische Isttemperaturen, echte S1-Sollwerte und frische Relais-Statusvariablen gelesen; die bestehenden nativen Relaiszuordnungen werden ausschließlich lesend genutzt.
+- Vorhandene **WetterZentrale #40477** wird über `JVWC_Snapshot` abgefragt, ohne HTTP-Abruf, Änderungen am Lüftungsmodul oder eigene neue Wettervariablen.
+- Pro Raum werden beobachtete Heiz-/Auskühlraten und Nachlaufwerte als begrenzte persistente Statistik gespeichert. Ungültige, fehlende oder zeitlich unterbrochene Daten werden nicht als Beweise verbucht. Bis mindestens drei gültige Lernfenster vorliegen, erscheint kein quantitativer Wert im Lernbericht.
+- Keine neue Variable, keine Änderung an bestehenden Kacheln, Heiz-Sollwerten, A7/A8, LCN-Sperren, Relais-Befehlen, Kühlfreigabe oder bestehenden Instanzzuständen. Die Lernfunktion kann jederzeit wieder ausgeschaltet werden; gesammelte Statistik bleibt vorhanden.
+- Lernbericht in der Modulkonfiguration über **„SMART-FBH: Passiven Lernstatus anzeigen (nur lesen)“**.
+- Bisherige Raumtemperaturen bei zuvor manuell geöffneten Ventilen / falscher OG-Verdrahtung werden nicht rückwirkend übernommen. Wetter- und Temperaturtrends können durch offene Türen, Sonne und unbekannte Vorlauftemperatur verfälscht sein: **noch keine automatische Heizstrategie oder Vorlaufempfehlung**.
+
 **Stand: v0.4.1 Build 41 – Kuehlsoftware abgesichert, Inbetriebnahme noch offen; KUEHLEN bis zur realen Abnahme gesperrt.**
 
 
