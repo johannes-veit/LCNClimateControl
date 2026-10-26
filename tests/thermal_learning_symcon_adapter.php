@@ -93,7 +93,9 @@ smartAssert(count($state['rooms']) === 11, 'source audit must track all configur
 $readRooms = array_filter($state['rooms'], static function (array $r) use ($now): bool {
     return (int) ($r['last']['time'] ?? 0) === $now;
 });
-smartAssert(count($readRooms) === 5, 'successful room ingestion incomplete');
+smartAssert(count($readRooms) === 0, 'thermal learning must wait for source qualification');
+smartAssert(($state['last_eligible'] ?? -1) === 0,
+    'fresh source IDs must not immediately start thermal learning');
 smartAssert(count(array_filter($state['rooms'], static function (array $r): bool {
     return (int) ($r['source_audit']['checks'] ?? 0) === 1;
 })) === 11, 'source audit must store one bounded status per configured room');
@@ -105,6 +107,23 @@ smartAssert(str_contains($h->ThermalLearningDiagnosticReport(),
     'Im letzten Lernlauf ausgeschlossen:'), 'diagnostic lacks exclusions');
 smartAssert(str_contains($h->ThermalLearningDiagnosticReport(),
     'Datenquellen jetzt verwertbar: 5'), 'diagnostic overreports invalid relay as ready');
+
+// Simulated sixth completed source check: previously audited, qualified
+// room may now begin a read-only baseline with a NEW measurement window.
+$qualified = json_decode($h->ReadAttributeString('ThermalLearningState'),
+    true, 512, JSON_THROW_ON_ERROR);
+$qualified['rooms']['1008']['source_audit'] = [
+    'checks'=>6, 'recent_ok'=>1.0, 'ok_streak'=>6, 'bad_streak'=>0,
+    'last_reason'=>'OK', 'last_checked_at'=>$now-1800
+];
+$h->attrs['ThermalLearningState'] = json_encode($qualified, JSON_THROW_ON_ERROR);
+$h->ThermalLearningTick();
+$started = json_decode($h->ReadAttributeString('ThermalLearningState'),
+    true, 512, JSON_THROW_ON_ERROR);
+smartAssert(($started['last_eligible'] ?? 0) === 1,
+    'qualified source should become eligible for learning');
+smartAssert(isset($started['rooms']['1008']['last']),
+    'qualified source should begin a fresh thermal observation');
 
 // A sensor remap on the same S1 key must invalidate learned thermal
 // rates rather than silently attaching old-room behaviour to the new source.
@@ -187,7 +206,8 @@ $h->ThermalLearningTick();
 $fresh = json_decode($h->ReadAttributeString('ThermalLearningState'), true,
     512, JSON_THROW_ON_ERROR);
 smartAssert(($fresh['schema'] ?? 0) === 1 &&
-    ($fresh['last_processed'] ?? -1) === 5,
+    ($fresh['last_processed'] ?? -1) === 5 &&
+    ($fresh['last_eligible'] ?? -1) === 0,
     'new installation must still initialize correctly');
 
 echo 'SMART-FBH read-only 11-room Symcon adapter integration passed' . PHP_EOL;
