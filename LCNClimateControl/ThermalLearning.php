@@ -12,7 +12,11 @@ final class LCNThermalLearningModel
     {
         $n = min(10000, max(0, (int) ($entry['n'] ?? 0)) + 1);
         $old = isset($entry['mean']) ? (float) $entry['mean'] : $value;
-        return ['n' => $n, 'mean' => round($n === 1 ? $value : (0.85 * $old + 0.15 * $value), 4)];
+        $next = $n === 1 ? $value : (0.85 * $old + 0.15 * $value);
+        // Fixed-size dispersion estimate; no accumulated samples or history.
+        $oldVar = max(0.0, (float) ($entry['variance'] ?? 0.0));
+        $variance = $n === 1 ? 0.0 : 0.85 * ($oldVar + 0.15 * ($value - $old) ** 2);
+        return ['n' => $n, 'mean' => round($next, 4), 'variance' => round($variance, 6)];
     }
 
     private static function outdoorBand(?float $outdoor): string
@@ -484,6 +488,18 @@ trait LCNClimateThermalLearning
         $configured = 0;
         $ready = 0;
         $withEvidence = 0;
+        $quality = static function (array $sample): string {
+            $n = (int) ($sample['n'] ?? 0);
+            if ($n < 3) { return 'UNZUREICHEND'; }
+            if ($n < 10) { return 'VORLAEUFIG'; }
+            if (!isset($sample['variance'])) { return 'STREUUNG_UNBEKANNT'; }
+            $mean = abs((float) ($sample['mean'] ?? 0));
+            $sigma = sqrt(max(0.0, (float) $sample['variance']));
+            if ($mean < 0.001 || $sigma > max(0.05, $mean * 0.50)) {
+                return 'STARK_STREUEND';
+            }
+            return 'STABIL_BEOBACHTET';
+        };
         $describeRate = static function (array $sample, string $unit): string {
             $n = (int) ($sample['n'] ?? 0);
             if ($n < 3) {
@@ -588,6 +604,9 @@ trait LCNClimateThermalLearning
                 . ' | Fenster-Resets: ' . (int) ($saved['resets'] ?? 0)
                 . ' | stale Abweisungen: ' . (int) ($saved['rejected_stale'] ?? 0)
                 . ' | erkannte Zwischenschaltungen: ' . (int) ($saved['hidden_switches'] ?? 0);
+            $lines[] = '  Lernqualitaet: Heizen ' . $quality($heat)
+                . ', Auskuehlen ' . $quality($cool)
+                . ', Nachlauf ' . $quality($after);
             $lines[] = '  Innen-Aussen-Differenz: ' . implode(' | ', $gradientDetail);
             $trend = (array) ($saved['weather_trend_rates'] ?? []);
             $loss = (array) ($saved['loss_proxy'] ?? []);
