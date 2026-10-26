@@ -66,6 +66,12 @@ final class LCNThermalLearningModel
      * the same as a refreshed status update; only VariableUpdated proves
      * that this data source was reported again.
      */
+    /** 0 means all rooms; nonzero restricts thermal samples to a single S1 room. */
+    public static function isReferenceRoom(int $targetID, int $referenceID): bool
+    {
+        return $targetID > 0 && ($referenceID === 0 || $referenceID === $targetID);
+    }
+
     public static function sourceReason(int $now, int $tempUpdated, int $relayUpdated): string
     {
         if ($tempUpdated <= 0 || $tempUpdated > $now
@@ -599,6 +605,7 @@ trait LCNClimateThermalLearning
             }
             $processed = 0;
             $eligible = 0;
+            $referenceID = $this->ReadPropertyInteger('ThermalReferenceRoomTarget');
             $changes = [];
             $exclusions = [];
             foreach ($this->GetRooms() as $room) {
@@ -666,6 +673,14 @@ trait LCNClimateThermalLearning
                 if ($preflightOnly) {
                     // No observe(), no phase, no thermal context, no learning.
                     // The end-of-tick source-audit loop still records quality.
+                    $state['rooms'][$key] = $previous;
+                    ++$processed;
+                    continue;
+                }
+                // Other rooms remain visible to source audits, but may not
+                // contaminate the dedicated EG Bad reference experiment.
+                if (!LCNThermalLearningModel::isReferenceRoom($targetID, $referenceID)) {
+                    unset($previous['last'], $previous['phase'], $previous['afterheat']);
                     $state['rooms'][$key] = $previous;
                     ++$processed;
                     continue;
@@ -756,9 +771,12 @@ trait LCNClimateThermalLearning
         $preflight = $this->ReadPropertyBoolean('ThermalSourcePreflightEnabled');
         $rawState = $this->ReadAttributeString('ThermalLearningState');
         $state = json_decode($rawState, true);
+        $referenceID = $this->ReadPropertyInteger('ThermalReferenceRoomTarget');
         $lines = ['SMART-FBH – passives Lernen: ' . ($enabled ? 'AKTIV' : 'AUS')
             . ' | Datenquellen-Vorpruefung: ' . ($preflight ? 'AKTIV' : 'AUS'),
             'Keine LCN-Befehle, keine Sollwertänderung, keine automatische Optimierung.'];
+        $lines[] = 'Thermisches Lernobjekt: ' . ($referenceID === 0
+            ? 'alle konfigurierten Räume' : 'nur S1-Referenz #' . $referenceID . ' (EG Bad: #21099)');
         if ($rawState !== '{}' && $rawState !== ''
             && (!is_array($state) || ($state['schema'] ?? null) !== 1
                 || !is_array($state['rooms'] ?? null))) {
@@ -823,6 +841,8 @@ trait LCNClimateThermalLearning
             '=== SMART-FBH – LERN-DIAGNOSE AN CHATGPT ===',
             'Erstellt: ' . date('d.m.Y H:i:s', $now),
             'Symcon-Instanz: #' . $this->InstanceID,
+            'Referenz-Lernraum: ' . ($this->ReadPropertyInteger('ThermalReferenceRoomTarget') === 0
+                ? 'ALLE Räume' : 'S1 #' . $this->ReadPropertyInteger('ThermalReferenceRoomTarget') . ' (EG Bad: #21099)'),
             'Lernfunktion: ' . ($enabled ? 'AKTIV' : 'AUS (in der Modulkonfiguration aktivieren)'),
             'Quellen-Vorpruefung: ' . ($preflight ? 'AKTIV' : 'AUS')
                 . ' | 30-Minuten-Takt | NUR LESEN',
