@@ -33,6 +33,34 @@ checkLearning(($s['rates']['heating']['all']['n'] ?? 0) === 0, 'Stale sensor cre
 $s = sample($s, $t + 7200, 20.5, true, $t + 7200);
 checkLearning(($s['rates']['heating']['all']['n'] ?? 0) === 1, 'New sensor evidence was ignored');
 
+// A stale relay reading cannot prove an uninterrupted valve state.
+$s = sample([], $t, 20.0, true);
+$s = LCNThermalLearningModel::observe($s, [
+    'time' => $t + 900, 'temp' => 20.1, 'target' => 22.0,
+    'valve' => true, 'outside' => 8.0,
+    'temp_sample_at' => $t + 900, 'valve_sample_at' => $t,
+]);
+checkLearning(!isset($s['last']) && ($s['rejected_stale'] ?? 0) === 1,
+    'Stale relay did not invalidate the learning window');
+
+// Fresh temperatures with a cached unchanged relay timestamp
+// must not be counted as a full heating period.
+$s = LCNThermalLearningModel::observe([], [
+    'time' => $t, 'temp' => 20.0, 'target' => 22.0,
+    'valve' => true, 'outside' => 8.0,
+    'temp_sample_at' => $t, 'valve_sample_at' => $t,
+]);
+for ($k = 1; $k <= 12; ++$k) {
+    $when = $t + 300 * $k;
+    $s = LCNThermalLearningModel::observe($s, [
+        'time' => $when, 'temp' => 20.0 + 0.025 * $k, 'target' => 22.0,
+        'valve' => true, 'outside' => 8.0,
+        'temp_sample_at' => $when, 'valve_sample_at' => $t,
+    ]);
+}
+checkLearning(($s['rates']['heating']['all']['n'] ?? 0) === 0,
+    'Cached relay state created a heating rate');
+
 // A >30-minute interruption invalidates a continuous learning window.
 $s = sample([], $t, 20.0, true);
 $s = sample($s, $t + 3601, 20.5, true);
