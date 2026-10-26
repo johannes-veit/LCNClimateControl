@@ -1,5 +1,14 @@
 # LCN Climate Control – IP-Symcon 9
 
+## SMART-FBH – Zwei-Stufen-Freigabe fuer echte Datenquellen (Entwicklungszweig)
+
+- **Stufe 1 Datenquellen-Abnahme:** Isttemperatur und nativer Relaisstatus muessen per `VariableUpdated` regelmaessig aktuelle Meldungen liefern. Sechs erfolgreiche Quellenpruefungen in Folge im festen 30-Minuten-Takt und eine geglaettete Verfuegbarkeit von mindestens 80% sind noetig.
+- **Stufe 2 passives thermisches Lernen:** Erst nach bestandener Quellen-Abnahme beginnt ein neues Lernfenster. Der erste gueltige Punkt ist die Baseline; Heiz-/Auskuehlraten entstehen nur aus spaeteren stabilen, gueltigen Temperaturintervallen (mindestens 60 min) und sicher beobachteten Ventilzustaenden.
+- Eine Quellfreigabe wird verworfen, wenn ihr letzter Check mehr als 45 Minuten zurueckliegt; bei einer Pause von mehr als 90 Minuten werden die Quellenzaehler fuer die Abnahme neu begonnen. **Bereits erlernte thermische Kennwerte bleiben erhalten.**
+- Der ChatGPT-Bericht trennt `Aktuelle Datenpaare` von `Thermisches Lernen freigegeben`. Der Modus NICHT HEIZEN setzt beide Zahlen auf Null; Lernfunktion und produktive LCN-Regelung bleiben voneinander isoliert.
+- **48h-Simulation mit 11 Raeumen:** 1056 30-Minuten-Quellchecks; vier regelmaessig aktualisierte Quellen: je 91 freigegebene Checks; vier nur bei Ventilwechsel aktualisierte Relais: 0 Freigaben; drei zeitweise ausgefallene Quellen: je 70 wieder freigegebene Checks nach Erholung. Der Test beweist die Ausschlusslogik, nicht das Verhalten der echten LCN-Schnittstelle.
+- Komplette CI prueft weiterhin den 5-Jahres-Dauerlauf mit 963600 synthetischen Raumbeobachtungen. Keine weiteren Symcon-Variablen, keine Messwerthistorie, keine Stellbefehle, keine Aenderung an `main`.
+
 ## SMART-FBH – reale Datenquellen-Abnahme und Datenerhalt (Entwicklungszweig)
 
 - Pro konfiguriertem Raum zaehlt die Lernfunktion in ihrem bestehenden JSON-Attribut hoechstens alle 25 Minuten einen gueltigen oder blockierten Datenquellen-Check. Keine neuen IP-Symcon-Variablen oder Rohdatenarchive.
