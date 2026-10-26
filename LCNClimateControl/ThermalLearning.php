@@ -257,4 +257,202 @@ trait LCNClimateThermalLearning
             . 'Einfluss von Sonne, offenen Türen und Vorlauftemperatur ist derzeit nicht isolierbar.';
         return implode("\n", $lines);
     }
+
+
+    /**
+     * Copyable, deliberately read-only diagnostic for the separate SMART-FBH learner.
+     * Does not advance learning, send LCN commands, trigger refreshes or modify targets.
+     */
+    public function ThermalLearningDiagnosticReport(): string
+    {
+        $now = time();
+        $enabled = $this->ReadPropertyBoolean('ThermalLearningEnabled');
+        $weatherID = $this->ReadPropertyInteger('ThermalWeatherCenterInstance');
+        $state = json_decode($this->ReadAttributeString('ThermalLearningState'), true);
+        if (!is_array($state)) {
+            $state = [];
+        }
+
+        $lines = [
+            '=== SMART-FBH – LERN-DIAGNOSE AN CHATGPT ===',
+            'Erstellt: ' . date('d.m.Y H:i:s', $now),
+            'Symcon-Instanz: #' . $this->InstanceID,
+            'Lernfunktion: ' . ($enabled ? 'AKTIV' : 'AUS (in der Modulkonfiguration aktivieren)'),
+            'Betriebsart: ' . ($this->GetMode() === 0 ? 'HEIZEN' : 'NICHT HEIZEN – Lernphase pausiert'),
+            'SICHERHEIT: NUR LESEN. Keine A7/A8, keine Relais-/S1-Befehle und keine Sollwertänderung.',
+        ];
+
+        $lastTick = (int) ($state['last_tick_at'] ?? 0);
+        $tickAge = $lastTick > 0 ? max(0, $now - $lastTick) : null;
+        $lines[] = 'Letzter Lernlauf: ' . ($lastTick > 0
+            ? date('d.m.Y H:i:s', $lastTick) . ' (' . $tickAge . ' s alt)'
+            : 'NOCH KEIN LERNLAUF');
+        $lines[] = 'Lernlauf zuletzt erfasste Räume: ' . (int) ($state['last_processed'] ?? 0);
+        $lines[] = 'Lernstatistik angelegt: ' . (isset($state['created_at'])
+            ? date('d.m.Y H:i:s', (int) $state['created_at']) : 'noch nicht');
+        if ($enabled && ($tickAge === null || $tickAge > 900)) {
+            $lines[] = 'WARNUNG: Lern-Timer noch nicht gelaufen oder seit mehr als 15 Minuten ohne Lauf.';
+        }
+        if (($state['paused_reason'] ?? '') !== '') {
+            $lines[] = 'Lernpause/Hinweis: ' . (string) $state['paused_reason'];
+        }
+
+        $lines[] = '--- WETTERZENTRALE (NUR LESEN) ---';
+        $lines[] = 'Konfigurierte Instanz: #' . $weatherID;
+        if ($weatherID <= 0) {
+            $lines[] = 'Wetter: bewusst deaktiviert; Raumlernen ohne Außentemperatur möglich.';
+        } elseif (!function_exists('JVWC_Snapshot') || !IPS_InstanceExists($weatherID)) {
+            $lines[] = 'Wetter: Instanz oder JVWC_Snapshot nicht verfügbar; kein Wetterbezug.';
+        } else {
+            try {
+                $weather = json_decode((string) JVWC_Snapshot($weatherID), true);
+                if (!is_array($weather)) {
+                    $lines[] = 'Wetter: ungültige Snapshot-Antwort.';
+                } else {
+                    $issued = (int) ($weather['issued_at'] ?? 0);
+                    $age = $issued > 0 ? max(0, $now - $issued) : -1;
+                    $quality = (string) ($weather['quality'] ?? 'UNAVAILABLE');
+                    $current = $weather['current'] ?? null;
+                    $usable = $issued > 0 && $age <= 2100
+                        && in_array($quality, ['VERIFIED','MODEL_SUPPORTED','PWS_ONLY','DWD_ONLY','DWD_REMOTE'], true)
+                        && is_array($current)
+                        && is_numeric($current['temperature'] ?? null);
+                    $lines[] = 'Wetterqualität: ' . $quality . ' | Snapshot-Alter: '
+                        . ($age >= 0 ? $age . ' s' : 'unbekannt')
+                        . ' | Für Lernkontext: ' . ($usable ? 'JA' : 'NEIN');
+                    if ($usable) {
+                        $lines[] = 'Außentemperatur: ' . number_format((float) $current['temperature'], 1, ',', '.') . ' °C';
+                    }
+                    $lines[] = 'Wetterhinweis: ' . (string) ($weather['reason'] ?? 'kein Hinweis');
+                }
+            } catch (Throwable $e) {
+                $lines[] = 'Wetterdiagnose nicht lesbar: ' . $e->getMessage();
+            }
+        }
+
+        $lines[] = '--- RAEUME (11 ERWARTET) ---';
+        $configured = 0;
+        $ready = 0;
+        $withEvidence = 0;
+        $describeRate = static function (array $sample, string $unit): string {
+            $n = (int) ($sample['n'] ?? 0);
+            if ($n < 3) {
+                return 'lernt (' . $n . '/3 Fenster)';
+            }
+            return number_format((float) ($sample['mean'] ?? 0), 2, ',', '.') . ' ' . $unit
+                . ' (' . $n . ' Fenster)';
+        };
+        foreach ($this->GetRooms() as $room) {
+            if (empty($room['Enabled'])) {
+                continue;
+            }
+            ++$configured;
+            $name = (string) ($room['Name'] ?? 'Unbenannter Raum');
+            $targetID = (int) ($room['TargetVariable'] ?? 0);
+            $tempID = (int) ($room['TemperatureVariable'] ?? 0);
+            $saved = (array) (($state['rooms'][(string) $targetID] ?? []));
+            $reason = 'OK';
+            $temp = null;
+            $setpoint = null;
+            $relayOn = null;
+            $tempAge = null;
+            $relayAge = null;
+            $relayID = 0;
+            try {
+                if ($tempID <= 0 || !IPS_VariableExists($tempID)) {
+                    $reason = 'Isttemperatur-Variable fehlt';
+                } else {
+                    $meta = IPS_GetVariable($tempID);
+                    $tempAge = (int) ($meta['VariableUpdated'] ?? 0) > 0
+                        ? max(0, $now - (int) $meta['VariableUpdated']) : null;
+                    if ($tempAge === null || $tempAge > 1800) {
+                        $reason = 'Isttemperatur fehlt/älter als 30 Minuten';
+                    } else {
+                        $temp = GetValue($tempID);
+                        if (!is_numeric($temp) || !is_finite((float) $temp)) {
+                            $reason = 'Isttemperatur ungültig';
+                        }
+                    }
+                }
+                if ($reason === 'OK') {
+                    $setpoint = $targetID > 0 ? $this->ReadTarget($targetID) : null;
+                    if ($setpoint === null) {
+                        $reason = 'LCN-S1-Sollwert nicht lesbar';
+                    }
+                }
+                if ($reason === 'OK') {
+                    $mapping = $this->AutoCoolingReadOnlyDiscovery($room);
+                    $relayID = (int) ($mapping['RelayStatusVariable'] ?? 0);
+                    if ($relayID <= 0 || !IPS_VariableExists($relayID)) {
+                        $reason = 'Keine eindeutige native Relaisrückmeldung';
+                    } else {
+                        $meta = IPS_GetVariable($relayID);
+                        $relayAge = (int) ($meta['VariableUpdated'] ?? 0) > 0
+                            ? max(0, $now - (int) $meta['VariableUpdated']) : null;
+                        if ($relayAge === null || $relayAge > 1800) {
+                            $reason = 'Relaisrückmeldung fehlt/älter als 30 Minuten';
+                        } else {
+                            $relayOn = (bool) GetValue($relayID);
+                        }
+                    }
+                }
+            } catch (Throwable $e) {
+                $reason = 'Lesefehler: ' . $e->getMessage();
+            }
+            if ($reason === 'OK') {
+                ++$ready;
+            }
+
+            $heat = (array) ($saved['rates']['heating']['all'] ?? []);
+            $cool = (array) ($saved['rates']['passive_cooling']['all'] ?? []);
+            $after = (array) ($saved['afterheat_model']['gain'] ?? []);
+            if ((int) ($heat['n'] ?? 0) >= 3 || (int) ($cool['n'] ?? 0) >= 3
+                || (int) ($after['n'] ?? 0) >= 3) {
+                ++$withEvidence;
+            }
+            $last = (array) ($saved['last'] ?? []);
+            $lastAge = (int) ($last['time'] ?? 0) > 0
+                ? max(0, $now - (int) $last['time']) : null;
+            $lines[] = $name . ' | ' . $reason;
+            $lines[] = '  Ist #' . $tempID . ': '
+                . ($temp === null ? '–' : number_format((float) $temp, 2, ',', '.') . ' °C')
+                . ' (Alter ' . ($tempAge === null ? '?' : $tempAge . ' s') . ')'
+                . ' | S1 #' . $targetID . ': '
+                . ($setpoint === null ? '–' : number_format((float) $setpoint, 1, ',', '.') . ' °C');
+            $lines[] = '  Relaisstatus #' . $relayID . ': '
+                . ($relayOn === null ? 'unbekannt' : ($relayOn ? 'EIN' : 'AUS'))
+                . ' (Alter ' . ($relayAge === null ? '?' : $relayAge . ' s') . ')'
+                . ' | letzte verwertete Messung: '
+                . ($lastAge === null ? 'keine' : $lastAge . ' s alt');
+            $lines[] = '  Heizanstieg: ' . $describeRate($heat, '°C/h')
+                . ' | passives Auskühlen: ' . $describeRate($cool, '°C/h')
+                . ' | Nachlauf: ' . $describeRate($after, '°C')
+                . ' | Fenster-Resets: ' . (int) ($saved['resets'] ?? 0);
+        }
+        $lines[] = '--- ZUSAMMENFASSUNG ---';
+        $lines[] = 'Aktive Räume: ' . $configured . ' | Datenquellen jetzt verwertbar: '
+            . $ready . ' | Räume mit >=3 Lernfenstern: ' . $withEvidence;
+        $lines[] = 'Ein gültiger Sensorwert bedeutet noch keinen gültigen Lernzyklus. '
+            . 'Sonneneinstrahlung, offene Türen und unbekannter Vorlauf können Lernwerte beeinflussen.';
+        $lines[] = 'Keine aktive Fußbodenkühlung angelernt; Abkühlen bedeutet passives Auskühlen bei Ventil AUS.';
+        $lines[] = '--- ENDE – gesamten Bericht an ChatGPT senden ---';
+        return implode("\n", $lines);
+    }
+
+    /** Own output variable, isolated from normal ChatGPTDiagnostic and all LCN control paths. */
+    public function UpdateThermalLearningDiagnostic(): void
+    {
+        try {
+            $this->SetValue('ThermalLearningDiagnostic', $this->ThermalLearningDiagnosticReport());
+        } catch (Throwable $error) {
+            $this->SendDebug('ThermalLearningDiagnostic', $error->getMessage(), 0);
+            try {
+                $this->SetValue('ThermalLearningDiagnostic',
+                    'SMART-FBH – LERN-DIAGNOSE AN CHATGPT' . "\n"
+                    . 'DIAGNOSEFEHLER: ' . $error->getMessage() . "\n"
+                    . 'Keine LCN-Befehle gesendet.');
+            } catch (Throwable) {
+            }
+        }
+    }
 }
