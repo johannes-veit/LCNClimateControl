@@ -173,6 +173,10 @@ $h->attrs['ThermalLearningState'] = $badState;
 $h->ThermalLearningTick();
 smartAssert($h->ReadAttributeString('ThermalLearningState') === $badState,
     'corrupted learning state must remain untouched');
+smartAssert(str_contains($h->ThermalLearningDiagnosticReport(),
+    'KRITISCHE LERNDATEN-WARNUNG'), 'corrupted state must be visible in diagnostic');
+smartAssert(str_contains($h->ThermalLearningReport(),
+    'NICHT UEBERSCHRIEBEN'), 'short report must expose protected corrupt state');
 $futureSchema = '{"schema":2,"rooms":{"1001":{"name":"legacy"}}}';
 $h->attrs['ThermalLearningState'] = $futureSchema;
 $h->ThermalLearningTick();
