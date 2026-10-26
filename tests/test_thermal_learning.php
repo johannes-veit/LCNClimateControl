@@ -78,7 +78,8 @@ check_learning(str_contains($module, "RegisterPropertyBoolean('ThermalLearningEn
     'learning disabled by default');
 check_learning(str_contains($module, "RegisterPropertyBoolean('ThermalSourcePreflightEnabled', false)"),
     'source-only preflight must be disabled by default');
-check_learning(str_contains($module, "|| $this->ReadPropertyBoolean('ThermalSourcePreflightEnabled')"),
+check_learning(str_contains($module, "|| " . '$this->ReadPropertyBoolean('
+    . "'ThermalSourcePreflightEnabled'" . ')'),
     'source-only preflight uses existing passive timer');
 $form = json_decode((string) file_get_contents(dirname(__DIR__) . '/LCNClimateControl/form.json'), true);
 check_learning(is_array($form), 'form JSON must be valid');
