@@ -62,6 +62,24 @@ final class LCNThermalLearningModel
     }
 
     /**
+     * Source readiness for 30-minute snapshots. A last value change is NOT
+     * the same as a refreshed status update; only VariableUpdated proves
+     * that this data source was reported again.
+     */
+    public static function sourceReason(int $now, int $tempUpdated, int $relayUpdated): string
+    {
+        if ($tempUpdated <= 0 || $tempUpdated > $now
+            || $now - $tempUpdated > 1800) {
+            return 'TEMP_STALE';
+        }
+        if ($relayUpdated <= 0 || $relayUpdated > $now
+            || $now - $relayUpdated > 1800) {
+            return 'RELAY_STALE';
+        }
+        return 'OK';
+    }
+
+    /**
      * Fixed-size shared outdoor context. Never store raw weather histories.
      * Return both the updated ring and the observation about two hours ago.
      */
@@ -403,6 +421,14 @@ trait LCNClimateThermalLearning
             if (!is_array($state) || ($state['schema'] ?? 0) !== 1) {
                 $state = ['schema' => 1, 'rooms' => [], 'created_at' => $now];
             }
+            // Retain known state only: a broken previous schema or a legacy
+            // unknown field cannot permanently prevent the 128 KiB guard.
+            $state = array_intersect_key($state, array_flip([
+                'schema', 'rooms', 'created_at', 'weather_history',
+                'last_tick_at', 'last_processed', 'paused_reason',
+                'last_exclusions'
+            ]));
+            $state['rooms'] = (array) ($state['rooms'] ?? []);
             if ($this->GetMode() !== 0) {
                 // Heating and active floor cooling are never mixed in one model.
                 foreach ($state['rooms'] as &$roomState) {
@@ -431,35 +457,48 @@ trait LCNClimateThermalLearning
             $laggedOutdoor = $weather['lag'];
             $processed = 0;
             $changes = [];
+            $exclusions = [];
             foreach ($this->GetRooms() as $room) {
                 if (empty($room['Enabled'])) {
                     continue;
                 }
                 $targetID = (int) ($room['TargetVariable'] ?? 0);
+                $key = (string) $targetID;
+                try {
                 $tempID = (int) ($room['TemperatureVariable'] ?? 0);
                 if ($targetID <= 0 || $tempID <= 0 || !IPS_VariableExists($tempID)) {
+                    $exclusions[$key] = 'TEMP_MISSING';
                     continue;
                 }
                 $tMeta = IPS_GetVariable($tempID);
-                if ($now - (int) ($tMeta['VariableUpdated'] ?? 0) > 30 * 60) {
+                $tempUpdated = (int) ($tMeta['VariableUpdated'] ?? 0);
+                if (LCNThermalLearningModel::sourceReason($now, $tempUpdated, $now) !== 'OK') {
+                    $exclusions[$key] = 'TEMP_STALE';
                     continue;
                 }
                 $temp = GetValue($tempID);
                 $target = $this->ReadTarget($targetID);
-                if (!is_numeric($temp) || $target === null) {
+                if (!is_numeric($temp) || !is_finite((float) $temp)
+                    || $target === null || !is_finite((float) $target)) {
+                    $exclusions[$key] = 'TEMP_OR_TARGET_INVALID';
                     continue;
                 }
                 // Existing native read-only mapping; neither LCN reads nor commands.
                 $mapping = $this->AutoCoolingReadOnlyDiscovery($room);
                 $statusID = (int) ($mapping['RelayStatusVariable'] ?? 0);
                 if ($statusID <= 0 || !IPS_VariableExists($statusID)) {
+                    $exclusions[$key] = 'RELAY_MISSING';
                     continue;
                 }
                 $meta = IPS_GetVariable($statusID);
-                if ($now - (int) ($meta['VariableUpdated'] ?? 0) > 30 * 60) {
+                $relayUpdated = (int) ($meta['VariableUpdated'] ?? 0);
+                $sourceReason = LCNThermalLearningModel::sourceReason(
+                    $now, $tempUpdated, $relayUpdated);
+                if ($sourceReason !== 'OK') {
+                    $exclusions[$key] = $sourceReason;
                     continue;
                 }
-                $key = (string) $targetID; // Stable across room renaming.
+                // Stable target identifier survives room renaming.
                 $previous = (array) ($state['rooms'][$key] ?? []);
                 // Invalidate old learning when a sensor or relay is remapped.
                 // The S1 key alone does not guarantee physical source identity.
@@ -493,6 +532,11 @@ trait LCNClimateThermalLearning
                     'outside_lag' => $laggedOutdoor
                 ]);
                 ++$processed;
+                } catch (Throwable $roomError) {
+                    $exclusions[$key] = 'READ_ERROR';
+                    $this->SendDebug('PassiveThermalLearning.Room', 'Room '
+                        . $key . ': ' . $roomError->getMessage(), 0);
+                }
             }
             if (count($changes) >= 4) {
                 $sum = array_sum(array_column($changes, 'delta'));
@@ -507,6 +551,7 @@ trait LCNClimateThermalLearning
             }
             $state['last_tick_at'] = $now;
             $state['last_processed'] = $processed;
+            $state['last_exclusions'] = array_slice($exclusions, 0, 30, true);
             $state['paused_reason'] = $processed === 0 ? 'Keine aktuellen, eindeutig zugeordneten Messpaare' : '';
             // Do not persist transient or unknown fields from old/foreign schemas.
             // Each room has a fixed set of fields: no event history or daily samples.
@@ -596,6 +641,14 @@ trait LCNClimateThermalLearning
             ? date('d.m.Y H:i:s', $lastTick) . ' (' . $tickAge . ' s alt)'
             : 'NOCH KEIN LERNLAUF');
         $lines[] = 'Lernlauf zuletzt erfasste Räume: ' . (int) ($state['last_processed'] ?? 0);
+        $excluded = (array) ($state['last_exclusions'] ?? []);
+        $counts = array_count_values(array_values(array_filter($excluded, 'is_string')));
+        $details = [];
+        foreach ($counts as $reason => $number) {
+            $details[] = $reason . ': ' . $number;
+        }
+        $lines[] = 'Im letzten Lernlauf ausgeschlossen: '
+            . ($details === [] ? 'keine' : implode(' | ', $details));
         $lines[] = 'Lernzustand: ' . strlen($this->ReadAttributeString('ThermalLearningState'))
             . ' Bytes (Speichergrenze 131072 Bytes).';
         $lines[] = 'Lernstatistik angelegt: ' . (isset($state['created_at'])
