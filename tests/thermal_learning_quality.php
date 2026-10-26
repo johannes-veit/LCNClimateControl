@@ -120,7 +120,9 @@ for ($i=0; $i<10050; ++$i) {
 }
 verify(($stat['n'] ?? 0) === 10000, 'statistic counter must saturate');
 verify(($stat['variance'] ?? -1) >= 0, 'variance missing');
-verify(count($stat) === 4, 'statistic schema should stay constant');
+verify(count($stat) === 5, 'statistic schema should stay constant');
+verify(isset($stat['long_mean']) && is_finite((float) $stat['long_mean']),
+    'long-term baseline missing');
 verify(($stat['quality_n'] ?? 0) === 10000, 'quality sample count saturates');
 
 // A legacy average cannot claim historical statistical confidence.
@@ -132,6 +134,8 @@ verify(($s['rates']['heating']['all']['quality_n'] ?? -1) === 1,
     'legacy variance must begin with a fresh observation count');
 verify(($s['rates']['heating']['all']['n'] ?? 0) === 101,
     'legacy count must be preserved');
+verify(abs((float) ($s['rates']['heating']['all']['long_mean'] ?? NAN) - 0.2) < 0.001,
+    'long baseline must start from the existing legacy mean');
 
 // A switched relay in the middle of an otherwise steady two-hour phase
 // must not generate a false full-duration heating rate.
