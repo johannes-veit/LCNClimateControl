@@ -506,13 +506,15 @@ trait LCNClimateThermalLearning
     public function ThermalLearningTick(): void
     {
         try {
-            if (!$this->ReadPropertyBoolean('ThermalLearningEnabled')) {
-                return;
-            }
+            $learn = $this->ReadPropertyBoolean('ThermalLearningEnabled');
+            $preflight = $this->ReadPropertyBoolean('ThermalSourcePreflightEnabled');
+            if (!$learn && !$preflight) { return; }
+            $preflightOnly = !$learn && $preflight;
             $now = time();
             $outside = null;
             $weatherID = $this->ReadPropertyInteger('ThermalWeatherCenterInstance');
-            if ($weatherID > 0 && function_exists('JVWC_Snapshot') && IPS_InstanceExists($weatherID)) {
+            if (!$preflightOnly && $weatherID > 0
+                && function_exists('JVWC_Snapshot') && IPS_InstanceExists($weatherID)) {
                 try {
                     $raw = json_decode((string) JVWC_Snapshot($weatherID), true);
                     if (is_array($raw) && (int) ($raw['issued_at'] ?? 0) > 0
@@ -566,7 +568,7 @@ trait LCNClimateThermalLearning
                 }
             }
             $state['rooms'] = array_intersect_key((array) ($state['rooms'] ?? []), $configuredKeys);
-            if ($this->GetMode() !== 0) {
+            if ($this->GetMode() !== 0 && !$preflightOnly) {
                 // Heating and active floor cooling are never mixed in one model.
                 foreach ($state['rooms'] as &$roomState) {
                     $roomState = (array) $roomState;
@@ -579,10 +581,22 @@ trait LCNClimateThermalLearning
                 $this->WriteBoundedThermalLearningState($state);
                 return;
             }
-            $weather = LCNThermalLearningModel::outdoorContext(
-                (array) ($state['weather_history'] ?? []), $now, $outside);
-            $state['weather_history'] = $weather['points'];
-            $laggedOutdoor = $weather['lag'];
+            if ($preflightOnly) {
+                // A preflight never holds a live heating phase. Preserve
+                // learned rates, but make any later learning opt-in start fresh.
+                foreach ($state['rooms'] as &$historicRoom) {
+                    $historicRoom = (array) $historicRoom;
+                    unset($historicRoom['last'], $historicRoom['phase'],
+                        $historicRoom['afterheat']);
+                }
+                unset($historicRoom);
+                $laggedOutdoor = null;
+            } else {
+                $weather = LCNThermalLearningModel::outdoorContext(
+                    (array) ($state['weather_history'] ?? []), $now, $outside);
+                $state['weather_history'] = $weather['points'];
+                $laggedOutdoor = $weather['lag'];
+            }
             $processed = 0;
             $eligible = 0;
             $changes = [];
@@ -649,6 +663,13 @@ trait LCNClimateThermalLearning
                 $previous['source_temp_id'] = $tempID;
                 $previous['source_relay_id'] = $statusID;
                 $previous['name'] = (string) ($room['Name'] ?? ('Raum #' . $targetID));
+                if ($preflightOnly) {
+                    // No observe(), no phase, no thermal context, no learning.
+                    // The end-of-tick source-audit loop still records quality.
+                    $state['rooms'][$key] = $previous;
+                    ++$processed;
+                    continue;
+                }
                 // Strict separation: verify six successful, reasonably recent
                 // source updates before generating any new thermal samples.
                 // Source audits still collect on the normal 30-minute tick.
@@ -719,7 +740,9 @@ trait LCNClimateThermalLearning
             $state['last_processed'] = $processed;
             $state['last_eligible'] = $eligible;
             $state['last_exclusions'] = array_slice($exclusions, 0, 30, true);
-            $state['paused_reason'] = $processed === 0 ? 'Keine aktuellen, eindeutig zugeordneten Messpaare' : '';
+            $state['paused_reason'] = $preflightOnly
+                ? 'NUR QUELLEN-VORPRUEFUNG - THERMISCHES LERNEN AUS'
+                : ($processed === 0 ? 'Keine aktuellen, eindeutig zugeordneten Messpaare' : '');
             $this->WriteBoundedThermalLearningState($state);
         } catch (Throwable $error) {
             // Learning failure must NEVER propagate into working regulation or instance status.
@@ -730,9 +753,11 @@ trait LCNClimateThermalLearning
     public function ThermalLearningReport(): string
     {
         $enabled = $this->ReadPropertyBoolean('ThermalLearningEnabled');
+        $preflight = $this->ReadPropertyBoolean('ThermalSourcePreflightEnabled');
         $rawState = $this->ReadAttributeString('ThermalLearningState');
         $state = json_decode($rawState, true);
-        $lines = ['SMART-FBH – passives Lernen: ' . ($enabled ? 'AKTIV' : 'AUS'),
+        $lines = ['SMART-FBH – passives Lernen: ' . ($enabled ? 'AKTIV' : 'AUS')
+            . ' | Datenquellen-Vorpruefung: ' . ($preflight ? 'AKTIV' : 'AUS'),
             'Keine LCN-Befehle, keine Sollwertänderung, keine automatische Optimierung.'];
         if ($rawState !== '{}' && $rawState !== ''
             && (!is_array($state) || ($state['schema'] ?? null) !== 1
@@ -783,6 +808,7 @@ trait LCNClimateThermalLearning
     {
         $now = time();
         $enabled = $this->ReadPropertyBoolean('ThermalLearningEnabled');
+        $preflight = $this->ReadPropertyBoolean('ThermalSourcePreflightEnabled');
         $weatherID = $this->ReadPropertyInteger('ThermalWeatherCenterInstance');
         $rawLearningState = $this->ReadAttributeString('ThermalLearningState');
         $state = json_decode($rawLearningState, true);
@@ -798,6 +824,8 @@ trait LCNClimateThermalLearning
             'Erstellt: ' . date('d.m.Y H:i:s', $now),
             'Symcon-Instanz: #' . $this->InstanceID,
             'Lernfunktion: ' . ($enabled ? 'AKTIV' : 'AUS (in der Modulkonfiguration aktivieren)'),
+            'Quellen-Vorpruefung: ' . ($preflight ? 'AKTIV' : 'AUS')
+                . ' | 30-Minuten-Takt | NUR LESEN',
             'Betriebsart: ' . ($this->GetMode() === 0 ? 'HEIZEN' : 'NICHT HEIZEN – Lernphase pausiert'),
             'SICHERHEIT: NUR LESEN. Keine A7/A8, keine Relais-/S1-Befehle und keine Sollwertänderung.',
         ];
@@ -826,7 +854,7 @@ trait LCNClimateThermalLearning
             . ' Bytes (Speichergrenze 131072 Bytes).';
         $lines[] = 'Lernstatistik angelegt: ' . (isset($state['created_at'])
             ? date('d.m.Y H:i:s', (int) $state['created_at']) : 'noch nicht');
-        if ($enabled && ($tickAge === null || $tickAge > 4500)) {
+        if (($enabled || $preflight) && ($tickAge === null || $tickAge > 4500)) {
             $lines[] = 'WARNUNG: Lern-Timer noch nicht gelaufen oder seit mehr als 75 Minuten ohne Lauf.';
         }
         if (($state['paused_reason'] ?? '') !== '') {
