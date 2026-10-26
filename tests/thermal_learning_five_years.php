@@ -18,6 +18,7 @@ $firstYearBytes = 0;
 $peakBytes = 0;
 $missingWeather = 0;
 $invalidSources = 0;
+$invalidRelays = 0;
 $heatingEvidence = 0;
 $coolingEvidence = 0;
 
@@ -46,6 +47,12 @@ for ($step = 0; $step < $steps; ++$step) {
             $sensorTime = $now - 3601; // stale source, fail closed
             ++$invalidSources;
         }
+        $relaySampleAt = $now;
+        if (($step + $room * 19) % 3113 === 0 && $step > 0) {
+            $relaySampleAt = $now - 3601;
+            ++$invalidRelays;
+        }
+        $sourceReason = LCNThermalLearningModel::sourceReason($now, $sensorTime, $relaySampleAt);
         $rooms[$room] = LCNThermalLearningModel::observe($rooms[$room], [
             'time' => $now,
             'temp' => round($temps[$room], 3),
@@ -54,9 +61,11 @@ for ($step = 0; $step < $steps; ++$step) {
             'outside' => $outdoor,
             'outside_lag' => $weather['lag'],
             'temp_sample_at' => $sensorTime,
-            'valve_sample_at' => $now,
+            'valve_sample_at' => $relaySampleAt,
             'valve_changed_at' => $relayChanged[$room]
         ]);
+        $rooms[$room]['source_audit'] = LCNThermalLearningModel::auditSource(
+            (array) ($rooms[$room]['source_audit'] ?? []), $sourceReason, $now);
         $rooms[$room]['name'] = 'Test Raum ' . $room;
         $rooms[$room] = LCNThermalLearningModel::compactRoom($rooms[$room]);
     }
@@ -80,7 +89,15 @@ for ($room = 0; $room < 11; ++$room) {
     $heatingEvidence += $heat;
     $coolingEvidence += $cool;
 }
-expectLong($missingWeather > 0 && $invalidSources > 0, 'failure scenarios absent');
+expectLong($missingWeather > 0 && $invalidSources > 0 && $invalidRelays > 0,
+    'failure scenarios absent');
+for ($room = 0; $room < 11; ++$room) {
+    expectLong(($rooms[$room]['source_audit']['checks'] ?? 0) === 10000,
+        'audit should saturate at 10000 observations after five years');
+    expectLong(($rooms[$room]['source_audit']['recent_ok'] ?? 0) >= 0.0
+        && ($rooms[$room]['source_audit']['recent_ok'] ?? 0) <= 1.0,
+        'source readiness must remain normalized');
+}
 expectLong($firstYearBytes > 0 && $bytes - $firstYearBytes < 8192,
     'persistent state is still growing with years: ' . $firstYearBytes . ' to ' . $bytes);
 
@@ -104,5 +121,6 @@ echo json_encode([
     'final_bytes' => $bytes, 'peak_bytes' => $peakBytes,
     'heating_windows' => $heatingEvidence, 'passive_cooling_windows' => $coolingEvidence,
     'missing_weather_windows' => $missingWeather,
-    'stale_sensor_cases' => $invalidSources
+    'stale_sensor_cases' => $invalidSources,
+    'stale_relay_cases' => $invalidRelays
 ], JSON_THROW_ON_ERROR) . PHP_EOL;
