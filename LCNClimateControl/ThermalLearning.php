@@ -195,6 +195,18 @@ trait LCNClimateThermalLearning
                 $this->WriteAttributeString('ThermalLearningState', json_encode($state, JSON_UNESCAPED_UNICODE) ?: '{}');
                 return;
             }
+            // Keep the persistent model bounded even after years of room-ID changes.
+            // Remove orphaned room entries; only the current configured rooms survive.
+            $configuredKeys = [];
+            foreach ($this->GetRooms() as $configuredRoom) {
+                if (!empty($configuredRoom['Enabled'])) {
+                    $id = (int) ($configuredRoom['TargetVariable'] ?? 0);
+                    if ($id > 0) {
+                        $configuredKeys[(string) $id] = true;
+                    }
+                }
+            }
+            $state['rooms'] = array_intersect_key((array) ($state['rooms'] ?? []), $configuredKeys);
             $processed = 0;
             foreach ($this->GetRooms() as $room) {
                 if (empty($room['Enabled'])) {
@@ -238,6 +250,15 @@ trait LCNClimateThermalLearning
             $state['last_tick_at'] = $now;
             $state['last_processed'] = $processed;
             $state['paused_reason'] = $processed === 0 ? 'Keine aktuellen, eindeutig zugeordneten Messpaare' : '';
+            // Do not persist transient or unknown fields from old/foreign schemas.
+            // Each room has a fixed set of fields: no event history or daily samples.
+            foreach ($state['rooms'] as &$compactRoom) {
+                $compactRoom = array_intersect_key((array) $compactRoom, array_flip([
+                    'name', 'last', 'phase', 'afterheat', 'afterheat_model', 'rates',
+                    'last_evidence_at', 'resets', 'rejected_stale'
+                ]));
+            }
+            unset($compactRoom);
             // No unbounded raw timeseries; only last sample, current period and aggregates.
             $this->WriteAttributeString('ThermalLearningState', json_encode($state, JSON_UNESCAPED_UNICODE) ?: '{}');
         } catch (Throwable $error) {
