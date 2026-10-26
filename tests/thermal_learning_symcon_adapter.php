@@ -99,11 +99,23 @@ smartAssert($before === $h->ReadAttributeString('ThermalLearningState'),
     'disabled learning modified state');
 
 $h->enabled = true;
+// An old/foreign nested payload must also be pruned when learning pauses.
+$legacy = json_decode($h->ReadAttributeString('ThermalLearningState'), true, 512, JSON_THROW_ON_ERROR);
+$legacy['rooms']['1006']['old_nested_blob'] = str_repeat('Z', 180000);
+$legacy['rooms']['99999'] = ['name'=>'orphan', 'rates'=>['unknown'=>str_repeat('x', 30000)]];
+$h->attrs['ThermalLearningState'] = json_encode($legacy, JSON_THROW_ON_ERROR);
 $h->mode = 1;
 $h->ThermalLearningTick();
 $paused = json_decode($h->ReadAttributeString('ThermalLearningState'), true, 512, JSON_THROW_ON_ERROR);
 smartAssert(($paused['paused_reason'] ?? '') === 'Betriebsart nicht HEIZEN',
     'cooling mode must pause learning');
+smartAssert(strlen($h->ReadAttributeString('ThermalLearningState')) < 131072,
+    'pause branch skipped storage budget');
+smartAssert(!isset($paused['rooms']['1006']['old_nested_blob']),
+    'pause branch failed nested compaction');
+smartAssert(!isset($paused['rooms']['99999']),
+    'pause branch retained obsolete room');
+
 
 smartAssert(LCNThermalLearningModel::sourceReason($now, $now, $now) === 'OK',
     'current values must be accepted');
@@ -113,6 +125,10 @@ smartAssert(LCNThermalLearningModel::sourceReason($now, $now, $now-1801) === 'RE
     'old relay status was not detected');
 smartAssert(LCNThermalLearningModel::sourceReason($now, $now+10, $now) === 'TEMP_STALE',
     'future temperature timestamp must be rejected');
+smartAssert(LCNThermalLearningModel::sourceReason($now, $now, $now+1) === 'RELAY_STALE',
+    'future relay timestamp must be rejected');
+smartAssert(LCNThermalLearningModel::sourceReason($now, $now-1800, $now-1800) === 'OK',
+    '30-minute update boundary must be accepted');
 
 echo 'SMART-FBH read-only 11-room Symcon adapter integration passed' . PHP_EOL;
 echo json_encode([
