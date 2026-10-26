@@ -46,6 +46,15 @@ final class LCNThermalLearningModel
         $temp = (float) ($input['temp'] ?? NAN);
         $target = (float) ($input['target'] ?? NAN);
         $valve = $input['valve'] ?? null;
+        $tempSampleAt = (int) ($input['temp_sample_at'] ?? $time);
+        $valveSampleAt = (int) ($input['valve_sample_at'] ?? $time);
+        // Reject future, absent or stale source readings before opening a window.
+        if ($tempSampleAt <= 0 || $tempSampleAt > $time || $time - $tempSampleAt > 600
+            || $valveSampleAt <= 0 || $valveSampleAt > $time || $time - $valveSampleAt > 600) {
+            unset($state['last'], $state['phase'], $state['afterheat']);
+            $state['rejected_stale'] = min(100000, 1 + (int) ($state['rejected_stale'] ?? 0));
+            return $state;
+        }
         if ($time <= 0 || !is_finite($temp) || !is_finite($target)
             || $temp < 0 || $temp > 45 || $target < 5 || $target > 40
             || !is_bool($valve)) {
@@ -58,7 +67,8 @@ final class LCNThermalLearningModel
         $observation = [
             'time' => $time, 'temp' => $temp, 'target' => $target,
             'valve' => $valve, 'outside' => $outside,
-            'temp_sample_at' => (int) ($input['temp_sample_at'] ?? $time)
+            'temp_sample_at' => $tempSampleAt,
+            'valve_sample_at' => $valveSampleAt
         ];
         $previous = $state['last'] ?? null;
         if (!is_array($previous)) {
@@ -118,6 +128,10 @@ final class LCNThermalLearningModel
                 $startSampleAt = (int) ($phase['temp_sample_at'] ?? 0);
                 $freshEvidence = $endSampleAt > $startSampleAt
                     && $endSampleAt <= $time && $time - $endSampleAt <= 600;
+                // A status unchanged for hours must not imply that a relay never switched.
+                $startRelayAt = (int) ($phase['valve_sample_at'] ?? 0);
+                $endRelayAt = (int) ($observation['valve_sample_at'] ?? 0);
+                $freshEvidence = $freshEvidence && $endRelayAt > $startRelayAt;
                 // OFF does not yet mean passive cooling: the slab may still heat.
                 $residualHeat = !$valve && isset($state['afterheat']);
                 if ($valid && $freshEvidence && !$residualHeat) {
@@ -216,7 +230,8 @@ trait LCNClimateThermalLearning
                 $state['rooms'][$key] = LCNThermalLearningModel::observe($previous, [
                     'time' => $now, 'temp' => (float) $temp, 'target' => $target,
                     'valve' => (bool) GetValue($statusID), 'outside' => $outside,
-                    'temp_sample_at' => (int) ($tMeta['VariableUpdated'] ?? 0)
+                    'temp_sample_at' => (int) ($tMeta['VariableUpdated'] ?? 0),
+                    'valve_sample_at' => (int) ($meta['VariableUpdated'] ?? 0)
                 ]);
                 ++$processed;
             }
@@ -438,13 +453,14 @@ trait LCNClimateThermalLearning
             $lines[] = '  Heizanstieg: ' . $describeRate($heat, '°C/h')
                 . ' | passives Auskühlen: ' . $describeRate($cool, '°C/h')
                 . ' | Nachlauf: ' . $describeRate($after, '°C')
-                . ' | Fenster-Resets: ' . (int) ($saved['resets'] ?? 0);
+                . ' | Fenster-Resets: ' . (int) ($saved['resets'] ?? 0)
+                . ' | stale Abweisungen: ' . (int) ($saved['rejected_stale'] ?? 0);
         }
         $lines[] = '--- ZUSAMMENFASSUNG ---';
         $lines[] = 'Aktive Räume: ' . $configured . ' | Datenquellen jetzt verwertbar: '
             . $ready . ' | Räume mit >=3 Lernfenstern: ' . $withEvidence;
         $lines[] = 'Qualitaetsschutz: Passive Auskuehlfenster beginnen erst nach dem Estrich-Nachlauf; '
-            . 'Lernraten benoetigen eine neuere Temperaturmessung am Fensterende.';
+            . 'Lernraten benoetigen neuere Temperatur- UND Relaisstatusmessungen am Fensterende (max. 10 min alt).';
         $lines[] = 'Ein gültiger Sensorwert bedeutet noch keinen gültigen Lernzyklus. '
             . 'Sonneneinstrahlung, offene Türen und unbekannter Vorlauf können Lernwerte beeinflussen.';
         $lines[] = 'Keine aktive Fußbodenkühlung angelernt; Abkühlen bedeutet passives Auskühlen bei Ventil AUS.';
