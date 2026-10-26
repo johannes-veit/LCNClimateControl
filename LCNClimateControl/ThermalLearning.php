@@ -703,9 +703,17 @@ trait LCNClimateThermalLearning
     public function ThermalLearningReport(): string
     {
         $enabled = $this->ReadPropertyBoolean('ThermalLearningEnabled');
-        $state = json_decode($this->ReadAttributeString('ThermalLearningState'), true);
+        $rawState = $this->ReadAttributeString('ThermalLearningState');
+        $state = json_decode($rawState, true);
         $lines = ['SMART-FBH – passives Lernen: ' . ($enabled ? 'AKTIV' : 'AUS'),
             'Keine LCN-Befehle, keine Sollwertänderung, keine automatische Optimierung.'];
+        if ($rawState !== '{}' && $rawState !== ''
+            && (!is_array($state) || ($state['schema'] ?? null) !== 1
+                || !is_array($state['rooms'] ?? null))) {
+            $lines[] = 'WARNUNG: GESPEICHERTER LERNZUSTAND BESCHAEDIGT'
+                . ' ODER UNBEKANNTE VERSION; NICHT UEBERSCHRIEBEN.';
+            return implode("\\n", $lines);
+        }
         if (!is_array($state) || empty($state['rooms'])) {
             $lines[] = 'Noch keine belastbaren Messwerte vorhanden.';
             return implode("\n", $lines);
@@ -748,8 +756,12 @@ trait LCNClimateThermalLearning
         $now = time();
         $enabled = $this->ReadPropertyBoolean('ThermalLearningEnabled');
         $weatherID = $this->ReadPropertyInteger('ThermalWeatherCenterInstance');
-        $state = json_decode($this->ReadAttributeString('ThermalLearningState'), true);
-        if (!is_array($state)) {
+        $rawLearningState = $this->ReadAttributeString('ThermalLearningState');
+        $state = json_decode($rawLearningState, true);
+        $stateInvalid = $rawLearningState !== '{}' && $rawLearningState !== ''
+            && (!is_array($state) || ($state['schema'] ?? null) !== 1
+                || !is_array($state['rooms'] ?? null));
+        if (!is_array($state) || $stateInvalid) {
             $state = [];
         }
 
@@ -762,6 +774,11 @@ trait LCNClimateThermalLearning
             'SICHERHEIT: NUR LESEN. Keine A7/A8, keine Relais-/S1-Befehle und keine Sollwertänderung.',
         ];
 
+        if ($stateInvalid) {
+            $lines[] = 'KRITISCHE LERNDATEN-WARNUNG: Gespeichertes Modell ungueltig'
+                . ' oder Schema unbekannt; Lernen wird angehalten, Daten NICHT ueberschrieben.';
+            $lines[] = 'Keine Neuinitialisierung ohne Sicherung und ausdrueckliche Pruefung.';
+        }
         $lastTick = (int) ($state['last_tick_at'] ?? 0);
         $tickAge = $lastTick > 0 ? max(0, $now - $lastTick) : null;
         $lines[] = 'Letzter Lernlauf: ' . ($lastTick > 0
