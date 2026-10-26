@@ -1,5 +1,13 @@
 # LCN Climate Control – IP-Symcon 9
 
+## SMART-FBH – Langzeitqualitaet (Entwicklung, noch nicht freigegeben)
+
+- Pro erlerntem Mittelwert werden nur Zaehler, gleitender Mittelwert und gleitende Varianz gespeichert (konstanter Platzbedarf).
+- Diagnosestufen: UNZUREICHEND (<3 Fenster), VORLAEUFIG (3–9), STREUUNG_UNBEKANNT (alte Statistik ohne Varianz), STARK_STREUEND oder STABIL_BEOBACHTET (ab 10).
+- "Stabil beobachtet" beschreibt nur die Streuung der akzeptierten Fenster und ist kein Nachweis fuer Kausalitaet, Heizlast oder Wetterbereinigung.
+- Historische n-Zaehler sind gedeckelt. Bei Updates bleiben fruehere Mittelwerte erhalten, bisher unbekannte Streuung wird nicht als historisch gemessen ausgegeben.
+- Regression fuer >10.000 synthetische Fenster hinzugefuegt; noch nicht in Symcon verifiziert.
+
 ## SMART-FBH – Gebaeudekontext nach Ventilzustand (Entwicklung, nur lesen)
 
 - 30-Minuten-Temperaturaenderung jedes Raumes wird mit dem Mittel der anderen gueltigen Raeume verglichen.
