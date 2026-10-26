@@ -200,6 +200,20 @@ for ($i = 8; $i < 13; ++$i) {
 verify(LCNThermalLearningModel::auditLabel($audit) === 'DATENQUELLE_BLOCKIERT',
     'repeated stale relay must block source readiness');
 verify(($audit['bad_streak'] ?? 0) === 5, 'bad source streak not counted');
+// A prolonged outage invalidates earlier preflight approval, even when
+// the first post-outage reading is current and otherwise looks healthy.
+$recoveredAt = $t + 13 * 1800 + 7200;
+$audit = LCNThermalLearningModel::auditSource($audit, 'OK', $recoveredAt);
+verify(($audit['checks'] ?? -1) === 1 &&
+    LCNThermalLearningModel::auditLabel($audit) === 'BEOBACHTUNG (1/6)',
+    'long-gap source readiness must be requalified');
+for ($i = 1; $i < 6; ++$i) {
+    $audit = LCNThermalLearningModel::auditSource(
+        $audit, 'OK', $recoveredAt + 1800*$i);
+}
+verify(LCNThermalLearningModel::auditLabel($audit) === 'QUELLEN_REGELMAESSIG',
+    'six fresh stable updates must requalify recovered relay');
+
 $compacted = LCNThermalLearningModel::compactRoom([
     'source_audit' => $audit + ['unbounded_events' => str_repeat('X', 100000)]
 ]);
