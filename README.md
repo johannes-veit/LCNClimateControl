@@ -1,5 +1,16 @@
 # LCN Climate Control – IP-Symcon 9
 
+## SMART-FBH – Langzeit-Speicherung (Entwicklungszweig, noch nicht freigegeben)
+
+- 30-Minuten-Lern- und Diagnosetakt. Die bestehende LCN-Heizregelung ist davon unabhängig.
+- **Keine neuen Zeitreihen:** Der passive Lerner speichert je Raum nur den aktuellen Prüf-/Phasenzustand sowie begrenzte aggregierte Kennwerte, keine Liste aller Messungen.
+- Beim Lernlauf werden Einträge ehemaliger/entfernter Raum-IDs aus dem Attribut `ThermalLearningState` gelöscht, sodass Konfigurationsänderungen nicht über Jahre Einträge anhäufen.
+- Unbekannte zusätzliche Top-Level-Raumfelder werden entfernt. Alle regulär erzeugten Statistikzähler sind begrenzt.
+- Das Modell liegt in **einem** Symcon-Attribut; es erzeugt nicht pro Messung zusätzliche Objekte oder Dateien.
+- **Wichtig:** Die separate Diagnosestringvariable `ThermalLearningDiagnostic` darf nicht zusätzlich zur langfristigen Archivprotokollierung aktiviert werden. Falls die Archivierung dafür manuell eingeschaltet wurde, separat in der Symcon-Archivkonfiguration ausschalten. Das Lernmodul selbst schaltet Archivfunktionen nicht um.
+- Langzeittests für tatsächliche Speicherbelegung, Archivkonfiguration und reale Sensorstatus-Rückmeldungen stehen noch aus. Keine produktive Freigabe.
+
+
 **Stand: v0.5.5 Build 55 – SMART-FBH mit eigener ChatGPT-Lerndiagnose; HEIZ-/KÜHL-Regelung unverändert.**
 
 ## 0.5.5 Build 55 – Lern-Diagnose an ChatGPT
