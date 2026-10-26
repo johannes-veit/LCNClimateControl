@@ -76,7 +76,7 @@ for ($room = 0; $room < 11; ++$room) {
     $cool = $rooms[$room]['rates']['passive_cooling']['all']['n'] ?? 0;
     expectLong($heat > 50, 'heating evidence missing: room ' . $room);
     expectLong($cool > 50, 'cooling evidence missing: room ' . $room);
-    expectLong(($rooms[$room]['resets'] ?? 0) > 0, 'outage resets not detected');
+    expectLong(($rooms[$room]['rejected_stale'] ?? 0) > 0, 'stale source was not recorded');
     $heatingEvidence += $heat;
     $coolingEvidence += $cool;
 }
