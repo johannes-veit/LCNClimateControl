@@ -122,4 +122,14 @@ verify(($stat['n'] ?? 0) === 10000, 'statistic counter must saturate');
 verify(($stat['variance'] ?? -1) >= 0, 'variance missing');
 verify(count($stat) === 3, 'statistic schema should stay constant');
 
+// A legacy average cannot claim historical statistical confidence.
+$s = ['rates'=>['heating'=>['all'=>['n'=>100,'mean'=>0.2]]]];
+$s = obs($s, $t, 20.0, true);
+$s = obs($s, $t+1800, 20.1, true);
+$s = obs($s, $t+3600, 20.2, true);
+verify(($s['rates']['heating']['all']['quality_n'] ?? -1) === 1,
+    'legacy variance must begin with a fresh observation count');
+verify(($s['rates']['heating']['all']['n'] ?? 0) === 101,
+    'legacy count must be preserved');
+
 echo "30-minute SMART-FBH model regression tests passed\n";
