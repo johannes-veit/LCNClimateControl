@@ -1,5 +1,16 @@
 # LCN Climate Control – IP-Symcon 9
 
+## SMART-FBH – reale Datenquellen-Abnahme und Datenerhalt (Entwicklungszweig)
+
+- Pro konfiguriertem Raum zaehlt die Lernfunktion in ihrem bestehenden JSON-Attribut hoechstens alle 25 Minuten einen gueltigen oder blockierten Datenquellen-Check. Keine neuen IP-Symcon-Variablen oder Rohdatenarchive.
+- Nach 6 Checks unterscheidet der ChatGPT-Lernbericht `QUELLEN_REGELMAESSIG`, `QUELLEN_WECHSELND` und `DATENQUELLE_BLOCKIERT` (vier aufeinanderfolgende Fehler). Vorher nur `BEOBACHTUNG`. Dies beurteilt Quellaktualisierung, nicht den physikalischen Heizbeitrag.
+- Begrenzte Statistik: maximal 10000 Checks, begrenzte Serienzaehler, gleitende Erfolgsquote und letzter Fehlergrund. Unbekannte verschachtelte Protokolle werden verworfen.
+- Beschadigte JSON-Lernzustaende und unbekannte kuenftige Schema-Versionen werden vor JEDEM Lernschritt als nicht schreibbar behandelt. Bestehende Langzeitstatistik bleibt unveraendert; Warnung in beiden Lernberichten.
+- Ein komplett leeres `{}` (Werkszustand) wird dagegen automatisch initialisiert. Keine manuellen Reparaturbefehle oder pauschale Speicher-Resets.
+- Der Offline-Symcon-Adaptertest prueft ueberdies Sensor-Neuzuordnung: Eine geaenderte Temperaturquelle verwirft die alten thermischen Statistiken fuer diesen Raum.
+- Fuenfjahrtest inkl. Sensorausfaellen, Relay-Stale-Simulation und Datenquellen-Abnahme: **963600 synthetische Raummessungen**, 396 alte Temperaturwerte, 308 alte Relaisrueckmeldungen, 1308 Wetterluecken; Zustand nach einem Jahr **26263 Bytes**, nach fuenf Jahren **26521 Bytes**, Maximum **26563 Bytes**. Zahlen sind Simulationsresultate, keine SymBox-Messwerte.
+- Reale SymBox-Abnahme der 11 Raum-Messpaare weiterhin notwendig. `main` und produktive LCN-Steuerung bleiben unveraendert.
+
 ## SMART-FBH – SymBox-Datenqualitaet und isolierte Raumfehler (Entwicklung)
 
 - Der 30-Minuten-Lernlauf klassifiziert die letzte vergebliche Raumerfassung getrennt: `TEMP_MISSING`, `TEMP_STALE`, `TEMP_OR_TARGET_INVALID`, `RELAY_MISSING`, `RELAY_STALE`, `RELAY_INVALID`, `READ_ERROR`.
@@ -17,7 +28,7 @@
 
 - Separater CI-Test `tests/thermal_learning_five_years.php`: elf synthetische Raeume, fuenf Jahre, 30-Minuten-Takt, 963600 Raummessungen.
 - Enthalten: saisonale Aussentemperaturen, Relaiswechsel, 1308 Wetterdatenluecken, 396 veraltete Sensormeldungen sowie ein Test zur Entfernung uebergrosser verschachtelter Alt-Daten.
-- Aktualisierter bestandener Dauerlauf mit zweitem Langzeitmittel: JSON-Lernzustand nach Jahr 1 **24822 Bytes**, nach Jahr 5 **25092 Bytes**, Maximum **25122 Bytes**. Diese Zahlen gelten ausschliesslich fuer den Simulationsdatensatz ohne SymBox-Archive oder sonstige Betriebssystemdaten.
+- Aktuellster bestandener Dauerlauf mit Langzeitmittel und Datenquellen-Abnahme: JSON-Lernzustand nach Jahr 1 **26263 Bytes**, nach Jahr 5 **26521 Bytes**, Maximum **26563 Bytes**. Diese Zahlen gelten ausschliesslich fuer den Simulationsdatensatz ohne SymBox-Archive oder sonstige Betriebssystemdaten.
 - Tiefenbereinigung akzeptiert nur fest definierte Statistikgruppen und Kategorien sowie maximal sechs Wetterpunkte; verschachtelte Fremd-Daten werden verworfen.
 - Das gemeinsame Wetterringmodell ist jetzt eine eigenstaendig offline pruefbare Funktion, ohne Wetterabrufe oder zusaetzliche IP-Symcon-Variablen.
 - **Zwei Zeitskalen:** bestehender kurzfristiger EWMA-Mittelwert plus ein langsamer `long_mean`-Referenzwert. Pro Kennwert nur eine Zahl mehr; bei alten Statistiken aus vorhandenem Mittelwert initialisiert, ohne historische Werte zu erfinden.
