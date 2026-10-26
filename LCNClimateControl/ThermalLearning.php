@@ -388,6 +388,42 @@ final class LCNThermalLearningModel
 
 trait LCNClimateThermalLearning
 {
+    /** The SAME compact and bounded persistence path in heating and pause. */
+    private function WriteBoundedThermalLearningState(array $state): void
+    {
+        $state = array_intersect_key($state, array_flip([
+            'schema', 'rooms', 'created_at', 'weather_history',
+            'last_tick_at', 'last_processed', 'paused_reason', 'last_exclusions'
+        ]));
+        $rooms = (array) ($state['rooms'] ?? []);
+        foreach ($rooms as &$roomState) {
+            $roomState = LCNThermalLearningModel::compactRoom((array) $roomState);
+        }
+        unset($roomState);
+        $state['rooms'] = $rooms;
+        $state['weather_history'] = LCNThermalLearningModel::outdoorContext(
+            (array) ($state['weather_history'] ?? []), time(), null)['points'];
+        $allowedReasons = [
+            'TEMP_MISSING', 'TEMP_STALE', 'TEMP_OR_TARGET_INVALID',
+            'RELAY_MISSING', 'RELAY_STALE', 'READ_ERROR'
+        ];
+        $reasons = [];
+        foreach (array_slice((array) ($state['last_exclusions'] ?? []), 0, 30, true) as $id => $reason) {
+            if (is_string($reason) && in_array($reason, $allowedReasons, true)) {
+                $reasons[(string) $id] = $reason;
+            }
+        }
+        $state['last_exclusions'] = $reasons;
+        $state['paused_reason'] = substr((string) ($state['paused_reason'] ?? ''), 0, 150);
+        $encoded = json_encode($state, JSON_UNESCAPED_UNICODE);
+        if (!is_string($encoded) || strlen($encoded) > 131072) {
+            $this->SendDebug('PassiveThermalLearning',
+                'State rejected: invalid JSON or over 128 KiB', 0);
+            return;
+        }
+        $this->WriteAttributeString('ThermalLearningState', $encoded);
+    }
+
     /** This hook is intentionally disconnected from Worker, RequestAction and MessageSink. */
     public function ThermalLearningTick(): void
     {
@@ -429,16 +465,6 @@ trait LCNClimateThermalLearning
                 'last_exclusions'
             ]));
             $state['rooms'] = (array) ($state['rooms'] ?? []);
-            if ($this->GetMode() !== 0) {
-                // Heating and active floor cooling are never mixed in one model.
-                foreach ($state['rooms'] as &$roomState) {
-                    unset($roomState['last'], $roomState['phase'], $roomState['afterheat']);
-                }
-                unset($roomState);
-                $state['paused_reason'] = 'Betriebsart nicht HEIZEN';
-                $this->WriteAttributeString('ThermalLearningState', json_encode($state, JSON_UNESCAPED_UNICODE) ?: '{}');
-                return;
-            }
             // Keep the persistent model bounded even after years of room-ID changes.
             // Remove orphaned room entries; only the current configured rooms survive.
             $configuredKeys = [];
@@ -451,6 +477,17 @@ trait LCNClimateThermalLearning
                 }
             }
             $state['rooms'] = array_intersect_key((array) ($state['rooms'] ?? []), $configuredKeys);
+            if ($this->GetMode() !== 0) {
+                // Heating and active floor cooling are never mixed in one model.
+                foreach ($state['rooms'] as &$roomState) {
+                    $roomState = (array) $roomState;
+                    unset($roomState['last'], $roomState['phase'], $roomState['afterheat']);
+                }
+                unset($roomState);
+                $state['paused_reason'] = 'Betriebsart nicht HEIZEN';
+                $this->WriteBoundedThermalLearningState($state);
+                return;
+            }
             $weather = LCNThermalLearningModel::outdoorContext(
                 (array) ($state['weather_history'] ?? []), $now, $outside);
             $state['weather_history'] = $weather['points'];
@@ -515,7 +552,8 @@ trait LCNClimateThermalLearning
                 if ($age >= 1500 && $age <= 2700 && is_numeric($prior['temp'] ?? null)
                     && (int) ($tMeta['VariableUpdated'] ?? 0) > (int) ($prior['temp_sample_at'] ?? 0)) {
                     $delta = (float) $temp - (float) $prior['temp'];
-                    if (abs($delta) <= 0.8 && isset($prior['valve'])
+                    if (abs($delta) <= 0.8 && !isset($previous['afterheat'])
+                        && isset($prior['valve'])
                         && (bool) $prior['valve'] === (bool) GetValue($statusID)
                         && abs((float) $target - (float) ($prior['target'] ?? $target)) <= 0.15
                         && $now - (int) ($meta['VariableUpdated'] ?? 0) <= 1800
@@ -553,20 +591,7 @@ trait LCNClimateThermalLearning
             $state['last_processed'] = $processed;
             $state['last_exclusions'] = array_slice($exclusions, 0, 30, true);
             $state['paused_reason'] = $processed === 0 ? 'Keine aktuellen, eindeutig zugeordneten Messpaare' : '';
-            // Do not persist transient or unknown fields from old/foreign schemas.
-            // Each room has a fixed set of fields: no event history or daily samples.
-            foreach ($state['rooms'] as &$compactRoom) {
-                $compactRoom = LCNThermalLearningModel::compactRoom((array) $compactRoom);
-            }
-            unset($compactRoom);
-            // Bounded JSON guard: refuse unexpected growth rather than persisting
-            // arbitrarily large state. Previous valid state stays available.
-            $encodedState = json_encode($state, JSON_UNESCAPED_UNICODE);
-            if (!is_string($encodedState) || strlen($encodedState) > 131072) {
-                $this->SendDebug('PassiveThermalLearning', 'State rejected: invalid JSON or over 128 KiB', 0);
-                return;
-            }
-            $this->WriteAttributeString('ThermalLearningState', $encodedState);
+            $this->WriteBoundedThermalLearningState($state);
         } catch (Throwable $error) {
             // Learning failure must NEVER propagate into working regulation or instance status.
             $this->SendDebug('PassiveThermalLearning', $error->getMessage(), 0);
