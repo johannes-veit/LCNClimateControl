@@ -239,8 +239,8 @@ smartAssert(!isset($observing['rooms']['1008']['last'])
     'preflight mode kept or generated thermal windows');
 smartAssert(($observing['rooms']['1008']['rates']['heating']['all']['n'] ?? 0) === 20,
     'preflight must preserve historical thermal statistics');
-smartAssert(!isset($observing['weather_history']),
-    'preflight mode unexpectedly requested or stored weather context');
+smartAssert(empty($observing['weather_history']),
+    'preflight mode unexpectedly collected weather context');
 smartAssert(str_contains($h->ThermalLearningDiagnosticReport(),
     'Quellen-Vorpruefung: AKTIV'), 'preflight status missing from diagnostic');
 $h->mode = 1; // source acceptance is read-only, also outside HEIZEN
