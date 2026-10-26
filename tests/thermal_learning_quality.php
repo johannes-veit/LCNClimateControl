@@ -77,4 +77,19 @@ verify(($s['weather_trend_rates']['heating']['outside_rising']['n'] ?? 0) === 1,
 verify(!isset($s['weather_trend_rates']['heating']['outside_falling']),
     'incorrect weather trend classification');
 
+// Normalized passive-cooling indicator: 0.2 C/h with a 20 K
+// indoor/outdoor difference corresponds to 0.1 C/h per 10 K.
+$s = [];
+for ($i=0; $i<=2; ++$i) {
+    $when = $t + $i * 1800;
+    $s = LCNThermalLearningModel::observe($s, [
+        'time'=>$when, 'temp'=>22.0 - 0.1*$i, 'target'=>22.0,
+        'valve'=>false, 'outside'=>2.0,
+        'temp_sample_at'=>$when, 'valve_sample_at'=>$when
+    ]);
+}
+verify(($s['loss_proxy']['n'] ?? 0) === 1, 'normalized cooling sample missing');
+verify(abs((float) $s['loss_proxy']['mean'] - 0.1005) < 0.01,
+    'normalized cooling magnitude incorrect');
+
 echo "30-minute SMART-FBH model regression tests passed\n";
