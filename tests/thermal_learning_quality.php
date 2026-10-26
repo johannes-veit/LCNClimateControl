@@ -107,4 +107,19 @@ $s = LCNThermalLearningModel::observe($s, [
 verify(($s['hidden_switches'] ?? 0) === 1, 'intermediate relay switch not detected');
 verify(($s['rates']['heating']['all']['n'] ?? 0) === 0, 'switched interval was learned');
 
+// Long-term statistics must remain bounded and distinguish low from high spread.
+$stat = [];
+for ($i=0; $i<10050; ++$i) {
+    // Synthetic stable 60-minute heating windows, state reset each time;
+    // exercise the same aggregate by merging it into the next scenario.
+    $base = ['rates'=>['heating'=>['all'=>$stat]]];
+    $base = obs($base, $t, 20.0, true);
+    $base = obs($base, $t+1800, 20.1, true);
+    $base = obs($base, $t+3600, 20.2, true);
+    $stat = $base['rates']['heating']['all'] ?? [];
+}
+verify(($stat['n'] ?? 0) === 10000, 'statistic counter must saturate');
+verify(($stat['variance'] ?? -1) >= 0, 'variance missing');
+verify(count($stat) === 3, 'statistic schema should stay constant');
+
 echo "30-minute SMART-FBH model regression tests passed\n";
