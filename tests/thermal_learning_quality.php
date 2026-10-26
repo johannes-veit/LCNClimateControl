@@ -213,6 +213,15 @@ for ($i = 1; $i < 6; ++$i) {
 }
 verify(LCNThermalLearningModel::auditLabel($audit) === 'QUELLEN_REGELMAESSIG',
     'six fresh stable updates must requalify recovered relay');
+verify(LCNThermalLearningModel::auditLabel($audit, $recoveredAt + 5*1800+2701)
+    === 'ABNAHME_VERALTET',
+    'offline preflight must expire after 45 minutes without a new audit');
+verify(LCNThermalLearningModel::auditLabel($audit, $recoveredAt + 5*1800)
+    === 'QUELLEN_REGELMAESSIG',
+    'recent qualified sources must remain eligible');
+verify(LCNThermalLearningModel::auditLabel($audit, $recoveredAt + 5*1800-1)
+    === 'ABNAHME_VERALTET',
+    'future-dated source audit must not authorize learning');
 
 $compacted = LCNThermalLearningModel::compactRoom([
     'source_audit' => $audit + ['unbounded_events' => str_repeat('X', 100000)]
