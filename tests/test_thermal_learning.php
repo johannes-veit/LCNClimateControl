@@ -81,3 +81,85 @@ check_learning(str_contains($module, "LCNC_ThermalLearningTick"),
 check_learning(!str_contains($module, "ThermalLearningTick();"),
     'learner not called from an existing control path');
 echo "SMART-FBH passive thermal learning model and isolation OK\n";
+
+
+// Standalone diagnostic simulation, without an IP-Symcon runtime or LCN bus.
+function IPS_VariableExists(int $id): bool { return in_array($id, [100, 200, 300], true); }
+function IPS_GetVariable(int $id): array {
+    return ['VariableUpdated' => time() - ($id === 100 && $GLOBALS['stale_temperature'] ? 1900 : 60)];
+}
+function GetValue(int $id): mixed { return [100 => 21.2, 200 => 22.0, 300 => true][$id] ?? null; }
+function IPS_InstanceExists(int $id): bool { return $id === 40477; }
+function JVWC_Snapshot(int $id): string {
+    return json_encode([
+        'issued_at' => time(), 'quality' => 'VERIFIED',
+        'current' => ['temperature' => 5.5],
+        'reason' => 'Wetterstation und DWD plausibel',
+    ]);
+}
+$GLOBALS['stale_temperature'] = false;
+
+final class ThermalDiagnosticStub
+{
+    use LCNClimateThermalLearning;
+    public int $InstanceID = 17597;
+    public array $writes = [];
+    public bool $enabled = true;
+    public function ReadPropertyBoolean(string $name): bool { return $this->enabled; }
+    public function ReadPropertyInteger(string $name): int { return 40477; }
+    public function ReadAttributeString(string $name): string {
+        return json_encode([
+            'created_at' => time() - 86400, 'last_tick_at' => time() - 90,
+            'last_processed' => 1,
+            'rooms' => ['200' => [
+                'name' => 'EG Wohnen',
+                'last' => ['time' => time() - 90],
+                'rates' => [
+                    'heating' => ['all' => ['n' => 3, 'mean' => 0.2345]],
+                    'passive_cooling' => ['all' => ['n' => 1, 'mean' => 0.1]]
+                ],
+            ]]
+        ]);
+    }
+    public function GetMode(): int { return 0; }
+    public function GetRooms(): array { return [[
+        'Enabled' => true, 'Name' => 'EG Wohnen',
+        'TargetVariable' => 200, 'TemperatureVariable' => 100
+    ]]; }
+    public function ReadTarget(int $id): ?float { return $id === 200 ? 22.0 : null; }
+    public function AutoCoolingReadOnlyDiscovery(array $room): array {
+        return ['RelayStatusVariable' => 300];
+    }
+    public function SetValue(string $ident, mixed $value): void { $this->writes[$ident] = $value; }
+    public function SendDebug(string $name, string $value, int $format): void {
+        throw new RuntimeException('No debug/error expected: ' . $name . ' ' . $value);
+    }
+}
+$diag = new ThermalDiagnosticStub();
+$text = $diag->ThermalLearningDiagnosticReport();
+check_learning(str_contains($text, 'SMART-FBH – LERN-DIAGNOSE AN CHATGPT'), 'own diagnostic heading');
+check_learning(str_contains($text, 'EG Wohnen | OK'), 'good per-room native inputs');
+check_learning(str_contains($text, 'Wetterqualität: VERIFIED'), 'reads shared weather snapshot');
+check_learning(str_contains($text, '0,23 °C/h (3 Fenster)'), 'learned rate and confidence in report');
+check_learning(str_contains($text, 'passives Auskühlen: lernt (1/3 Fenster)'), 'insufficient data disclosed');
+check_learning(str_contains($text, 'Datenquellen jetzt verwertbar: 1'), 'healthy room summary');
+$diag->UpdateThermalLearningDiagnostic();
+check_learning(($diag->writes['ThermalLearningDiagnostic'] ?? '') === $text
+    || str_contains($diag->writes['ThermalLearningDiagnostic'] ?? '', 'LERN-DIAGNOSE AN CHATGPT'),
+    'copyable diagnostic string written to its own variable');
+$GLOBALS['stale_temperature'] = true;
+$text = $diag->ThermalLearningDiagnosticReport();
+check_learning(str_contains($text, 'Isttemperatur fehlt/älter als 30 Minuten'), 'stale room input flagged');
+check_learning(str_contains($text, 'Datenquellen jetzt verwertbar: 0'), 'stale room excluded');
+$GLOBALS['stale_temperature'] = false;
+$diag->enabled = false;
+check_learning(str_contains($diag->ThermalLearningDiagnosticReport(), 'AUS (in der Modulkonfiguration aktivieren)'),
+    'inactive learning clearly identified');
+
+check_learning(str_contains($module, "MaintainVariable('ThermalLearningDiagnostic'"),
+    'exactly one own ChatGPT learning diagnostic string');
+check_learning(str_contains($module, "LCNC_UpdateThermalLearningDiagnostic"),
+    'independent report timer wired');
+check_learning(!str_contains($module, 'ThermalLearningDiagnosticReport();' . "\n" . '        $this->Request'),
+    'diagnostic does not touch command path');
+echo "SMART-FBH own ChatGPT diagnostic, weather and per-room input quality OK\n";

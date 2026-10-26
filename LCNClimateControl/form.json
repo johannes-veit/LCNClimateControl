@@ -399,6 +399,11 @@
       "type": "Button",
       "caption": "SMART-FBH: Passiven Lernstatus anzeigen (nur lesen)",
       "onClick": "echo LCNC_ThermalLearningReport($id);"
+    },
+    {
+      "type": "Button",
+      "caption": "SMART-FBH: Lern-Diagnose für ChatGPT anzeigen (nur lesen)",
+      "onClick": "echo LCNC_ThermalLearningDiagnosticReport($id);"
     }
   ],
   "status": [

@@ -1,6 +1,17 @@
 # LCN Climate Control – IP-Symcon 9
 
-**Stand: v0.5.4 Build 54 – optionale passive SMART-FBH-Lernphase, bestehende HEIZ-/KÜHL-Regelung unverändert.**
+**Stand: v0.5.5 Build 55 – SMART-FBH mit eigener ChatGPT-Lerndiagnose; HEIZ-/KÜHL-Regelung unverändert.**
+
+## 0.5.5 Build 55 – Lern-Diagnose an ChatGPT
+
+- Genau eine zusätzliche Stringvariable in der bestehenden Instanz: **„SMART-FBH – Senden an ChatGPT“** (`ThermalLearningDiagnostic`). Die bisherige Steuerungsdiagnose bleibt bestehen.
+- Diagnose enthält Aktivierung, Zeitpunkt des letzten Lernlaufs, Betriebsart, Datenfrische der elf Räume (Ist, Soll, native Relaisrückmeldung), beobachtete Heiz-/Auskühl-/Nachlauffenster und Fehlerursachen.
+- WetterZentrale `#40477` wird **ausschließlich lesend** über ihren bestehenden Snapshot geprüft: Qualität, Aktualität, Außentemperatur und Begründung, ohne eigene Wetterabrufe.
+- Bei aktivierter Lernfunktion automatisches Diagnose-Update alle fünf Minuten; direkt nach „Übernehmen“ einmal sofort. Zusätzlich Konfigurationsknopf zum Anzeigen.
+- Lernfunktion unverändert **standardmäßig AUS**; in Instanz `#17597` im Panel „SMART-FBH“ aktivieren und **Übernehmen** drücken. Nach 5–10 Minuten die neue Variable kopieren und an ChatGPT senden; stabile Lernraten entstehen erst bei echten längeren Heizzyklen.
+- **Keine** Änderungen an bestehenden LCN-Reglern, A7/A8, Relaisbefehlen, S1-Sperren, Kühlfreigaben, Raum-Sollwerten, Visualisierung oder Heiz-/Kühl-Workern.
+
+
 
 ## 0.5.4 Build 54 – SMART-FBH lernt nur lesend
 
