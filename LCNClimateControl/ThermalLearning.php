@@ -12,7 +12,23 @@ final class LCNThermalLearningModel
     {
         $n = min(10000, max(0, (int) ($entry['n'] ?? 0)) + 1);
         $old = isset($entry['mean']) ? (float) $entry['mean'] : $value;
-        return ['n' => $n, 'mean' => round($n === 1 ? $value : (0.85 * $old + 0.15 * $value), 4)];
+        $next = $n === 1 ? $value : (0.85 * $old + 0.15 * $value);
+        // Fixed-size dispersion estimate; no accumulated samples or history.
+        $hasVariance = isset($entry['variance']) && is_numeric($entry['variance']);
+        $oldVar = $hasVariance ? max(0.0, (float) $entry['variance']) : 0.0;
+        $variance = $n === 1 ? 0.0 : 0.85 * ($oldVar + 0.15 * ($value - $old) ** 2);
+        // Existing legacy averages have no known historical variance. Gather
+        // ten fresh observations before describing their dispersion as stable.
+        $qualityN = min(10000, max(0, (int) ($entry['quality_n'] ?? 0)) + 1);
+        // Two time scales: recent EWMA and persistent slowly moving baseline.
+        // Older models start their baseline at the existing estimate; no old
+        // samples are invented. The count is capped at 10000 for bounded state.
+        $longOld = isset($entry['long_mean']) && is_numeric($entry['long_mean'])
+            && is_finite((float) $entry['long_mean'])
+            ? (float) $entry['long_mean'] : $old;
+        $longMean = $n === 1 ? $value : $longOld + ($value - $longOld) / $n;
+        return ['n' => $n, 'mean' => round($next, 4), 'variance' => round($variance, 6),
+            'quality_n' => $qualityN, 'long_mean' => round($longMean, 4)];
     }
 
     private static function outdoorBand(?float $outdoor): string
@@ -21,6 +37,12 @@ final class LCNThermalLearningModel
             return 'unknown';
         }
         return $outdoor < 0 ? 'frost' : ($outdoor < 8 ? 'cold' : ($outdoor < 18 ? 'mild' : 'warm'));
+    }
+
+    // Difference between indoor and outdoor air, not an inferred heat-loss coefficient.
+    private static function gradientBand(float $delta): string
+    {
+        return $delta < 10.0 ? 'delta_lt10' : ($delta < 20.0 ? 'delta_10_20' : 'delta_ge20');
     }
 
     private static function finishAfterheat(array &$state): void
@@ -39,6 +61,249 @@ final class LCNThermalLearningModel
         unset($state['afterheat']);
     }
 
+    /**
+     * Source readiness for 30-minute snapshots. A last value change is NOT
+     * the same as a refreshed status update; only VariableUpdated proves
+     * that this data source was reported again.
+     */
+    /** 0 means all rooms; nonzero restricts thermal samples to a single S1 room. */
+    public static function isReferenceRoom(int $targetID, int $referenceID): bool
+    {
+        return $targetID > 0 && ($referenceID === 0 || $referenceID === $targetID);
+    }
+
+    public static function sourceReason(int $now, int $tempUpdated, int $relayUpdated): string
+    {
+        if ($tempUpdated <= 0 || $tempUpdated > $now
+            || $now - $tempUpdated > 1800) {
+            return 'TEMP_STALE';
+        }
+        if ($relayUpdated <= 0 || $relayUpdated > $now
+            || $now - $relayUpdated > 1800) {
+            return 'RELAY_STALE';
+        }
+        return 'OK';
+    }
+
+    /**
+     * Compact source-readiness trend, recorded at most once per 25 minutes.
+     * It qualifies SOURCE FRESHNESS, never proves physical heating behaviour.
+     */
+    public static function auditSource(array $old, string $reason, int $now): array
+    {
+        $previousAt = (int) ($old['last_checked_at'] ?? 0);
+        if ($previousAt > 0 && $previousAt <= $now && $now - $previousAt < 1500) {
+            return $old;
+        }
+        // A long pause/outage must not inherit a previously green source status.
+        // Requalify from scratch after more than three normal 30-min slots.
+        if ($previousAt > $now || ($previousAt > 0 && $now - $previousAt > 5400)) {
+            $old = [];
+        }
+        $good = $reason === 'OK';
+        $checks = min(10000, max(0, (int) ($old['checks'] ?? 0)) + 1);
+        $previousRate = min(1.0, max(0.0,
+            (float) ($old['recent_ok'] ?? ($good ? 1.0 : 0.0))));
+        $recentRate = $checks === 1 ? ($good ? 1.0 : 0.0)
+            : (0.875 * $previousRate + ($good ? 0.125 : 0.0));
+        return [
+            'checks' => $checks,
+            'recent_ok' => round($recentRate, 4),
+            'ok_streak' => $good
+                ? min(10000, (int) ($old['ok_streak'] ?? 0) + 1) : 0,
+            'bad_streak' => $good ? 0
+                : min(10000, (int) ($old['bad_streak'] ?? 0) + 1),
+            'last_reason' => $good ? 'OK' : $reason,
+            'last_checked_at' => $now
+        ];
+    }
+
+    public static function auditLabel(array $audit, ?int $now = null): string
+    {
+        // Live eligibility requires a recent audit, not merely a formerly
+        // green value left behind after a long stopped timer or cooling mode.
+        if ($now !== null) {
+            $last = (int) ($audit['last_checked_at'] ?? 0);
+            if ($last <= 0 || $last > $now || $now - $last > 2700) {
+                return 'ABNAHME_VERALTET';
+            }
+        }
+        $count = (int) ($audit['checks'] ?? 0);
+        if ($count < 6) { return 'BEOBACHTUNG (' . $count . '/6)'; }
+        if ((int) ($audit['bad_streak'] ?? 0) >= 4) {
+            return 'DATENQUELLE_BLOCKIERT';
+        }
+        if ((float) ($audit['recent_ok'] ?? 0.0) >= 0.8
+            && (int) ($audit['ok_streak'] ?? 0) >= 6
+            && ($audit['last_reason'] ?? '') === 'OK') {
+            return 'QUELLEN_REGELMAESSIG';
+        }
+        return 'QUELLEN_WECHSELND';
+    }
+
+    /**
+     * Fixed-size shared outdoor context. Never store raw weather histories.
+     * Return both the updated ring and the observation about two hours ago.
+     */
+    public static function outdoorContext(array $history, int $now, ?float $outdoor): array
+    {
+        $clean = [];
+        foreach (array_slice($history, -12) as $point) {
+            if (!is_array($point) || !is_numeric($point['t'] ?? null)
+                || !is_numeric($point['c'] ?? null)) { continue; }
+            $t = (int) $point['t'];
+            $c = (float) $point['c'];
+            if ($t <= $now && $t > $now - 10800
+                && $t > 0 && is_finite($c) && $c >= -45 && $c <= 55) {
+                $clean[] = ['t' => $t, 'c' => round($c, 2)];
+            }
+        }
+        $clean = array_slice($clean, -6);
+        $lag = null;
+        if ($outdoor !== null && is_finite($outdoor)
+            && $outdoor >= -45 && $outdoor <= 55) {
+            foreach (array_reverse($clean) as $point) {
+                $age = $now - $point['t'];
+                if ($age >= 6300 && $age <= 8100) {
+                    $lag = $point['c'];
+                    break;
+                }
+            }
+            $clean[] = ['t' => $now, 'c' => round($outdoor, 2)];
+        }
+        return ['points' => array_slice($clean, -6), 'lag' => $lag];
+    }
+
+    /**
+     * Discard stale nested keys before persisting the years-long learning state.
+     * All allowed categories are fixed: adding samples never adds JSON array rows.
+     */
+    public static function compactRoom(array $room): array
+    {
+        $allowed = ['name', 'last', 'phase', 'afterheat', 'afterheat_model',
+            'rates', 'gradient_rates', 'weather_trend_rates', 'loss_proxy',
+            'last_evidence_at', 'resets', 'rejected_stale', 'hidden_switches',
+            'house_context_by_valve', 'source_temp_id', 'source_relay_id',
+            'source_audit'];
+        $room = array_intersect_key($room, array_flip($allowed));
+        $stat = static function ($value): array {
+            if (!is_array($value) || !is_numeric($value['n'] ?? null)
+                || !is_numeric($value['mean'] ?? null)
+                || !is_finite((float) $value['mean'])) {
+                return [];
+            }
+            $s = ['n' => min(10000, max(0, (int) $value['n'])),
+                'mean' => round((float) $value['mean'], 4)];
+            if (isset($value['variance']) && is_numeric($value['variance'])
+                && is_finite((float) $value['variance'])) {
+                $s['variance'] = round(min(10000.0, max(0.0, (float) $value['variance'])), 6);
+            }
+            if (isset($value['quality_n'])) {
+                $s['quality_n'] = min(10000, max(0, (int) $value['quality_n']));
+            }
+            if (isset($value['long_mean']) && is_numeric($value['long_mean'])
+                && is_finite((float) $value['long_mean'])) {
+                $s['long_mean'] = round((float) $value['long_mean'], 4);
+            }
+            return $s;
+        };
+        $statFamilies = [
+            'rates' => [
+                'heating' => ['all', 'unknown', 'frost', 'cold', 'mild', 'warm'],
+                'passive_cooling' => ['all', 'unknown', 'frost', 'cold', 'mild', 'warm']
+            ],
+            'gradient_rates' => [
+                'heating' => ['delta_lt10', 'delta_10_20', 'delta_ge20'],
+                'passive_cooling' => ['delta_lt10', 'delta_10_20', 'delta_ge20']
+            ],
+            'weather_trend_rates' => [
+                'heating' => ['outside_rising', 'outside_falling'],
+                'passive_cooling' => ['outside_rising', 'outside_falling']
+            ],
+            'afterheat_model' => ['gain' => null, 'delay_minutes' => null]
+        ];
+        foreach ($statFamilies as $family => $kinds) {
+            $saved = is_array($room[$family] ?? null) ? $room[$family] : [];
+            $clean = [];
+            foreach ($kinds as $kind => $bands) {
+                if ($bands === null) {
+                    $v = $stat($saved[$kind] ?? null);
+                    if ($v !== []) { $clean[$kind] = $v; }
+                    continue;
+                }
+                $sub = is_array($saved[$kind] ?? null) ? $saved[$kind] : [];
+                foreach ($bands as $band) {
+                    $v = $stat($sub[$band] ?? null);
+                    if ($v !== []) { $clean[$kind][$band] = $v; }
+                }
+            }
+            if ($clean === []) { unset($room[$family]); }
+            else { $room[$family] = $clean; }
+        }
+        $loss = $stat($room['loss_proxy'] ?? null);
+        if ($loss === []) { unset($room['loss_proxy']); }
+        else { $room['loss_proxy'] = $loss; }
+
+        foreach (['last', 'phase'] as $field) {
+            if (!is_array($room[$field] ?? null)) { unset($room[$field]); continue; }
+            $room[$field] = array_intersect_key($room[$field], array_flip([
+                'time','temp','target','valve','outside','temp_sample_at',
+                'valve_sample_at','valve_changed_at','outside_lag'
+            ]));
+        }
+        if (isset($room['afterheat'])) {
+            $room['afterheat'] = is_array($room['afterheat'])
+                ? array_intersect_key($room['afterheat'], array_flip([
+                    'valid','begin_at','begin_temp','peak','peak_at'
+                ])) : [];
+        }
+        $counts = is_array($room['house_context_by_valve'] ?? null)
+            ? $room['house_context_by_valve'] : [];
+        $cleanCounts = [];
+        foreach (['valve_on','valve_off'] as $kind) {
+            $v = is_array($counts[$kind] ?? null) ? $counts[$kind] : [];
+            foreach (['similar','above','below'] as $label) {
+                if (isset($v[$label]) && is_numeric($v[$label])) {
+                    $cleanCounts[$kind][$label] =
+                        min(10000, max(0, (int) $v[$label]));
+                }
+            }
+        }
+        if ($cleanCounts === []) { unset($room['house_context_by_valve']); }
+        else { $room['house_context_by_valve'] = $cleanCounts; }
+        if (isset($room['name'])) {
+            $room['name'] = is_string($room['name'])
+                ? substr($room['name'], 0, 120) : '';
+        }
+        foreach (['resets','rejected_stale','hidden_switches'] as $key) {
+            if (isset($room[$key])) {
+                $room[$key] = min(100000, max(0, (int) $room[$key]));
+            }
+        }
+        if (isset($room['source_audit'])) {
+            $rawAudit = is_array($room['source_audit']) ? $room['source_audit'] : [];
+            $audit = [];
+            foreach (['checks', 'ok_streak', 'bad_streak', 'last_checked_at'] as $field) {
+                if (isset($rawAudit[$field]) && is_numeric($rawAudit[$field])) {
+                    $audit[$field] = max(0, (int) $rawAudit[$field]);
+                    if ($field !== 'last_checked_at') {
+                        $audit[$field] = min(10000, $audit[$field]);
+                    }
+                }
+            }
+            if (isset($rawAudit['recent_ok']) && is_numeric($rawAudit['recent_ok'])) {
+                $audit['recent_ok'] = round(min(1.0,
+                    max(0.0, (float) $rawAudit['recent_ok'])), 4);
+            }
+            if (is_string($rawAudit['last_reason'] ?? null)) {
+                $audit['last_reason'] = substr($rawAudit['last_reason'], 0, 30);
+            }
+            if ($audit === []) { unset($room['source_audit']); }
+            else { $room['source_audit'] = $audit; }
+        }
+        return $room;
+    }
+
     /** Pure, bounded state transition; callable in the PHP offline test without Symcon. */
     public static function observe(array $state, array $input): array
     {
@@ -46,6 +311,16 @@ final class LCNThermalLearningModel
         $temp = (float) ($input['temp'] ?? NAN);
         $target = (float) ($input['target'] ?? NAN);
         $valve = $input['valve'] ?? null;
+        $tempSampleAt = (int) ($input['temp_sample_at'] ?? $time);
+        $valveSampleAt = (int) ($input['valve_sample_at'] ?? $time);
+        $valveChangedAt = (int) ($input['valve_changed_at'] ?? 0);
+        // Reject future, absent or stale source readings before opening a window.
+        if ($tempSampleAt <= 0 || $tempSampleAt > $time || $time - $tempSampleAt > 1800
+            || $valveSampleAt <= 0 || $valveSampleAt > $time || $time - $valveSampleAt > 1800) {
+            unset($state['last'], $state['phase'], $state['afterheat']);
+            $state['rejected_stale'] = min(100000, 1 + (int) ($state['rejected_stale'] ?? 0));
+            return $state;
+        }
         if ($time <= 0 || !is_finite($temp) || !is_finite($target)
             || $temp < 0 || $temp > 45 || $target < 5 || $target > 40
             || !is_bool($valve)) {
@@ -57,7 +332,12 @@ final class LCNThermalLearningModel
             ? (float) $input['outside'] : null;
         $observation = [
             'time' => $time, 'temp' => $temp, 'target' => $target,
-            'valve' => $valve, 'outside' => $outside
+            'valve' => $valve, 'outside' => $outside,
+            'temp_sample_at' => $tempSampleAt,
+            'valve_sample_at' => $valveSampleAt,
+            'valve_changed_at' => $valveChangedAt,
+            'outside_lag' => isset($input['outside_lag']) && is_numeric($input['outside_lag'])
+                ? (float) $input['outside_lag'] : null
         ];
         $previous = $state['last'] ?? null;
         if (!is_array($previous)) {
@@ -70,9 +350,21 @@ final class LCNThermalLearningModel
             return $state;
         }
         $changed = $valve !== (bool) ($previous['valve'] ?? false);
+        // VariableChanged reveals a relay transition even if both 30-min
+        // snapshots show the same state (ON -> OFF -> ON).
+        $intermediateSwitch = $valveChangedAt > (int) ($previous['time'] ?? 0)
+            && $valveChangedAt <= $time;
+        if ($intermediateSwitch && !$changed) {
+            unset($state['afterheat']);
+            $state['phase'] = $observation;
+            $state['last'] = $observation;
+            $state['resets'] = min(100000, 1 + (int) ($state['resets'] ?? 0));
+            $state['hidden_switches'] = min(100000, 1 + (int) ($state['hidden_switches'] ?? 0));
+            return $state;
+        }
         $targetChanged = abs($target - (float) ($previous['target'] ?? $target)) > 0.15;
         $implausibleJump = abs($temp - (float) ($previous['temp'] ?? $temp)) > max(1.2, 3.0 * $gap / 3600);
-        if ($gap > 1800 || $targetChanged || $implausibleJump) {
+        if ($gap > 2700 || $targetChanged || $implausibleJump) {
             unset($state['afterheat']);
             $state['phase'] = $observation;
             $state['last'] = $observation;
@@ -95,6 +387,8 @@ final class LCNThermalLearningModel
                 $age = $time - (int) ($after['begin_at'] ?? 0);
                 if ($age > 180 * 60 || $temp < (float) ($after['peak'] ?? $temp) - 0.1) {
                     self::finishAfterheat($state);
+                    // A new cooling window starts only AFTER residual slab heat.
+                    $state['phase'] = $observation;
                 } elseif ($temp > (float) ($after['peak'] ?? $temp)) {
                     $state['afterheat']['peak'] = $temp;
                     $state['afterheat']['peak_at'] = $time;
@@ -110,12 +404,59 @@ final class LCNThermalLearningModel
                 $kind = $valve ? 'heating' : 'passive_cooling';
                 $valid = $valve ? ($rate >= 0.05 && $rate <= 2.5)
                     : ($rate <= -0.05 && $rate >= -2.5);
-                if ($valid) {
+                // Do not use cached temperature values as new endpoint evidence.
+                $endSampleAt = (int) ($observation['temp_sample_at'] ?? 0);
+                $startSampleAt = (int) ($phase['temp_sample_at'] ?? 0);
+                $freshEvidence = $endSampleAt > $startSampleAt
+                    && $endSampleAt <= $time && $time - $endSampleAt <= 1800;
+                // A status unchanged for hours must not imply that a relay never switched.
+                $startRelayAt = (int) ($phase['valve_sample_at'] ?? 0);
+                $endRelayAt = (int) ($observation['valve_sample_at'] ?? 0);
+                $freshEvidence = $freshEvidence && $endRelayAt > $startRelayAt;
+                // No relay value change may have occurred since this phase began.
+                // A recent VariableChanged timestamp proves interrupted exposure.
+                $lastRelaySwitch = (int) ($observation['valve_changed_at'] ?? 0);
+                $freshEvidence = $freshEvidence && ($lastRelaySwitch <= 0
+                    || $lastRelaySwitch <= (int) ($phase['time'] ?? 0));
+                // OFF does not yet mean passive cooling: the slab may still heat.
+                $residualHeat = !$valve && isset($state['afterheat']);
+                if ($valid && $freshEvidence && !$residualHeat) {
                     $band = self::outdoorBand($outside);
                     $state['rates'][$kind]['all'] = self::mean(
                         (array) ($state['rates'][$kind]['all'] ?? []), abs($rate));
                     $state['rates'][$kind][$band] = self::mean(
                         (array) ($state['rates'][$kind][$band] ?? []), abs($rate));
+                    // Compare only stable weather windows; do not mistake rapidly
+                    // changing outdoor conditions for a room's thermal constant.
+                    $startOutdoor = $phase['outside'] ?? null;
+                    if ($outside !== null && is_numeric($startOutdoor)
+                        && abs($outside - (float) $startOutdoor) <= 3.0) {
+                        $delta = (($temp + (float) $phase['temp']) / 2.0)
+                            - (($outside + (float) $startOutdoor) / 2.0);
+                        if ($delta >= 0.0 && $delta <= 50.0) {
+                            $gradientBand = self::gradientBand($delta);
+                            $state['gradient_rates'][$kind][$gradientBand] = self::mean(
+                                (array) ($state['gradient_rates'][$kind][$gradientBand] ?? []), abs($rate));
+                            // Observed normalized passive cooling, per 10 K difference.
+                            // Comparative indicator only; open doors and free gains confound it.
+                            if (!$valve && $delta >= 5.0 && $delta <= 35.0) {
+                                $normalized = abs($rate) * 10.0 / $delta;
+                                if ($normalized >= 0.005 && $normalized <= 3.0) {
+                                    $state['loss_proxy'] = self::mean(
+                                        (array) ($state['loss_proxy'] ?? []), $normalized);
+                                }
+                            }
+                        }
+                    }
+                    // The outdoor air from roughly two hours earlier is a
+                    // descriptive context, NOT proof of an individual room's lag.
+                    $lag = $observation['outside_lag'] ?? null;
+                    if ($lag !== null && is_finite((float) $lag)
+                        && $outside !== null && abs($outside - (float) $lag) >= 1.0) {
+                        $direction = $outside > (float) $lag ? 'outside_rising' : 'outside_falling';
+                        $state['weather_trend_rates'][$kind][$direction] = self::mean(
+                            (array) ($state['weather_trend_rates'][$kind][$direction] ?? []), abs($rate));
+                    }
                     $state['last_evidence_at'] = $time;
                 }
                 // Non-overlapping windows: avoid counting one warm-up many times.
@@ -131,25 +472,66 @@ final class LCNThermalLearningModel
 
 trait LCNClimateThermalLearning
 {
+    /** The SAME compact and bounded persistence path in heating and pause. */
+    private function WriteBoundedThermalLearningState(array $state): void
+    {
+        $state = array_intersect_key($state, array_flip([
+            'schema', 'rooms', 'created_at', 'weather_history',
+            'last_tick_at', 'last_processed', 'last_eligible', 'paused_reason', 'last_exclusions'
+        ]));
+        $rooms = (array) ($state['rooms'] ?? []);
+        foreach ($rooms as &$roomState) {
+            $roomState = LCNThermalLearningModel::compactRoom((array) $roomState);
+        }
+        unset($roomState);
+        $state['rooms'] = $rooms;
+        $state['weather_history'] = LCNThermalLearningModel::outdoorContext(
+            (array) ($state['weather_history'] ?? []), time(), null)['points'];
+        $allowedReasons = [
+            'TEMP_MISSING', 'TEMP_STALE', 'TEMP_OR_TARGET_INVALID',
+            'RELAY_MISSING', 'RELAY_STALE', 'RELAY_INVALID', 'READ_ERROR'
+        ];
+        $reasons = [];
+        foreach (array_slice((array) ($state['last_exclusions'] ?? []), 0, 30, true) as $id => $reason) {
+            if (is_string($reason) && in_array($reason, $allowedReasons, true)) {
+                $reasons[(string) $id] = $reason;
+            }
+        }
+        $state['last_exclusions'] = $reasons;
+        $state['paused_reason'] = substr((string) ($state['paused_reason'] ?? ''), 0, 150);
+        $encoded = json_encode($state, JSON_UNESCAPED_UNICODE);
+        if (!is_string($encoded) || strlen($encoded) > 131072) {
+            $this->SendDebug('PassiveThermalLearning',
+                'State rejected: invalid JSON or over 128 KiB', 0);
+            return;
+        }
+        $this->WriteAttributeString('ThermalLearningState', $encoded);
+    }
+
     /** This hook is intentionally disconnected from Worker, RequestAction and MessageSink. */
     public function ThermalLearningTick(): void
     {
         try {
-            if (!$this->ReadPropertyBoolean('ThermalLearningEnabled')) {
-                return;
-            }
+            $learn = $this->ReadPropertyBoolean('ThermalLearningEnabled');
+            $preflight = $this->ReadPropertyBoolean('ThermalSourcePreflightEnabled');
+            if (!$learn && !$preflight) { return; }
+            $preflightOnly = !$learn && $preflight;
             $now = time();
             $outside = null;
             $weatherID = $this->ReadPropertyInteger('ThermalWeatherCenterInstance');
-            if ($weatherID > 0 && function_exists('JVWC_Snapshot') && IPS_InstanceExists($weatherID)) {
+            if (!$preflightOnly && $weatherID > 0
+                && function_exists('JVWC_Snapshot') && IPS_InstanceExists($weatherID)) {
                 try {
                     $raw = json_decode((string) JVWC_Snapshot($weatherID), true);
-                    if (is_array($raw) && $now - (int) ($raw['issued_at'] ?? 0) <= 2100
+                    if (is_array($raw) && (int) ($raw['issued_at'] ?? 0) > 0
+                        && (int) $raw['issued_at'] <= $now
+                        && $now - (int) $raw['issued_at'] <= 2100
                         && in_array((string) ($raw['quality'] ?? ''), [
                             'VERIFIED', 'MODEL_SUPPORTED', 'PWS_ONLY', 'DWD_ONLY', 'DWD_REMOTE'
                         ], true) && is_array($raw['current'] ?? null)) {
                         $value = $raw['current']['temperature'] ?? null;
-                        if (is_numeric($value)) {
+                        if (is_numeric($value) && is_finite((float) $value)
+                            && (float) $value >= -45 && (float) $value <= 55) {
                             $outside = (float) $value;
                         }
                     }
@@ -157,63 +539,226 @@ trait LCNClimateThermalLearning
                     // Weather is optional: learn indoor behaviour without inventing weather.
                 }
             }
-            $state = json_decode($this->ReadAttributeString('ThermalLearningState'), true);
-            if (!is_array($state) || ($state['schema'] ?? 0) !== 1) {
+            $rawState = $this->ReadAttributeString('ThermalLearningState');
+            // A damaged persisted model must never silently erase years of
+            // learning. Only the documented empty fresh-install state may
+            // initialize schema 1. Recovery requires explicit user action.
+            if ($rawState === '{}' || $rawState === '') {
                 $state = ['schema' => 1, 'rooms' => [], 'created_at' => $now];
+            } else {
+                $state = json_decode($rawState, true);
+                if (!is_array($state) || ($state['schema'] ?? null) !== 1
+                    || !is_array($state['rooms'] ?? null)) {
+                    $this->SendDebug('PassiveThermalLearning',
+                        'Stored learning state invalid: preserved without overwrite', 0);
+                    return;
+                }
             }
-            if ($this->GetMode() !== 0) {
+            // Retain known state only: a broken previous schema or a legacy
+            // unknown field cannot permanently prevent the 128 KiB guard.
+            $state = array_intersect_key($state, array_flip([
+                'schema', 'rooms', 'created_at', 'weather_history',
+                'last_tick_at', 'last_processed', 'last_eligible', 'paused_reason',
+                'last_exclusions'
+            ]));
+            $state['rooms'] = (array) ($state['rooms'] ?? []);
+            // Keep the persistent model bounded even after years of room-ID changes.
+            // Remove orphaned room entries; only the current configured rooms survive.
+            $configuredKeys = [];
+            foreach ($this->GetRooms() as $configuredRoom) {
+                if (!empty($configuredRoom['Enabled'])) {
+                    $id = (int) ($configuredRoom['TargetVariable'] ?? 0);
+                    if ($id > 0) {
+                        $configuredKeys[(string) $id] = true;
+                    }
+                }
+            }
+            $state['rooms'] = array_intersect_key((array) ($state['rooms'] ?? []), $configuredKeys);
+            if ($this->GetMode() !== 0 && !$preflightOnly) {
                 // Heating and active floor cooling are never mixed in one model.
                 foreach ($state['rooms'] as &$roomState) {
+                    $roomState = (array) $roomState;
                     unset($roomState['last'], $roomState['phase'], $roomState['afterheat']);
                 }
                 unset($roomState);
                 $state['paused_reason'] = 'Betriebsart nicht HEIZEN';
-                $this->WriteAttributeString('ThermalLearningState', json_encode($state, JSON_UNESCAPED_UNICODE) ?: '{}');
+                $state['last_eligible'] = 0;
+                $state['last_processed'] = 0;
+                $this->WriteBoundedThermalLearningState($state);
                 return;
             }
+            if ($preflightOnly) {
+                // A preflight never holds a live heating phase. Preserve
+                // learned rates, but make any later learning opt-in start fresh.
+                foreach ($state['rooms'] as &$historicRoom) {
+                    $historicRoom = (array) $historicRoom;
+                    unset($historicRoom['last'], $historicRoom['phase'],
+                        $historicRoom['afterheat']);
+                }
+                unset($historicRoom);
+                $laggedOutdoor = null;
+            } else {
+                $weather = LCNThermalLearningModel::outdoorContext(
+                    (array) ($state['weather_history'] ?? []), $now, $outside);
+                $state['weather_history'] = $weather['points'];
+                $laggedOutdoor = $weather['lag'];
+            }
             $processed = 0;
+            $eligible = 0;
+            $referenceID = $this->ReadPropertyInteger('ThermalReferenceRoomTarget');
+            $changes = [];
+            $exclusions = [];
             foreach ($this->GetRooms() as $room) {
                 if (empty($room['Enabled'])) {
                     continue;
                 }
                 $targetID = (int) ($room['TargetVariable'] ?? 0);
+                $key = (string) $targetID;
+                try {
                 $tempID = (int) ($room['TemperatureVariable'] ?? 0);
                 if ($targetID <= 0 || $tempID <= 0 || !IPS_VariableExists($tempID)) {
+                    $exclusions[$key] = 'TEMP_MISSING';
                     continue;
                 }
                 $tMeta = IPS_GetVariable($tempID);
-                if ($now - (int) ($tMeta['VariableUpdated'] ?? 0) > 30 * 60) {
+                $tempUpdated = (int) ($tMeta['VariableUpdated'] ?? 0);
+                if (LCNThermalLearningModel::sourceReason($now, $tempUpdated, $now) !== 'OK') {
+                    $exclusions[$key] = 'TEMP_STALE';
                     continue;
                 }
                 $temp = GetValue($tempID);
                 $target = $this->ReadTarget($targetID);
-                if (!is_numeric($temp) || $target === null) {
+                if (!is_numeric($temp) || !is_finite((float) $temp)
+                    || (float) $temp < 0.0 || (float) $temp > 45.0
+                    || $target === null || !is_finite((float) $target)
+                    || (float) $target < 5.0 || (float) $target > 40.0) {
+                    $exclusions[$key] = 'TEMP_OR_TARGET_INVALID';
                     continue;
                 }
                 // Existing native read-only mapping; neither LCN reads nor commands.
                 $mapping = $this->AutoCoolingReadOnlyDiscovery($room);
                 $statusID = (int) ($mapping['RelayStatusVariable'] ?? 0);
                 if ($statusID <= 0 || !IPS_VariableExists($statusID)) {
+                    $exclusions[$key] = 'RELAY_MISSING';
                     continue;
                 }
                 $meta = IPS_GetVariable($statusID);
-                if ($now - (int) ($meta['VariableUpdated'] ?? 0) > 30 * 60) {
+                $relayUpdated = (int) ($meta['VariableUpdated'] ?? 0);
+                $sourceReason = LCNThermalLearningModel::sourceReason(
+                    $now, $tempUpdated, $relayUpdated);
+                if ($sourceReason !== 'OK') {
+                    $exclusions[$key] = $sourceReason;
                     continue;
                 }
-                $key = (string) $targetID; // Stable across room renaming.
+                // Use one coherent snapshot per room; never mix separate
+                // relay reads while evaluating one temperature observation.
+                $relayRaw = GetValue($statusID);
+                if (!is_bool($relayRaw) && $relayRaw !== 0 && $relayRaw !== 1) {
+                    $exclusions[$key] = 'RELAY_INVALID';
+                    continue;
+                }
+                $relayValue = (bool) $relayRaw;
+                // Stable target identifier survives room renaming.
                 $previous = (array) ($state['rooms'][$key] ?? []);
+                // Invalidate old learning when a sensor or relay is remapped.
+                // The S1 key alone does not guarantee physical source identity.
+                if (isset($previous['source_temp_id'], $previous['source_relay_id'])
+                    && ((int) $previous['source_temp_id'] !== $tempID
+                        || (int) $previous['source_relay_id'] !== $statusID)) {
+                    $previous = [];
+                }
+                $previous['source_temp_id'] = $tempID;
+                $previous['source_relay_id'] = $statusID;
                 $previous['name'] = (string) ($room['Name'] ?? ('Raum #' . $targetID));
+                if ($preflightOnly) {
+                    // No observe(), no phase, no thermal context, no learning.
+                    // The end-of-tick source-audit loop still records quality.
+                    $state['rooms'][$key] = $previous;
+                    ++$processed;
+                    continue;
+                }
+                // Other rooms remain visible to source audits, but may not
+                // contaminate the dedicated EG Bad reference experiment.
+                if (!LCNThermalLearningModel::isReferenceRoom($targetID, $referenceID)) {
+                    unset($previous['last'], $previous['phase'], $previous['afterheat']);
+                    $state['rooms'][$key] = $previous;
+                    ++$processed;
+                    continue;
+                }
+                // Strict separation: verify six successful, reasonably recent
+                // source updates before generating any new thermal samples.
+                // Source audits still collect on the normal 30-minute tick.
+                if (LCNThermalLearningModel::auditLabel(
+                    (array) ($previous['source_audit'] ?? []), $now) !== 'QUELLEN_REGELMAESSIG') {
+                    $state['rooms'][$key] = $previous;
+                    ++$processed;
+                    continue;
+                }
+                ++$eligible;
+                $prior = (array) ($previous['last'] ?? []);
+                $age = $now - (int) ($prior['time'] ?? 0);
+                if ($age >= 1500 && $age <= 2700 && is_numeric($prior['temp'] ?? null)
+                    && (int) ($tMeta['VariableUpdated'] ?? 0) > (int) ($prior['temp_sample_at'] ?? 0)) {
+                    $delta = (float) $temp - (float) $prior['temp'];
+                    if (abs($delta) <= 0.8 && !isset($previous['afterheat'])
+                        && isset($prior['valve'])
+                        && (bool) $prior['valve'] === $relayValue
+                        && abs((float) $target - (float) ($prior['target'] ?? $target)) <= 0.15
+                        && $now - (int) ($meta['VariableUpdated'] ?? 0) <= 1800
+                        && (int) ($meta['VariableChanged'] ?? 0) <= (int) ($prior['time'] ?? 0)) {
+                        $changes[$key] = ['delta' => $delta, 'valve' => $relayValue];
+                    }
+                }
                 $state['rooms'][$key] = LCNThermalLearningModel::observe($previous, [
                     'time' => $now, 'temp' => (float) $temp, 'target' => $target,
-                    'valve' => (bool) GetValue($statusID), 'outside' => $outside
+                    'valve' => $relayValue, 'outside' => $outside,
+                    'temp_sample_at' => (int) ($tMeta['VariableUpdated'] ?? 0),
+                    'valve_sample_at' => (int) ($meta['VariableUpdated'] ?? 0),
+                    'valve_changed_at' => (int) ($meta['VariableChanged'] ?? 0),
+                    'outside_lag' => $laggedOutdoor
                 ]);
                 ++$processed;
+                } catch (Throwable $roomError) {
+                    $exclusions[$key] = 'READ_ERROR';
+                    $this->SendDebug('PassiveThermalLearning.Room', 'Room '
+                        . $key . ': ' . $roomError->getMessage(), 0);
+                }
+            }
+            if (count($changes) >= 4) {
+                $sum = array_sum(array_column($changes, 'delta'));
+                $count = count($changes);
+                foreach ($changes as $id => $entry) {
+                    $relative = $entry['delta'] - ($sum - $entry['delta']) / ($count - 1);
+                    $label = abs($relative) <= 0.05 ? 'similar' : ($relative > 0 ? 'above' : 'below');
+                    $mode = $entry['valve'] ? 'valve_on' : 'valve_off';
+                    $state['rooms'][$id]['house_context_by_valve'][$mode][$label] = min(10000,
+                        1 + (int) ($state['rooms'][$id]['house_context_by_valve'][$mode][$label] ?? 0));
+                }
+            }
+            // Six or more normal 30-minute checks reveal recurrent stale
+            // sensor/relay inputs without storing any raw time series.
+            foreach ($this->GetRooms() as $configuredRoom) {
+                if (empty($configuredRoom['Enabled'])) { continue; }
+                $id = (int) ($configuredRoom['TargetVariable'] ?? 0);
+                if ($id <= 0) { continue; }
+                $key = (string) $id;
+                $roomState = (array) ($state['rooms'][$key] ?? []);
+                $reason = (string) ($exclusions[$key] ?? 'OK');
+                $roomState['source_audit'] = LCNThermalLearningModel::auditSource(
+                    (array) ($roomState['source_audit'] ?? []), $reason, $now);
+                if (!isset($roomState['name'])) {
+                    $roomState['name'] = (string) ($configuredRoom['Name'] ?? ('Raum #' . $id));
+                }
+                $state['rooms'][$key] = $roomState;
             }
             $state['last_tick_at'] = $now;
             $state['last_processed'] = $processed;
-            $state['paused_reason'] = $processed === 0 ? 'Keine aktuellen, eindeutig zugeordneten Messpaare' : '';
-            // No unbounded raw timeseries; only last sample, current period and aggregates.
-            $this->WriteAttributeString('ThermalLearningState', json_encode($state, JSON_UNESCAPED_UNICODE) ?: '{}');
+            $state['last_eligible'] = $eligible;
+            $state['last_exclusions'] = array_slice($exclusions, 0, 30, true);
+            $state['paused_reason'] = $preflightOnly
+                ? 'NUR QUELLEN-VORPRUEFUNG - THERMISCHES LERNEN AUS'
+                : ($processed === 0 ? 'Keine aktuellen, eindeutig zugeordneten Messpaare' : '');
+            $this->WriteBoundedThermalLearningState($state);
         } catch (Throwable $error) {
             // Learning failure must NEVER propagate into working regulation or instance status.
             $this->SendDebug('PassiveThermalLearning', $error->getMessage(), 0);
@@ -223,16 +768,30 @@ trait LCNClimateThermalLearning
     public function ThermalLearningReport(): string
     {
         $enabled = $this->ReadPropertyBoolean('ThermalLearningEnabled');
-        $state = json_decode($this->ReadAttributeString('ThermalLearningState'), true);
-        $lines = ['SMART-FBH – passives Lernen: ' . ($enabled ? 'AKTIV' : 'AUS'),
+        $preflight = $this->ReadPropertyBoolean('ThermalSourcePreflightEnabled');
+        $rawState = $this->ReadAttributeString('ThermalLearningState');
+        $state = json_decode($rawState, true);
+        $referenceID = $this->ReadPropertyInteger('ThermalReferenceRoomTarget');
+        $lines = ['SMART-FBH – passives Lernen: ' . ($enabled ? 'AKTIV' : 'AUS')
+            . ' | Datenquellen-Vorpruefung: ' . ($preflight ? 'AKTIV' : 'AUS'),
             'Keine LCN-Befehle, keine Sollwertänderung, keine automatische Optimierung.'];
+        $lines[] = 'Thermisches Lernobjekt: ' . ($referenceID === 0
+            ? 'alle konfigurierten Räume' : 'nur S1-Referenz #' . $referenceID . ' (EG Bad: #21099)');
+        if ($rawState !== '{}' && $rawState !== ''
+            && (!is_array($state) || ($state['schema'] ?? null) !== 1
+                || !is_array($state['rooms'] ?? null))) {
+            $lines[] = 'WARNUNG: GESPEICHERTER LERNZUSTAND BESCHAEDIGT'
+                . ' ODER UNBEKANNTE VERSION; NICHT UEBERSCHRIEBEN.';
+            return implode("\n", $lines);
+        }
         if (!is_array($state) || empty($state['rooms'])) {
             $lines[] = 'Noch keine belastbaren Messwerte vorhanden.';
             return implode("\n", $lines);
         }
         $lines[] = 'Letzte Erfassung: ' . (isset($state['last_tick_at'])
             ? date('d.m.Y H:i', (int) $state['last_tick_at']) : 'unbekannt');
-        $lines[] = 'Auswertbare Räume zuletzt: ' . (int) ($state['last_processed'] ?? 0);
+        $lines[] = 'Aktuelle Datenpaare: ' . (int) ($state['last_processed'] ?? 0)
+            . ' | Thermisches Lernen freigegeben: ' . (int) ($state['last_eligible'] ?? 0);
         if (($state['paused_reason'] ?? '') !== '') {
             $lines[] = 'Hinweis: ' . $state['paused_reason'];
         }
@@ -267,9 +826,14 @@ trait LCNClimateThermalLearning
     {
         $now = time();
         $enabled = $this->ReadPropertyBoolean('ThermalLearningEnabled');
+        $preflight = $this->ReadPropertyBoolean('ThermalSourcePreflightEnabled');
         $weatherID = $this->ReadPropertyInteger('ThermalWeatherCenterInstance');
-        $state = json_decode($this->ReadAttributeString('ThermalLearningState'), true);
-        if (!is_array($state)) {
+        $rawLearningState = $this->ReadAttributeString('ThermalLearningState');
+        $state = json_decode($rawLearningState, true);
+        $stateInvalid = $rawLearningState !== '{}' && $rawLearningState !== ''
+            && (!is_array($state) || ($state['schema'] ?? null) !== 1
+                || !is_array($state['rooms'] ?? null));
+        if (!is_array($state) || $stateInvalid) {
             $state = [];
         }
 
@@ -277,21 +841,41 @@ trait LCNClimateThermalLearning
             '=== SMART-FBH – LERN-DIAGNOSE AN CHATGPT ===',
             'Erstellt: ' . date('d.m.Y H:i:s', $now),
             'Symcon-Instanz: #' . $this->InstanceID,
+            'Referenz-Lernraum: ' . ($this->ReadPropertyInteger('ThermalReferenceRoomTarget') === 0
+                ? 'ALLE Räume' : 'S1 #' . $this->ReadPropertyInteger('ThermalReferenceRoomTarget') . ' (EG Bad: #21099)'),
             'Lernfunktion: ' . ($enabled ? 'AKTIV' : 'AUS (in der Modulkonfiguration aktivieren)'),
+            'Quellen-Vorpruefung: ' . ($preflight ? 'AKTIV' : 'AUS')
+                . ' | 30-Minuten-Takt | NUR LESEN',
             'Betriebsart: ' . ($this->GetMode() === 0 ? 'HEIZEN' : 'NICHT HEIZEN – Lernphase pausiert'),
             'SICHERHEIT: NUR LESEN. Keine A7/A8, keine Relais-/S1-Befehle und keine Sollwertänderung.',
         ];
 
+        if ($stateInvalid) {
+            $lines[] = 'KRITISCHE LERNDATEN-WARNUNG: Gespeichertes Modell ungueltig'
+                . ' oder Schema unbekannt; Lernen wird angehalten, Daten NICHT ueberschrieben.';
+            $lines[] = 'Keine Neuinitialisierung ohne Sicherung und ausdrueckliche Pruefung.';
+        }
         $lastTick = (int) ($state['last_tick_at'] ?? 0);
         $tickAge = $lastTick > 0 ? max(0, $now - $lastTick) : null;
         $lines[] = 'Letzter Lernlauf: ' . ($lastTick > 0
             ? date('d.m.Y H:i:s', $lastTick) . ' (' . $tickAge . ' s alt)'
             : 'NOCH KEIN LERNLAUF');
-        $lines[] = 'Lernlauf zuletzt erfasste Räume: ' . (int) ($state['last_processed'] ?? 0);
+        $lines[] = 'Lernlauf zuletzt erfasste Räume: ' . (int) ($state['last_processed'] ?? 0)
+            . ' | nach Quellen-Abnahme thermisch bereit: ' . (int) ($state['last_eligible'] ?? 0);
+        $excluded = (array) ($state['last_exclusions'] ?? []);
+        $counts = array_count_values(array_values(array_filter($excluded, 'is_string')));
+        $details = [];
+        foreach ($counts as $reason => $number) {
+            $details[] = $reason . ': ' . $number;
+        }
+        $lines[] = 'Im letzten Lernlauf ausgeschlossen: '
+            . ($details === [] ? 'keine' : implode(' | ', $details));
+        $lines[] = 'Lernzustand: ' . strlen($this->ReadAttributeString('ThermalLearningState'))
+            . ' Bytes (Speichergrenze 131072 Bytes).';
         $lines[] = 'Lernstatistik angelegt: ' . (isset($state['created_at'])
             ? date('d.m.Y H:i:s', (int) $state['created_at']) : 'noch nicht');
-        if ($enabled && ($tickAge === null || $tickAge > 900)) {
-            $lines[] = 'WARNUNG: Lern-Timer noch nicht gelaufen oder seit mehr als 15 Minuten ohne Lauf.';
+        if (($enabled || $preflight) && ($tickAge === null || $tickAge > 4500)) {
+            $lines[] = 'WARNUNG: Lern-Timer noch nicht gelaufen oder seit mehr als 75 Minuten ohne Lauf.';
         }
         if (($state['paused_reason'] ?? '') !== '') {
             $lines[] = 'Lernpause/Hinweis: ' . (string) $state['paused_reason'];
@@ -313,7 +897,7 @@ trait LCNClimateThermalLearning
                     $age = $issued > 0 ? max(0, $now - $issued) : -1;
                     $quality = (string) ($weather['quality'] ?? 'UNAVAILABLE');
                     $current = $weather['current'] ?? null;
-                    $usable = $issued > 0 && $age <= 2100
+                    $usable = $issued > 0 && $issued <= $now && $age <= 2100
                         && in_array($quality, ['VERIFIED','MODEL_SUPPORTED','PWS_ONLY','DWD_ONLY','DWD_REMOTE'], true)
                         && is_array($current)
                         && is_numeric($current['temperature'] ?? null);
@@ -334,6 +918,19 @@ trait LCNClimateThermalLearning
         $configured = 0;
         $ready = 0;
         $withEvidence = 0;
+        $quality = static function (array $sample): string {
+            $n = (int) ($sample['n'] ?? 0);
+            $qualityN = (int) ($sample['quality_n'] ?? 0);
+            if ($qualityN < 3) { return 'UNZUREICHEND'; }
+            if ($qualityN < 10) { return 'VORLAEUFIG'; }
+            if (!isset($sample['variance'])) { return 'STREUUNG_UNBEKANNT'; }
+            $mean = abs((float) ($sample['mean'] ?? 0));
+            $sigma = sqrt(max(0.0, (float) $sample['variance']));
+            if ($mean < 0.001 || $sigma > max(0.05, $mean * 0.50)) {
+                return 'STARK_STREUEND';
+            }
+            return 'STABIL_BEOBACHTET';
+        };
         $describeRate = static function (array $sample, string $unit): string {
             $n = (int) ($sample['n'] ?? 0);
             if ($n < 3) {
@@ -357,6 +954,7 @@ trait LCNClimateThermalLearning
             $relayOn = null;
             $tempAge = null;
             $relayAge = null;
+            $relayChangeAge = null;
             $relayID = 0;
             try {
                 if ($tempID <= 0 || !IPS_VariableExists($tempID)) {
@@ -365,18 +963,21 @@ trait LCNClimateThermalLearning
                     $meta = IPS_GetVariable($tempID);
                     $tempAge = (int) ($meta['VariableUpdated'] ?? 0) > 0
                         ? max(0, $now - (int) $meta['VariableUpdated']) : null;
-                    if ($tempAge === null || $tempAge > 1800) {
+                    if ($tempAge === null || (int) $meta['VariableUpdated'] > $now
+                        || $tempAge > 1800) {
                         $reason = 'Isttemperatur fehlt/älter als 30 Minuten';
                     } else {
                         $temp = GetValue($tempID);
-                        if (!is_numeric($temp) || !is_finite((float) $temp)) {
+                        if (!is_numeric($temp) || !is_finite((float) $temp)
+                            || (float) $temp < 0 || (float) $temp > 45) {
                             $reason = 'Isttemperatur ungültig';
                         }
                     }
                 }
                 if ($reason === 'OK') {
                     $setpoint = $targetID > 0 ? $this->ReadTarget($targetID) : null;
-                    if ($setpoint === null) {
+                    if ($setpoint === null || !is_finite((float) $setpoint)
+                        || (float) $setpoint < 5 || (float) $setpoint > 40) {
                         $reason = 'LCN-S1-Sollwert nicht lesbar';
                     }
                 }
@@ -389,10 +990,20 @@ trait LCNClimateThermalLearning
                         $meta = IPS_GetVariable($relayID);
                         $relayAge = (int) ($meta['VariableUpdated'] ?? 0) > 0
                             ? max(0, $now - (int) $meta['VariableUpdated']) : null;
-                        if ($relayAge === null || $relayAge > 1800) {
+                        $changedAt = (int) ($meta['VariableChanged'] ?? 0);
+                        if ($changedAt > 0 && $changedAt <= $now) {
+                            $relayChangeAge = $now - $changedAt;
+                        }
+                        if ($relayAge === null || (int) $meta['VariableUpdated'] > $now
+                            || $relayAge > 1800) {
                             $reason = 'Relaisrückmeldung fehlt/älter als 30 Minuten';
                         } else {
-                            $relayOn = (bool) GetValue($relayID);
+                            $rawRelay = GetValue($relayID);
+                            if (!is_bool($rawRelay) && $rawRelay !== 0 && $rawRelay !== 1) {
+                                $reason = 'Relaisstatus mit ungueltigem Datentyp';
+                            } else {
+                                $relayOn = (bool) $rawRelay;
+                            }
                         }
                     }
                 }
@@ -413,7 +1024,21 @@ trait LCNClimateThermalLearning
             $last = (array) ($saved['last'] ?? []);
             $lastAge = (int) ($last['time'] ?? 0) > 0
                 ? max(0, $now - (int) $last['time']) : null;
+            $gradient = (array) ($saved['gradient_rates'] ?? []);
+            $gradientDetail = [];
+            foreach (['delta_lt10' => '<10', 'delta_10_20' => '10–20', 'delta_ge20' => '>=20'] as $band => $label) {
+                $h = (array) ($gradient['heating'][$band] ?? []);
+                $p = (array) ($gradient['passive_cooling'][$band] ?? []);
+                $gradientDetail[] = $label . 'K: H ' . $describeRate($h, '°C/h')
+                    . ', A ' . $describeRate($p, '°C/h');
+            }
+            $audit = (array) ($saved['source_audit'] ?? []);
             $lines[] = $name . ' | ' . $reason;
+            $lines[] = '  Datenquellen-Abnahme: '
+                . LCNThermalLearningModel::auditLabel($audit, $now)
+                . ' | letzte Ursache: ' . (string) ($audit['last_reason'] ?? 'unbekannt')
+                . ' | aktuelle Zuverlaessigkeit: '
+                . (int) round(100 * (float) ($audit['recent_ok'] ?? 0.0)) . '%';
             $lines[] = '  Ist #' . $tempID . ': '
                 . ($temp === null ? '–' : number_format((float) $temp, 2, ',', '.') . ' °C')
                 . ' (Alter ' . ($tempAge === null ? '?' : $tempAge . ' s') . ')'
@@ -421,19 +1046,67 @@ trait LCNClimateThermalLearning
                 . ($setpoint === null ? '–' : number_format((float) $setpoint, 1, ',', '.') . ' °C');
             $lines[] = '  Relaisstatus #' . $relayID . ': '
                 . ($relayOn === null ? 'unbekannt' : ($relayOn ? 'EIN' : 'AUS'))
-                . ' (Alter ' . ($relayAge === null ? '?' : $relayAge . ' s') . ')'
+                . ' (letzte Meldung vor ' . ($relayAge === null ? '?' : $relayAge . ' s') . ')'
+                . ' | Statuswechsel vor '
+                . ($relayChangeAge === null ? '?' : $relayChangeAge . ' s')
                 . ' | letzte verwertete Messung: '
                 . ($lastAge === null ? 'keine' : $lastAge . ' s alt');
             $lines[] = '  Heizanstieg: ' . $describeRate($heat, '°C/h')
                 . ' | passives Auskühlen: ' . $describeRate($cool, '°C/h')
                 . ' | Nachlauf: ' . $describeRate($after, '°C')
-                . ' | Fenster-Resets: ' . (int) ($saved['resets'] ?? 0);
+                . ' | Fenster-Resets: ' . (int) ($saved['resets'] ?? 0)
+                . ' | stale Abweisungen: ' . (int) ($saved['rejected_stale'] ?? 0)
+                . ' | erkannte Zwischenschaltungen: ' . (int) ($saved['hidden_switches'] ?? 0);
+            $lines[] = '  Lernqualitaet: Heizen ' . $quality($heat)
+                . ', Auskuehlen ' . $quality($cool)
+                . ', Nachlauf ' . $quality($after);
+            $longText = static function (array $v): string {
+                if ((int) ($v['quality_n'] ?? 0) < 30 || !isset($v['long_mean'])) {
+                    return 'lernt (<30 neue Fenster)';
+                }
+                return number_format((float) $v['long_mean'], 3, ',', '.') . ' °C/h';
+            };
+            $lines[] = '  Langzeitreferenz: Heizen ' . $longText($heat)
+                . ' | passiv Auskuehlen ' . $longText($cool)
+                . ' (getrennt vom gleitenden Kurzzeitwert)';
+            $lines[] = '  Innen-Aussen-Differenz: ' . implode(' | ', $gradientDetail);
+            $trend = (array) ($saved['weather_trend_rates'] ?? []);
+            $loss = (array) ($saved['loss_proxy'] ?? []);
+            $context = (array) ($saved['house_context'] ?? []);
+            $byValve = (array) ($saved['house_context_by_valve'] ?? []);
+            foreach (['valve_on' => 'Ventil EIN', 'valve_off' => 'Ventil AUS'] as $group => $caption) {
+                $values = (array) ($byValve[$group] ?? []);
+                $lines[] = '  Hausvergleich ' . $caption . ': gleichlaufend '
+                    . (int) ($values['similar'] ?? 0) . ', staerker '
+                    . (int) ($values['above'] ?? 0) . ', schwaecher '
+                    . (int) ($values['below'] ?? 0);
+            }
+            $lines[] = '  Auskuehlindikator pro 10 K Innen-Aussen-Differenz: '
+                . $describeRate($loss, '°C/h')
+                . ' (nur passiv, kein Heizlastwert)';
+            $lines[] = '  Aussenwetter seit ca. 2h: steigend H '
+                . $describeRate((array) ($trend['heating']['outside_rising'] ?? []), '°C/h')
+                . ', A ' . $describeRate((array) ($trend['passive_cooling']['outside_rising'] ?? []), '°C/h')
+                . ' | fallend H ' . $describeRate((array) ($trend['heating']['outside_falling'] ?? []), '°C/h')
+                . ', A ' . $describeRate((array) ($trend['passive_cooling']['outside_falling'] ?? []), '°C/h');
         }
         $lines[] = '--- ZUSAMMENFASSUNG ---';
         $lines[] = 'Aktive Räume: ' . $configured . ' | Datenquellen jetzt verwertbar: '
             . $ready . ' | Räume mit >=3 Lernfenstern: ' . $withEvidence;
+        $lines[] = 'Qualitaetsschutz: Passive Auskuehlfenster beginnen erst nach dem Estrich-Nachlauf; '
+            . 'Lernraten benoetigen neuere Temperatur- UND Relaisstatusmessungen am Fensterende (max. 30 min alt).';
         $lines[] = 'Ein gültiger Sensorwert bedeutet noch keinen gültigen Lernzyklus. '
             . 'Sonneneinstrahlung, offene Türen und unbekannter Vorlauf können Lernwerte beeinflussen.';
+        $lines[] = 'Wettertrend ueber ca. 2h: nur bei >=1 K Aenderung; maximal sechs gemeinsame Wetterpunkte gespeichert. ';
+        $lines[] = 'Innen-Aussen-Vergleich: Beobachtete Trends, keine kausale Heizlast oder Energiebedarf; '
+            . 'Fenster nur bei Wetterveraenderung <=3 K, je Differenzklasse mindestens 3 Fenster.';
+        $lines[] = 'Lernfreigabe: Nur bei mindestens sechs aufeinanderfolgenden guten Quellpruefungen, '
+            . 'mit gleitender Verfuegbarkeit >=80 Prozent. Nach laengerer Pause neue Abnahme.';
+        $lines[] = 'LCN-Rueckmeldung: VariableUpdated = letzte Statusmeldung; '
+            . 'VariableChanged = letzter tatsaechlich gemeldeter Wertwechsel. '
+            . 'Ein unveraenderter Wert ist kein Beleg fuer eine neue Meldung.';
+        $lines[] = 'Datenquellen-Abnahme: Erst ab sechs getrennten Lernlaeufen klassifiziert; '
+            . 'Quelle regelmaessig bedeutet NICHT verlaesslichen Heizwirkungsnachweis.';
         $lines[] = 'Keine aktive Fußbodenkühlung angelernt; Abkühlen bedeutet passives Auskühlen bei Ventil AUS.';
         $lines[] = '--- ENDE – gesamten Bericht an ChatGPT senden ---';
         return implode("\n", $lines);

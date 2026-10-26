@@ -1,0 +1,40 @@
+name: SMART-FBH PHP learning regression
+on:
+  push:
+    branches:
+      - feature/smart-fbh-learning-quality-20261026
+  pull_request:
+    paths:
+      - 'LCNClimateControl/ThermalLearning.php'
+      - 'tests/thermal_learning_quality.php'
+      - 'tests/thermal_learning_five_years.php'
+      - 'tests/thermal_learning_symcon_adapter.php'
+      - 'tests/thermal_learning_source_cadence.php'
+      - '.github/workflows/smart-fbh-learning.yml'
+  workflow_dispatch:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: none
+          coverage: none
+      - name: Syntax check
+        run: |
+          php -l LCNClimateControl/ThermalLearning.php
+          php -l tests/thermal_learning_quality.php
+          php -l tests/thermal_learning_five_years.php
+          php -l tests/thermal_learning_symcon_adapter.php
+          php -l tests/thermal_learning_source_cadence.php
+      - name: Regression tests (no Symcon required)
+        run: php tests/thermal_learning_quality.php
+      - name: Five-year simulation (11 rooms, constant storage)
+        run: php tests/thermal_learning_five_years.php
+      - name: Symcon adapter integration (11 rooms, isolated read errors)
+        run: php tests/thermal_learning_symcon_adapter.php
+      - name: 48h relay source cadence and requalification
+        run: php tests/thermal_learning_source_cadence.php

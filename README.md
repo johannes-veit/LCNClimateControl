@@ -1,5 +1,98 @@
 # LCN Climate Control – IP-Symcon 9
 
+## SMART-FBH – separat aktivierbare Quellen-Vorpruefung (Entwicklung, nicht produktiv freigegeben)
+
+- Neuer optionaler Schalter `ThermalSourcePreflightEnabled` im SMART-FBH-Konfigurationsbereich. **Ab Werk AUS.** Der bestehende `ThermalLearningEnabled` bleibt unabhaengig und standardmaessig AUS.
+- Wenn NUR die Quellen-Vorpruefung aktiviert ist, laeuft alle **30 Minuten** derselbe vorhandene passive Timer; er liest bestehende IP-Symcon-Variablen und schreibt ausschliesslich komprimierte Quellenqualitaetszaehler in das bereits vorhandene `ThermalLearningState`-Attribut. **Keine Heiz- oder Abkuehlmodelle, kein `observe()`, keine Wetterabfragen, keine A7/A8-, S1-, Relais- oder Sollwertbefehle.**
+- Vorpruefung funktioniert auch bei Symcon-Betriebsart nicht HEIZEN, waehrend das eigentliche thermische Lernen weiterhin nur in HEIZEN erlaubt ist. Alle alten thermischen Mittelwerte bleiben erhalten; aktive Heiz-/Nachlauf-Beobachtungsphasen werden waehrend der Vorpruefung zur sicheren Neuaufnahme beendet.
+- Der vorhandene Diagnose-Timer ist bei Vorpruefung ebenfalls alle 30 Minuten aktiv; keine weitere sichtbare Variable, kein weiterer Timer, kein Datenarchiv, keine neue Hardware.
+- Die ChatGPT-Lerndiagnose zeigt Vorpruef-Status, aktuelle Datenpaare, Qualifikation und pro Raum: letzte Relay-`VariableUpdated`-Meldung gegen `VariableChanged`-Statuswechsel. Nur die erste beweist eine erneute Statusmeldung.
+- Die Konfigurationsbeschriftung wurde von der ueberholten Angabe **5 Minuten** auf den tatsaechlichen **30-Minuten**-Takt korrigiert.
+- Beim spaeteren ersten Test in Symcon: ausschliesslich `NUR Quellen-Vorabpruefung` einschalten, `Passives Lernprogramm aktivieren` ausgeschaltet lassen. Nach mindestens sechs halbstuendlichen Laeufen den vorhandenen Button **SMART-FBH: Lern-Diagnose fuer ChatGPT anzeigen (nur lesen)** benutzen. Datenquellen mit ausschliesslich schaltbedingtem `VariableUpdated` duerfen keinen gruenen Lernstatus bekommen. Bei ungewoehnlichem Verhalten Vorpruefung deaktivieren, keine LCN-Konfiguration veraendern.
+- Echtes Verhalten der elf nativen LCN-Relaisrueckmeldungen weiterhin unbestaetigt; aktuelle Tests verwenden ausschliesslich synthetische Daten. **Nicht auf `main` uebernommen.**
+
+## SMART-FBH – Zwei-Stufen-Freigabe fuer echte Datenquellen (Entwicklungszweig)
+
+- **Stufe 1 Datenquellen-Abnahme:** Isttemperatur und nativer Relaisstatus muessen per `VariableUpdated` regelmaessig aktuelle Meldungen liefern. Sechs erfolgreiche Quellenpruefungen in Folge im festen 30-Minuten-Takt und eine geglaettete Verfuegbarkeit von mindestens 80% sind noetig.
+- **Stufe 2 passives thermisches Lernen:** Erst nach bestandener Quellen-Abnahme beginnt ein neues Lernfenster. Der erste gueltige Punkt ist die Baseline; Heiz-/Auskuehlraten entstehen nur aus spaeteren stabilen, gueltigen Temperaturintervallen (mindestens 60 min) und sicher beobachteten Ventilzustaenden.
+- Eine Quellfreigabe wird verworfen, wenn ihr letzter Check mehr als 45 Minuten zurueckliegt; bei einer Pause von mehr als 90 Minuten werden die Quellenzaehler fuer die Abnahme neu begonnen. **Bereits erlernte thermische Kennwerte bleiben erhalten.**
+- Der ChatGPT-Bericht trennt `Aktuelle Datenpaare` von `Thermisches Lernen freigegeben`. Der Modus NICHT HEIZEN setzt beide Zahlen auf Null; Lernfunktion und produktive LCN-Regelung bleiben voneinander isoliert.
+- **48h-Simulation mit 11 Raeumen:** 1056 30-Minuten-Quellchecks; vier regelmaessig aktualisierte Quellen: je 91 freigegebene Checks; vier nur bei Ventilwechsel aktualisierte Relais: 0 Freigaben; drei zeitweise ausgefallene Quellen: je 70 wieder freigegebene Checks nach Erholung. Der Test beweist die Ausschlusslogik, nicht das Verhalten der echten LCN-Schnittstelle.
+- Komplette CI prueft weiterhin den 5-Jahres-Dauerlauf mit 963600 synthetischen Raumbeobachtungen. Keine weiteren Symcon-Variablen, keine Messwerthistorie, keine Stellbefehle, keine Aenderung an `main`.
+
+## SMART-FBH – reale Datenquellen-Abnahme und Datenerhalt (Entwicklungszweig)
+
+- Pro konfiguriertem Raum zaehlt die Lernfunktion in ihrem bestehenden JSON-Attribut hoechstens alle 25 Minuten einen gueltigen oder blockierten Datenquellen-Check. Keine neuen IP-Symcon-Variablen oder Rohdatenarchive.
+- Nach 6 Checks unterscheidet der ChatGPT-Lernbericht `QUELLEN_REGELMAESSIG`, `QUELLEN_WECHSELND` und `DATENQUELLE_BLOCKIERT` (vier aufeinanderfolgende Fehler). Vorher nur `BEOBACHTUNG`. Dies beurteilt Quellaktualisierung, nicht den physikalischen Heizbeitrag.
+- Begrenzte Statistik: maximal 10000 Checks, begrenzte Serienzaehler, gleitende Erfolgsquote und letzter Fehlergrund. Unbekannte verschachtelte Protokolle werden verworfen.
+- Beschadigte JSON-Lernzustaende und unbekannte kuenftige Schema-Versionen werden vor JEDEM Lernschritt als nicht schreibbar behandelt. Bestehende Langzeitstatistik bleibt unveraendert; Warnung in beiden Lernberichten.
+- Ein komplett leeres `{}` (Werkszustand) wird dagegen automatisch initialisiert. Keine manuellen Reparaturbefehle oder pauschale Speicher-Resets.
+- Der Offline-Symcon-Adaptertest prueft ueberdies Sensor-Neuzuordnung: Eine geaenderte Temperaturquelle verwirft die alten thermischen Statistiken fuer diesen Raum.
+- Fuenfjahrtest inkl. Sensorausfaellen, Relay-Stale-Simulation und Datenquellen-Abnahme: **963600 synthetische Raummessungen**, 396 alte Temperaturwerte, 308 alte Relaisrueckmeldungen, 1308 Wetterluecken; Zustand nach einem Jahr **26263 Bytes**, nach fuenf Jahren **26521 Bytes**, Maximum **26563 Bytes**. Zahlen sind Simulationsresultate, keine SymBox-Messwerte.
+- Reale SymBox-Abnahme der 11 Raum-Messpaare weiterhin notwendig. `main` und produktive LCN-Steuerung bleiben unveraendert.
+
+## SMART-FBH – SymBox-Datenqualitaet und isolierte Raumfehler (Entwicklung)
+
+- Der 30-Minuten-Lernlauf klassifiziert die letzte vergebliche Raumerfassung getrennt: `TEMP_MISSING`, `TEMP_STALE`, `TEMP_OR_TARGET_INVALID`, `RELAY_MISSING`, `RELAY_STALE`, `RELAY_INVALID`, `READ_ERROR`.
+- Ausschlussgruende werden im bestehenden internen Attribut gespeichert und in `SMART-FBH – Senden an ChatGPT` zusammengefasst. Keine neue IP-Symcon-Variable.
+- Das Alter der Temperatur und der Relaisrueckmeldung wird anhand `VariableUpdated` geprueft (maximal 1800 Sekunden). Ein altes `VariableChanged` bedeutet nicht automatisch eine veraltete Statusrueckmeldung, ersetzt aber auch keine regelmaessige Statusaktualisierung.
+- Lesefehler eines einzelnen Raums werden intern protokolliert. Andere Raeume werden weiter ausgewertet. Fehlende Werte fuehren niemals zu Schaltbefehlen.
+- Schutz gegen ungueltige/zukuenftige Quellzeitstempel, unbekannte Wurzelattribute und verschachtelte Altdaten.
+- Der Speichergrenzwert von 128 KiB und die Raumbereinigung gelten auch beim Pausieren der Lernfunktion im Nicht-Heizbetrieb.
+- Erfasste Temperaturen und Sollwerte muessen physikalisch plausibel sein; Relaiswerte werden je Raum einmalig gelesen und nur bei Boolean oder echtem 0/1 akzeptiert.
+- Die Diagnose verwendet dieselbe Zeitstempel- und Relaistyp-Pruefung wie die Lernfunktion, damit die Zahl der verwertbaren Raeume nicht zu optimistisch ausfaellt.
+- Gemeinsame Raumtemperaturbewegungen bei Ventil AUS zaehlen nicht als passiv, solange ein erkannter Estrich-Nachlauf aktiv ist.
+- Eigenstaendiger synthetischer IP-Symcon-Integrationstest fuer elf Raeume prueft parallele Fehler, abgeschaltetes Lernen, Kuehlbetrieb und Datenbereinigung. Er ersetzt keinen Messnachweis von den echten LCN-Rueckmeldungen.
+
+## SMART-FBH – Fuenfjahres-Simulation und Langzeitmodell (Entwicklungszweig)
+
+- Separater CI-Test `tests/thermal_learning_five_years.php`: elf synthetische Raeume, fuenf Jahre, 30-Minuten-Takt, 963600 Raummessungen.
+- Enthalten: saisonale Aussentemperaturen, Relaiswechsel, 1308 Wetterdatenluecken, 396 veraltete Sensormeldungen sowie ein Test zur Entfernung uebergrosser verschachtelter Alt-Daten.
+- Aktuellster bestandener Dauerlauf mit Langzeitmittel und Datenquellen-Abnahme: JSON-Lernzustand nach Jahr 1 **26263 Bytes**, nach Jahr 5 **26521 Bytes**, Maximum **26563 Bytes**. Diese Zahlen gelten ausschliesslich fuer den Simulationsdatensatz ohne SymBox-Archive oder sonstige Betriebssystemdaten.
+- Tiefenbereinigung akzeptiert nur fest definierte Statistikgruppen und Kategorien sowie maximal sechs Wetterpunkte; verschachtelte Fremd-Daten werden verworfen.
+- Das gemeinsame Wetterringmodell ist jetzt eine eigenstaendig offline pruefbare Funktion, ohne Wetterabrufe oder zusaetzliche IP-Symcon-Variablen.
+- **Zwei Zeitskalen:** bestehender kurzfristiger EWMA-Mittelwert plus ein langsamer `long_mean`-Referenzwert. Pro Kennwert nur eine Zahl mehr; bei alten Statistiken aus vorhandenem Mittelwert initialisiert, ohne historische Werte zu erfinden.
+- Der Langzeitreferenzwert wird im Bericht erst nach 30 neuen Lernfenstern angezeigt. Er ist eine beobachtete thermische Tendenz, keine isolierte Heizlast oder Waermeverlustberechnung.
+- Reale LCN-Statusaktualisierungen und Temperaturverlaeufe sind durch Offline-Tests nicht bestaetigt. Keine produktive Freigabe, `main` bleibt unveraendert.
+
+
+## SMART-FBH – robustes Mehrschrittpaket (Entwicklung, 26.10.2026)
+
+- Bei Austausch einer Isttemperaturquelle oder eines Relais fuer einen gleichbleibenden S1-Raum wird der zugehoerige Lernzustand neu begonnen; alte Messwerte werden nicht als Eigenschaft der neuen Sensorquelle fortgeschrieben.
+- Die Heiz-/Auskuehlrate darf nur gelernt werden, wenn der letzte Relaiswertwechsel vor dem Beginn des ganzen Lernfensters liegt. Letzte erkannte Zwischenschaltungen unterbrechen die Lernphase.
+- Das persistierte JSON-Attribut `ThermalLearningState` hat eine harte Obergrenze von 131072 Bytes (128 KiB); bei Ueberschreitung wird ein fehlerhafter Schreibversuch verworfen und debug-protokolliert. Kein Rohdatenarchiv.
+- Die ChatGPT-Lerndiagnose nennt die aktuelle Bytegroesse des Lernzustandes.
+- Zugehoerige Regressionstests fuer durchgehende und unterbrochene Heizfenster hinzugefuegt; realer Relaisrueckmeldungsnachweis weiterhin offen.
+- Kein Eingriff in die Regelung, A7/A8, S1 oder Relais, keine neuen Variablen.
+
+## SMART-FBH – Langzeitqualitaet (Entwicklung, noch nicht freigegeben)
+
+- Pro erlerntem Mittelwert werden nur Zaehler, gleitender Mittelwert und gleitende Varianz gespeichert (konstanter Platzbedarf).
+- Diagnosestufen: UNZUREICHEND (<3 Fenster), VORLAEUFIG (3–9), STREUUNG_UNBEKANNT (alte Statistik ohne Varianz), STARK_STREUEND oder STABIL_BEOBACHTET (ab 10).
+- "Stabil beobachtet" beschreibt nur die Streuung der akzeptierten Fenster und ist kein Nachweis fuer Kausalitaet, Heizlast oder Wetterbereinigung.
+- Historische n-Zaehler sind gedeckelt. Bei Updates bleiben fruehere Mittelwerte erhalten, bisher unbekannte Streuung wird nicht als historisch gemessen ausgegeben.
+- Regression fuer >10.000 synthetische Fenster hinzugefuegt; noch nicht in Symcon verifiziert.
+
+## SMART-FBH – Gebaeudekontext nach Ventilzustand (Entwicklung, nur lesen)
+
+- 30-Minuten-Temperaturaenderung jedes Raumes wird mit dem Mittel der anderen gueltigen Raeume verglichen.
+- Getrennte, begrenzte Statistikzaehler fuer Ventil EIN und AUS (gleichlaufend/relativ schneller/relativ langsamer).
+- Nur bei mindestens vier aktuellen Raumvergleichen, gleichem Ventilzustand an beiden Endpunkten und stabilem Sollwert.
+- Keine paarweisen Temperaturarchive, keine neuen Symcon-Variablen, keine Rueckwirkung auf die Regelung.
+- **Grenze:** Zwei gleiche Relaiswerte beweisen keine lueckenlose Heizanforderung. Ein Heizbeitrag oder Waermestrom kann damit nicht ursachlich nachgewiesen werden. Fuer belastbare Schaltzyklen waere spaeter eine sichere Ereigniserfassung oder ein vorhandenes Statusarchiv erforderlich.
+- PHP-Ausfuehrungstests des gesamten Moduls/CI weiterhin ausstehend.
+
+## SMART-FBH – Langzeit-Speicherung (Entwicklungszweig, noch nicht freigegeben)
+
+- 30-Minuten-Lern- und Diagnosetakt. Die bestehende LCN-Heizregelung ist davon unabhängig.
+- **Keine neuen Zeitreihen:** Der passive Lerner speichert je Raum nur den aktuellen Prüf-/Phasenzustand sowie begrenzte aggregierte Kennwerte, keine Liste aller Messungen.
+- Beim Lernlauf werden Einträge ehemaliger/entfernter Raum-IDs aus dem Attribut `ThermalLearningState` gelöscht, sodass Konfigurationsänderungen nicht über Jahre Einträge anhäufen.
+- Unbekannte zusätzliche Top-Level-Raumfelder werden entfernt. Alle regulär erzeugten Statistikzähler sind begrenzt.
+- Das Modell liegt in **einem** Symcon-Attribut; es erzeugt nicht pro Messung zusätzliche Objekte oder Dateien.
+- **Wichtig:** Die separate Diagnosestringvariable `ThermalLearningDiagnostic` darf nicht zusätzlich zur langfristigen Archivprotokollierung aktiviert werden. Falls die Archivierung dafür manuell eingeschaltet wurde, separat in der Symcon-Archivkonfiguration ausschalten. Das Lernmodul selbst schaltet Archivfunktionen nicht um.
+- Langzeittests für tatsächliche Speicherbelegung, Archivkonfiguration und reale Sensorstatus-Rückmeldungen stehen noch aus. Keine produktive Freigabe.
+
+
 **Stand: v0.5.5 Build 55 – SMART-FBH mit eigener ChatGPT-Lerndiagnose; HEIZ-/KÜHL-Regelung unverändert.**
 
 ## 0.5.5 Build 55 – Lern-Diagnose an ChatGPT

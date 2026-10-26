@@ -92,7 +92,11 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterPropertyInteger('NoChangeConfirmations', 2);
         // Eigenständiger, passiver Lern-Timer: Opt-in, keine Steuerungseingriffe.
         $this->RegisterPropertyBoolean('ThermalLearningEnabled', false);
+        $this->RegisterPropertyBoolean('ThermalSourcePreflightEnabled', false);
         $this->RegisterPropertyInteger('ThermalWeatherCenterInstance', 40477);
+        // EG Bad (#21099) is the initial learning reference; 0 enables all rooms.
+        // Does not affect temperature control or actual relay operation.
+        $this->RegisterPropertyInteger('ThermalReferenceRoomTarget', 21099);
 
         // OperatingMode dient nur der verlustfreien Migration aus der fehlerhaften
         // 0.2.0-Vorschau, in der die sichtbare Betriebsart-Variable entfernt wurde.
@@ -171,10 +175,14 @@ class LCNClimateControl extends IPSModuleStrict
         $this->SetTimerInterval('Worker', 0);
         $this->SetTimerInterval('DirectCoolingGuard', $this->UsesDirectCooling() ? 15000 : 0);
         $this->SetTimerInterval('ChatGPTDiagnosticTimer', 60000);
+        // Same two existing timers for passive learning OR isolated read-only
+        // source acceptance; both opt-ins default OFF. No extra IPS objects.
+        $thermalPassiveEnabled = $this->ReadPropertyBoolean('ThermalLearningEnabled')
+            || $this->ReadPropertyBoolean('ThermalSourcePreflightEnabled');
         $this->SetTimerInterval('ThermalLearningTimer',
-            $this->ReadPropertyBoolean('ThermalLearningEnabled') ? 5 * 60 * 1000 : 0);
+            $thermalPassiveEnabled ? 30 * 60 * 1000 : 0);
         $this->SetTimerInterval('ThermalLearningDiagnosticTimer',
-            $this->ReadPropertyBoolean('ThermalLearningEnabled') ? 5 * 60 * 1000 : 0);
+            $thermalPassiveEnabled ? 30 * 60 * 1000 : 0);
         // Persistent test is not discarded on ApplyChanges / kernel restart.
         // If interrupted, RE-ISSUE RELEASE; NEVER re-issue LOCK.
         if ($this->M11ProbeActive()) {
