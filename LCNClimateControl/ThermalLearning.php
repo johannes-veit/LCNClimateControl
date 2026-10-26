@@ -89,7 +89,11 @@ final class LCNThermalLearningModel
         if ($previousAt > 0 && $previousAt <= $now && $now - $previousAt < 1500) {
             return $old;
         }
-        if ($previousAt > $now) { $old = []; }
+        // A long pause/outage must not inherit a previously green source status.
+        // Requalify from scratch after more than three normal 30-min slots.
+        if ($previousAt > $now || ($previousAt > 0 && $now - $previousAt > 5400)) {
+            $old = [];
+        }
         $good = $reason === 'OK';
         $checks = min(10000, max(0, (int) ($old['checks'] ?? 0)) + 1);
         $previousRate = min(1.0, max(0.0,
@@ -116,6 +120,7 @@ final class LCNThermalLearningModel
             return 'DATENQUELLE_BLOCKIERT';
         }
         if ((float) ($audit['recent_ok'] ?? 0.0) >= 0.8
+            && (int) ($audit['ok_streak'] ?? 0) >= 6
             && ($audit['last_reason'] ?? '') === 'OK') {
             return 'QUELLEN_REGELMAESSIG';
         }
@@ -458,7 +463,7 @@ trait LCNClimateThermalLearning
     {
         $state = array_intersect_key($state, array_flip([
             'schema', 'rooms', 'created_at', 'weather_history',
-            'last_tick_at', 'last_processed', 'paused_reason', 'last_exclusions'
+            'last_tick_at', 'last_processed', 'last_eligible', 'paused_reason', 'last_exclusions'
         ]));
         $rooms = (array) ($state['rooms'] ?? []);
         foreach ($rooms as &$roomState) {
@@ -537,7 +542,7 @@ trait LCNClimateThermalLearning
             // unknown field cannot permanently prevent the 128 KiB guard.
             $state = array_intersect_key($state, array_flip([
                 'schema', 'rooms', 'created_at', 'weather_history',
-                'last_tick_at', 'last_processed', 'paused_reason',
+                'last_tick_at', 'last_processed', 'last_eligible', 'paused_reason',
                 'last_exclusions'
             ]));
             $state['rooms'] = (array) ($state['rooms'] ?? []);
@@ -569,6 +574,7 @@ trait LCNClimateThermalLearning
             $state['weather_history'] = $weather['points'];
             $laggedOutdoor = $weather['lag'];
             $processed = 0;
+            $eligible = 0;
             $changes = [];
             $exclusions = [];
             foreach ($this->GetRooms() as $room) {
@@ -633,6 +639,16 @@ trait LCNClimateThermalLearning
                 $previous['source_temp_id'] = $tempID;
                 $previous['source_relay_id'] = $statusID;
                 $previous['name'] = (string) ($room['Name'] ?? ('Raum #' . $targetID));
+                // Strict separation: verify six successful, reasonably recent
+                // source updates before generating any new thermal samples.
+                // Source audits still collect on the normal 30-minute tick.
+                if (LCNThermalLearningModel::auditLabel(
+                    (array) ($previous['source_audit'] ?? [])) !== 'QUELLEN_REGELMAESSIG') {
+                    $state['rooms'][$key] = $previous;
+                    ++$processed;
+                    continue;
+                }
+                ++$eligible;
                 $prior = (array) ($previous['last'] ?? []);
                 $age = $now - (int) ($prior['time'] ?? 0);
                 if ($age >= 1500 && $age <= 2700 && is_numeric($prior['temp'] ?? null)
@@ -691,6 +707,7 @@ trait LCNClimateThermalLearning
             }
             $state['last_tick_at'] = $now;
             $state['last_processed'] = $processed;
+            $state['last_eligible'] = $eligible;
             $state['last_exclusions'] = array_slice($exclusions, 0, 30, true);
             $state['paused_reason'] = $processed === 0 ? 'Keine aktuellen, eindeutig zugeordneten Messpaare' : '';
             $this->WriteBoundedThermalLearningState($state);
@@ -720,7 +737,8 @@ trait LCNClimateThermalLearning
         }
         $lines[] = 'Letzte Erfassung: ' . (isset($state['last_tick_at'])
             ? date('d.m.Y H:i', (int) $state['last_tick_at']) : 'unbekannt');
-        $lines[] = 'Auswertbare Räume zuletzt: ' . (int) ($state['last_processed'] ?? 0);
+        $lines[] = 'Aktuelle Datenpaare: ' . (int) ($state['last_processed'] ?? 0)
+            . ' | Thermisches Lernen freigegeben: ' . (int) ($state['last_eligible'] ?? 0);
         if (($state['paused_reason'] ?? '') !== '') {
             $lines[] = 'Hinweis: ' . $state['paused_reason'];
         }
@@ -784,7 +802,8 @@ trait LCNClimateThermalLearning
         $lines[] = 'Letzter Lernlauf: ' . ($lastTick > 0
             ? date('d.m.Y H:i:s', $lastTick) . ' (' . $tickAge . ' s alt)'
             : 'NOCH KEIN LERNLAUF');
-        $lines[] = 'Lernlauf zuletzt erfasste Räume: ' . (int) ($state['last_processed'] ?? 0);
+        $lines[] = 'Lernlauf zuletzt erfasste Räume: ' . (int) ($state['last_processed'] ?? 0)
+            . ' | nach Quellen-Abnahme thermisch bereit: ' . (int) ($state['last_eligible'] ?? 0);
         $excluded = (array) ($state['last_exclusions'] ?? []);
         $counts = array_count_values(array_values(array_filter($excluded, 'is_string')));
         $details = [];
@@ -1016,6 +1035,8 @@ trait LCNClimateThermalLearning
         $lines[] = 'Wettertrend ueber ca. 2h: nur bei >=1 K Aenderung; maximal sechs gemeinsame Wetterpunkte gespeichert. ';
         $lines[] = 'Innen-Aussen-Vergleich: Beobachtete Trends, keine kausale Heizlast oder Energiebedarf; '
             . 'Fenster nur bei Wetterveraenderung <=3 K, je Differenzklasse mindestens 3 Fenster.';
+        $lines[] = 'Lernfreigabe: Nur bei mindestens sechs aufeinanderfolgenden guten Quellpruefungen, '
+            . 'mit gleitender Verfuegbarkeit >=80 Prozent. Nach laengerer Pause neue Abnahme.';
         $lines[] = 'Datenquellen-Abnahme: Erst ab sechs getrennten Lernlaeufen klassifiziert; '
             . 'Quelle regelmaessig bedeutet NICHT verlaesslichen Heizwirkungsnachweis.';
         $lines[] = 'Keine aktive Fußbodenkühlung angelernt; Abkühlen bedeutet passives Auskühlen bei Ventil AUS.';
