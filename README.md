@@ -1,5 +1,17 @@
 # LCN Climate Control – IP-Symcon 9
 
+## SMART-FBH – Fuenfjahres-Simulation und Langzeitmodell (Entwicklungszweig)
+
+- Separater CI-Test `tests/thermal_learning_five_years.php`: elf synthetische Raeume, fuenf Jahre, 30-Minuten-Takt, 963600 Raummessungen.
+- Enthalten: saisonale Aussentemperaturen, Relaiswechsel, 1308 Wetterdatenluecken, 396 veraltete Sensormeldungen sowie ein Test zur Entfernung uebergrosser verschachtelter Alt-Daten.
+- Erster bestandener Dauerlauf: JSON-Lernzustand nach Jahr 1 **20896 Bytes**, nach Jahr 5 **21166 Bytes**, Maximum **21196 Bytes**. Diese Zahlen gelten ausschliesslich fuer den Simulationsdatensatz ohne SymBox-Archive oder sonstige Betriebssystemdaten.
+- Tiefenbereinigung akzeptiert nur fest definierte Statistikgruppen und Kategorien sowie maximal sechs Wetterpunkte; verschachtelte Fremd-Daten werden verworfen.
+- Das gemeinsame Wetterringmodell ist jetzt eine eigenstaendig offline pruefbare Funktion, ohne Wetterabrufe oder zusaetzliche IP-Symcon-Variablen.
+- **Zwei Zeitskalen:** bestehender kurzfristiger EWMA-Mittelwert plus ein langsamer `long_mean`-Referenzwert. Pro Kennwert nur eine Zahl mehr; bei alten Statistiken aus vorhandenem Mittelwert initialisiert, ohne historische Werte zu erfinden.
+- Der Langzeitreferenzwert wird im Bericht erst nach 30 neuen Lernfenstern angezeigt. Er ist eine beobachtete thermische Tendenz, keine isolierte Heizlast oder Waermeverlustberechnung.
+- Reale LCN-Statusaktualisierungen und Temperaturverlaeufe sind durch Offline-Tests nicht bestaetigt. Keine produktive Freigabe, `main` bleibt unveraendert.
+
+
 ## SMART-FBH – robustes Mehrschrittpaket (Entwicklung, 26.10.2026)
 
 - Bei Austausch einer Isttemperaturquelle oder eines Relais fuer einen gleichbleibenden S1-Raum wird der zugehoerige Lernzustand neu begonnen; alte Messwerte werden nicht als Eigenschaft der neuen Sensorquelle fortgeschrieben.
