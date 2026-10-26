@@ -40,4 +40,25 @@ verify(($s['rates']['heating']['all']['n'] ?? 0) === 0, 'stale-source suppressio
 $s = obs([], $t, 20.0, true);
 $s = obs($s, $t+3600, 20.4, true);
 verify(($s['resets'] ?? 0) === 1, 'gap reset');
+// Outdoor-vs-indoor gradient: classify only after a genuine heating window.
+$s = obs([], $t, 21.0, true);
+$s = obs($s, $t+1800, 21.2, true);
+$s = obs($s, $t+3600, 21.4, true);
+verify(($s['gradient_rates']['heating']['delta_10_20']['n'] ?? 0) === 1,
+    'indoor-outdoor gradient heating classification');
+verify(!isset($s['gradient_rates']['heating']['delta_lt10']),
+    'unexpected extra gradient band');
+
+// Missing weather may still yield heating evidence, but not gradient evidence.
+$s = [];
+for ($i=0; $i<=2; ++$i) {
+    $s = LCNThermalLearningModel::observe($s, [
+        'time'=>$t+1800*$i, 'temp'=>21.0+0.2*$i, 'target'=>22.0,
+        'valve'=>true, 'outside'=>null,
+        'temp_sample_at'=>$t+1800*$i, 'valve_sample_at'=>$t+1800*$i
+    ]);
+}
+verify(($s['rates']['heating']['all']['n'] ?? 0) === 1, 'weather-independent base rate');
+verify(!isset($s['gradient_rates']), 'missing weather produced gradient evidence');
+
 echo "30-minute SMART-FBH model regression tests passed\n";
