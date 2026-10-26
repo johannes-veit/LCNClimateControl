@@ -405,7 +405,7 @@ trait LCNClimateThermalLearning
             (array) ($state['weather_history'] ?? []), time(), null)['points'];
         $allowedReasons = [
             'TEMP_MISSING', 'TEMP_STALE', 'TEMP_OR_TARGET_INVALID',
-            'RELAY_MISSING', 'RELAY_STALE', 'READ_ERROR'
+            'RELAY_MISSING', 'RELAY_STALE', 'RELAY_INVALID', 'READ_ERROR'
         ];
         $reasons = [];
         foreach (array_slice((array) ($state['last_exclusions'] ?? []), 0, 30, true) as $id => $reason) {
@@ -516,7 +516,9 @@ trait LCNClimateThermalLearning
                 $temp = GetValue($tempID);
                 $target = $this->ReadTarget($targetID);
                 if (!is_numeric($temp) || !is_finite((float) $temp)
-                    || $target === null || !is_finite((float) $target)) {
+                    || (float) $temp < 0.0 || (float) $temp > 45.0
+                    || $target === null || !is_finite((float) $target)
+                    || (float) $target < 5.0 || (float) $target > 40.0) {
                     $exclusions[$key] = 'TEMP_OR_TARGET_INVALID';
                     continue;
                 }
@@ -535,6 +537,14 @@ trait LCNClimateThermalLearning
                     $exclusions[$key] = $sourceReason;
                     continue;
                 }
+                // Use one coherent snapshot per room; never mix separate
+                // relay reads while evaluating one temperature observation.
+                $relayRaw = GetValue($statusID);
+                if (!is_bool($relayRaw) && $relayRaw !== 0 && $relayRaw !== 1) {
+                    $exclusions[$key] = 'RELAY_INVALID';
+                    continue;
+                }
+                $relayValue = (bool) $relayRaw;
                 // Stable target identifier survives room renaming.
                 $previous = (array) ($state['rooms'][$key] ?? []);
                 // Invalidate old learning when a sensor or relay is remapped.
@@ -554,16 +564,16 @@ trait LCNClimateThermalLearning
                     $delta = (float) $temp - (float) $prior['temp'];
                     if (abs($delta) <= 0.8 && !isset($previous['afterheat'])
                         && isset($prior['valve'])
-                        && (bool) $prior['valve'] === (bool) GetValue($statusID)
+                        && (bool) $prior['valve'] === $relayValue
                         && abs((float) $target - (float) ($prior['target'] ?? $target)) <= 0.15
                         && $now - (int) ($meta['VariableUpdated'] ?? 0) <= 1800
                         && (int) ($meta['VariableChanged'] ?? 0) <= (int) ($prior['time'] ?? 0)) {
-                        $changes[$key] = ['delta' => $delta, 'valve' => (bool) GetValue($statusID)];
+                        $changes[$key] = ['delta' => $delta, 'valve' => $relayValue];
                     }
                 }
                 $state['rooms'][$key] = LCNThermalLearningModel::observe($previous, [
                     'time' => $now, 'temp' => (float) $temp, 'target' => $target,
-                    'valve' => (bool) GetValue($statusID), 'outside' => $outside,
+                    'valve' => $relayValue, 'outside' => $outside,
                     'temp_sample_at' => (int) ($tMeta['VariableUpdated'] ?? 0),
                     'valve_sample_at' => (int) ($meta['VariableUpdated'] ?? 0),
                     'valve_changed_at' => (int) ($meta['VariableChanged'] ?? 0),
@@ -766,18 +776,21 @@ trait LCNClimateThermalLearning
                     $meta = IPS_GetVariable($tempID);
                     $tempAge = (int) ($meta['VariableUpdated'] ?? 0) > 0
                         ? max(0, $now - (int) $meta['VariableUpdated']) : null;
-                    if ($tempAge === null || $tempAge > 1800) {
+                    if ($tempAge === null || (int) $meta['VariableUpdated'] > $now
+                        || $tempAge > 1800) {
                         $reason = 'Isttemperatur fehlt/älter als 30 Minuten';
                     } else {
                         $temp = GetValue($tempID);
-                        if (!is_numeric($temp) || !is_finite((float) $temp)) {
+                        if (!is_numeric($temp) || !is_finite((float) $temp)
+                            || (float) $temp < 0 || (float) $temp > 45) {
                             $reason = 'Isttemperatur ungültig';
                         }
                     }
                 }
                 if ($reason === 'OK') {
                     $setpoint = $targetID > 0 ? $this->ReadTarget($targetID) : null;
-                    if ($setpoint === null) {
+                    if ($setpoint === null || !is_finite((float) $setpoint)
+                        || (float) $setpoint < 5 || (float) $setpoint > 40) {
                         $reason = 'LCN-S1-Sollwert nicht lesbar';
                     }
                 }
@@ -790,7 +803,8 @@ trait LCNClimateThermalLearning
                         $meta = IPS_GetVariable($relayID);
                         $relayAge = (int) ($meta['VariableUpdated'] ?? 0) > 0
                             ? max(0, $now - (int) $meta['VariableUpdated']) : null;
-                        if ($relayAge === null || $relayAge > 1800) {
+                        if ($relayAge === null || (int) $meta['VariableUpdated'] > $now
+                            || $relayAge > 1800) {
                             $reason = 'Relaisrückmeldung fehlt/älter als 30 Minuten';
                         } else {
                             $relayOn = (bool) GetValue($relayID);
