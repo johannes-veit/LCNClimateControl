@@ -109,6 +109,7 @@ final class ThermalDiagnosticStub
     public function ReadPropertyInteger(string $name): int { return 40477; }
     public function ReadAttributeString(string $name): string {
         return json_encode([
+            'schema' => 1,
             'created_at' => time() - 86400, 'last_tick_at' => time() - 90,
             'last_processed' => 1,
             'rooms' => ['200' => [
