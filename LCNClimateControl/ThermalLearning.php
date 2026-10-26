@@ -80,6 +80,49 @@ final class LCNThermalLearningModel
     }
 
     /**
+     * Compact source-readiness trend, recorded at most once per 25 minutes.
+     * It qualifies SOURCE FRESHNESS, never proves physical heating behaviour.
+     */
+    public static function auditSource(array $old, string $reason, int $now): array
+    {
+        $previousAt = (int) ($old['last_checked_at'] ?? 0);
+        if ($previousAt > 0 && $previousAt <= $now && $now - $previousAt < 1500) {
+            return $old;
+        }
+        if ($previousAt > $now) { $old = []; }
+        $good = $reason === 'OK';
+        $checks = min(10000, max(0, (int) ($old['checks'] ?? 0)) + 1);
+        $previousRate = min(1.0, max(0.0,
+            (float) ($old['recent_ok'] ?? ($good ? 1.0 : 0.0))));
+        $recentRate = $checks === 1 ? ($good ? 1.0 : 0.0)
+            : (0.875 * $previousRate + ($good ? 0.125 : 0.0));
+        return [
+            'checks' => $checks,
+            'recent_ok' => round($recentRate, 4),
+            'ok_streak' => $good
+                ? min(10000, (int) ($old['ok_streak'] ?? 0) + 1) : 0,
+            'bad_streak' => $good ? 0
+                : min(10000, (int) ($old['bad_streak'] ?? 0) + 1),
+            'last_reason' => $good ? 'OK' : $reason,
+            'last_checked_at' => $now
+        ];
+    }
+
+    public static function auditLabel(array $audit): string
+    {
+        $count = (int) ($audit['checks'] ?? 0);
+        if ($count < 6) { return 'BEOBACHTUNG (' . $count . '/6)'; }
+        if ((int) ($audit['bad_streak'] ?? 0) >= 4) {
+            return 'DATENQUELLE_BLOCKIERT';
+        }
+        if ((float) ($audit['recent_ok'] ?? 0.0) >= 0.8
+            && ($audit['last_reason'] ?? '') === 'OK') {
+            return 'QUELLEN_REGELMAESSIG';
+        }
+        return 'QUELLEN_WECHSELND';
+    }
+
+    /**
      * Fixed-size shared outdoor context. Never store raw weather histories.
      * Return both the updated ring and the observation about two hours ago.
      */
@@ -121,7 +164,8 @@ final class LCNThermalLearningModel
         $allowed = ['name', 'last', 'phase', 'afterheat', 'afterheat_model',
             'rates', 'gradient_rates', 'weather_trend_rates', 'loss_proxy',
             'last_evidence_at', 'resets', 'rejected_stale', 'hidden_switches',
-            'house_context_by_valve', 'source_temp_id', 'source_relay_id'];
+            'house_context_by_valve', 'source_temp_id', 'source_relay_id',
+            'source_audit'];
         $room = array_intersect_key($room, array_flip($allowed));
         $stat = static function ($value): array {
             if (!is_array($value) || !is_numeric($value['n'] ?? null)
@@ -216,6 +260,27 @@ final class LCNThermalLearningModel
             if (isset($room[$key])) {
                 $room[$key] = min(100000, max(0, (int) $room[$key]));
             }
+        }
+        if (isset($room['source_audit'])) {
+            $rawAudit = is_array($room['source_audit']) ? $room['source_audit'] : [];
+            $audit = [];
+            foreach (['checks', 'ok_streak', 'bad_streak', 'last_checked_at'] as $field) {
+                if (isset($rawAudit[$field]) && is_numeric($rawAudit[$field])) {
+                    $audit[$field] = max(0, (int) $rawAudit[$field]);
+                    if ($field !== 'last_checked_at') {
+                        $audit[$field] = min(10000, $audit[$field]);
+                    }
+                }
+            }
+            if (isset($rawAudit['recent_ok']) && is_numeric($rawAudit['recent_ok'])) {
+                $audit['recent_ok'] = round(min(1.0,
+                    max(0.0, (float) $rawAudit['recent_ok'])), 4);
+            }
+            if (is_string($rawAudit['last_reason'] ?? null)) {
+                $audit['last_reason'] = substr($rawAudit['last_reason'], 0, 30);
+            }
+            if ($audit === []) { unset($room['source_audit']); }
+            else { $room['source_audit'] = $audit; }
         }
         return $room;
     }
@@ -608,6 +673,22 @@ trait LCNClimateThermalLearning
                         1 + (int) ($state['rooms'][$id]['house_context_by_valve'][$mode][$label] ?? 0));
                 }
             }
+            // Six or more normal 30-minute checks reveal recurrent stale
+            // sensor/relay inputs without storing any raw time series.
+            foreach ($this->GetRooms() as $configuredRoom) {
+                if (empty($configuredRoom['Enabled'])) { continue; }
+                $id = (int) ($configuredRoom['TargetVariable'] ?? 0);
+                if ($id <= 0) { continue; }
+                $key = (string) $id;
+                $roomState = (array) ($state['rooms'][$key] ?? []);
+                $reason = (string) ($exclusions[$key] ?? 'OK');
+                $roomState['source_audit'] = LCNThermalLearningModel::auditSource(
+                    (array) ($roomState['source_audit'] ?? []), $reason, $now);
+                if (!isset($roomState['name'])) {
+                    $roomState['name'] = (string) ($configuredRoom['Name'] ?? ('Raum #' . $id));
+                }
+                $state['rooms'][$key] = $roomState;
+            }
             $state['last_tick_at'] = $now;
             $state['last_processed'] = $processed;
             $state['last_exclusions'] = array_slice($exclusions, 0, 30, true);
@@ -852,7 +933,13 @@ trait LCNClimateThermalLearning
                 $gradientDetail[] = $label . 'K: H ' . $describeRate($h, '°C/h')
                     . ', A ' . $describeRate($p, '°C/h');
             }
+            $audit = (array) ($saved['source_audit'] ?? []);
             $lines[] = $name . ' | ' . $reason;
+            $lines[] = '  Datenquellen-Abnahme: '
+                . LCNThermalLearningModel::auditLabel($audit)
+                . ' | letzte Ursache: ' . (string) ($audit['last_reason'] ?? 'unbekannt')
+                . ' | aktuelle Zuverlaessigkeit: '
+                . (int) round(100 * (float) ($audit['recent_ok'] ?? 0.0)) . '%';
             $lines[] = '  Ist #' . $tempID . ': '
                 . ($temp === null ? '–' : number_format((float) $temp, 2, ',', '.') . ' °C')
                 . ' (Alter ' . ($tempAge === null ? '?' : $tempAge . ' s') . ')'
@@ -912,6 +999,8 @@ trait LCNClimateThermalLearning
         $lines[] = 'Wettertrend ueber ca. 2h: nur bei >=1 K Aenderung; maximal sechs gemeinsame Wetterpunkte gespeichert. ';
         $lines[] = 'Innen-Aussen-Vergleich: Beobachtete Trends, keine kausale Heizlast oder Energiebedarf; '
             . 'Fenster nur bei Wetterveraenderung <=3 K, je Differenzklasse mindestens 3 Fenster.';
+        $lines[] = 'Datenquellen-Abnahme: Erst ab sechs getrennten Lernlaeufen klassifiziert; '
+            . 'Quelle regelmaessig bedeutet NICHT verlaesslichen Heizwirkungsnachweis.';
         $lines[] = 'Keine aktive Fußbodenkühlung angelernt; Abkühlen bedeutet passives Auskühlen bei Ventil AUS.';
         $lines[] = '--- ENDE – gesamten Bericht an ChatGPT senden ---';
         return implode("\n", $lines);
