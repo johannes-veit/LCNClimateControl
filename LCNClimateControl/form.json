@@ -338,6 +338,16 @@
         },
         {
           "type": "NumberSpinner",
+          "name": "ThermalReferenceRoomTarget",
+          "caption": "Thermischer Referenzraum (EG Bad: S1 #21099; 0 = alle Räume)",
+          "minimum": 0
+        },
+        {
+          "type": "Label",
+          "caption": "Referenzmodus: Nur EG Bad sammelt Heizanstieg, passives Auskuehlen und thermischen Nachlauf. Die anderen 10 Raeume bleiben als Quellstatus sichtbar. Keine kuenstlichen Heizzyklen."
+        },
+        {
+          "type": "NumberSpinner",
           "name": "ThermalWeatherCenterInstance",
           "caption": "Vorhandene WetterZentrale (0 = ohne Wetter)",
           "minimum": 0
