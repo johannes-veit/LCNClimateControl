@@ -55,6 +55,39 @@ final class LCNThermalLearningModel
     }
 
     /**
+     * Fixed-size shared outdoor context. Never store raw weather histories.
+     * Return both the updated ring and the observation about two hours ago.
+     */
+    public static function outdoorContext(array $history, int $now, ?float $outdoor): array
+    {
+        $clean = [];
+        foreach (array_slice($history, -12) as $point) {
+            if (!is_array($point) || !is_numeric($point['t'] ?? null)
+                || !is_numeric($point['c'] ?? null)) { continue; }
+            $t = (int) $point['t'];
+            $c = (float) $point['c'];
+            if ($t <= $now && $t > $now - 10800
+                && $t > 0 && is_finite($c) && $c >= -45 && $c <= 55) {
+                $clean[] = ['t' => $t, 'c' => round($c, 2)];
+            }
+        }
+        $clean = array_slice($clean, -6);
+        $lag = null;
+        if ($outdoor !== null && is_finite($outdoor)
+            && $outdoor >= -45 && $outdoor <= 55) {
+            foreach (array_reverse($clean) as $point) {
+                $age = $now - $point['t'];
+                if ($age >= 6300 && $age <= 8100) {
+                    $lag = $point['c'];
+                    break;
+                }
+            }
+            $clean[] = ['t' => $now, 'c' => round($outdoor, 2)];
+        }
+        return ['points' => array_slice($clean, -6), 'lag' => $lag];
+    }
+
+    /**
      * Discard stale nested keys before persisting the years-long learning state.
      * All allowed categories are fixed: adding samples never adds JSON array rows.
      */
@@ -381,27 +414,10 @@ trait LCNClimateThermalLearning
                 }
             }
             $state['rooms'] = array_intersect_key((array) ($state['rooms'] ?? []), $configuredKeys);
-            // Fixed, six-entry outdoor history (at most 3 hours at 30-min cadence).
-            // Shared by all rooms: O(1) persistent storage over months or years.
-            $laggedOutdoor = null;
-            $weatherHistory = (array) ($state['weather_history'] ?? []);
-            $weatherHistory = array_values(array_filter($weatherHistory, static function ($v) use ($now): bool {
-                return is_array($v) && isset($v['t'], $v['c'])
-                    && is_numeric($v['t']) && is_numeric($v['c'])
-                    && (int) $v['t'] <= $now && $now - (int) $v['t'] <= 10800;
-            }));
-            $weatherHistory = array_slice($weatherHistory, -6);
-            if ($outside !== null) {
-                foreach (array_reverse($weatherHistory) as $point) {
-                    $age = $now - (int) $point['t'];
-                    if ($age >= 6300 && $age <= 8100) {
-                        $laggedOutdoor = (float) $point['c'];
-                        break;
-                    }
-                }
-                $weatherHistory[] = ['t' => $now, 'c' => round($outside, 2)];
-            }
-            $state['weather_history'] = array_slice($weatherHistory, -6);
+            $weather = LCNThermalLearningModel::outdoorContext(
+                (array) ($state['weather_history'] ?? []), $now, $outside);
+            $state['weather_history'] = $weather['points'];
+            $laggedOutdoor = $weather['lag'];
             $processed = 0;
             $changes = [];
             foreach ($this->GetRooms() as $room) {
