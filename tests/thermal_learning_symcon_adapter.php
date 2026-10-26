@@ -89,7 +89,14 @@ $want = [
     '1006' => 'RELAY_INVALID'
 ];
 smartAssert(($state['last_exclusions'] ?? []) === $want, 'wrong per-room exclusion reasons');
-smartAssert(count($state['rooms']) === 5, 'successful room ingestion incomplete');
+smartAssert(count($state['rooms']) === 11, 'source audit must track all configured rooms');
+$readRooms = array_filter($state['rooms'], static function (array $r) use ($now): bool {
+    return (int) ($r['last']['time'] ?? 0) === $now;
+});
+smartAssert(count($readRooms) === 5, 'successful room ingestion incomplete');
+smartAssert(count(array_filter($state['rooms'], static function (array $r): bool {
+    return (int) ($r['source_audit']['checks'] ?? 0) === 1;
+})) === 11, 'source audit must store one bounded status per configured room');
 smartAssert(!isset($state['unbounded_legacy_data']), 'unbounded legacy root survived');
 smartAssert(strlen($h->ReadAttributeString('ThermalLearningState')) < 131072,
     'tick exceeded state storage budget');
@@ -136,6 +143,26 @@ smartAssert(LCNThermalLearningModel::sourceReason($now, $now, $now+1) === 'RELAY
     'future relay timestamp must be rejected');
 smartAssert(LCNThermalLearningModel::sourceReason($now, $now-1800, $now-1800) === 'OK',
     '30-minute update boundary must be accepted');
+
+// Invalid persisted JSON/schema must not destroy accumulated multi-year data.
+$h->mode = 0;
+$badState = '{"schema":1,"rooms":BROKEN';
+$h->attrs['ThermalLearningState'] = $badState;
+$h->ThermalLearningTick();
+smartAssert($h->ReadAttributeString('ThermalLearningState') === $badState,
+    'corrupted learning state must remain untouched');
+$futureSchema = '{"schema":2,"rooms":{"1001":{"name":"legacy"}}}';
+$h->attrs['ThermalLearningState'] = $futureSchema;
+$h->ThermalLearningTick();
+smartAssert($h->ReadAttributeString('ThermalLearningState') === $futureSchema,
+    'unknown learning schema must not overwrite history');
+$h->attrs['ThermalLearningState'] = '{}';
+$h->ThermalLearningTick();
+$fresh = json_decode($h->ReadAttributeString('ThermalLearningState'), true,
+    512, JSON_THROW_ON_ERROR);
+smartAssert(($fresh['schema'] ?? 0) === 1 &&
+    ($fresh['last_processed'] ?? -1) === 5,
+    'new installation must still initialize correctly');
 
 echo 'SMART-FBH read-only 11-room Symcon adapter integration passed' . PHP_EOL;
 echo json_encode([
