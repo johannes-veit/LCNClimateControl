@@ -120,7 +120,8 @@ for ($i=0; $i<10050; ++$i) {
 }
 verify(($stat['n'] ?? 0) === 10000, 'statistic counter must saturate');
 verify(($stat['variance'] ?? -1) >= 0, 'variance missing');
-verify(count($stat) === 3, 'statistic schema should stay constant');
+verify(count($stat) === 4, 'statistic schema should stay constant');
+verify(($stat['quality_n'] ?? 0) === 10000, 'quality sample count saturates');
 
 // A legacy average cannot claim historical statistical confidence.
 $s = ['rates'=>['heating'=>['all'=>['n'=>100,'mean'=>0.2]]]];
