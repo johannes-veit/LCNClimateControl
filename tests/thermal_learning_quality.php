@@ -92,4 +92,19 @@ verify(($s['loss_proxy']['n'] ?? 0) === 1, 'normalized cooling sample missing');
 verify(abs((float) $s['loss_proxy']['mean'] - 0.1005) < 0.01,
     'normalized cooling magnitude incorrect');
 
+// A relay may toggle twice between 30-minute observations, ending in the
+// original state. Its native VariableChanged timestamp must invalidate the window.
+$s = LCNThermalLearningModel::observe([], [
+    'time'=>$t, 'temp'=>20.0, 'target'=>22.0, 'valve'=>true,
+    'outside'=>8.0, 'temp_sample_at'=>$t, 'valve_sample_at'=>$t,
+    'valve_changed_at'=>$t-3600
+]);
+$s = LCNThermalLearningModel::observe($s, [
+    'time'=>$t+1800, 'temp'=>20.2, 'target'=>22.0, 'valve'=>true,
+    'outside'=>8.0, 'temp_sample_at'=>$t+1800, 'valve_sample_at'=>$t+1800,
+    'valve_changed_at'=>$t+900
+]);
+verify(($s['hidden_switches'] ?? 0) === 1, 'intermediate relay switch not detected');
+verify(($s['rates']['heating']['all']['n'] ?? 0) === 0, 'switched interval was learned');
+
 echo "30-minute SMART-FBH model regression tests passed\n";
