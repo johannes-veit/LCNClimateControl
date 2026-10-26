@@ -712,7 +712,7 @@ trait LCNClimateThermalLearning
                 || !is_array($state['rooms'] ?? null))) {
             $lines[] = 'WARNUNG: GESPEICHERTER LERNZUSTAND BESCHAEDIGT'
                 . ' ODER UNBEKANNTE VERSION; NICHT UEBERSCHRIEBEN.';
-            return implode("\\n", $lines);
+            return implode("\n", $lines);
         }
         if (!is_array($state) || empty($state['rooms'])) {
             $lines[] = 'Noch keine belastbaren Messwerte vorhanden.';
