@@ -54,6 +54,110 @@ final class LCNThermalLearningModel
         unset($state['afterheat']);
     }
 
+    /**
+     * Discard stale nested keys before persisting the years-long learning state.
+     * All allowed categories are fixed: adding samples never adds JSON array rows.
+     */
+    public static function compactRoom(array $room): array
+    {
+        $allowed = ['name', 'last', 'phase', 'afterheat', 'afterheat_model',
+            'rates', 'gradient_rates', 'weather_trend_rates', 'loss_proxy',
+            'last_evidence_at', 'resets', 'rejected_stale', 'hidden_switches',
+            'house_context_by_valve', 'source_temp_id', 'source_relay_id'];
+        $room = array_intersect_key($room, array_flip($allowed));
+        $stat = static function ($value): array {
+            if (!is_array($value) || !is_numeric($value['n'] ?? null)
+                || !is_numeric($value['mean'] ?? null)
+                || !is_finite((float) $value['mean'])) {
+                return [];
+            }
+            $s = ['n' => min(10000, max(0, (int) $value['n'])),
+                'mean' => round((float) $value['mean'], 4)];
+            if (isset($value['variance']) && is_numeric($value['variance'])
+                && is_finite((float) $value['variance'])) {
+                $s['variance'] = round(min(10000.0, max(0.0, (float) $value['variance'])), 6);
+            }
+            if (isset($value['quality_n'])) {
+                $s['quality_n'] = min(10000, max(0, (int) $value['quality_n']));
+            }
+            return $s;
+        };
+        $statFamilies = [
+            'rates' => [
+                'heating' => ['all', 'unknown', 'frost', 'cold', 'mild', 'warm'],
+                'passive_cooling' => ['all', 'unknown', 'frost', 'cold', 'mild', 'warm']
+            ],
+            'gradient_rates' => [
+                'heating' => ['delta_lt10', 'delta_10_20', 'delta_ge20'],
+                'passive_cooling' => ['delta_lt10', 'delta_10_20', 'delta_ge20']
+            ],
+            'weather_trend_rates' => [
+                'heating' => ['outside_rising', 'outside_falling'],
+                'passive_cooling' => ['outside_rising', 'outside_falling']
+            ],
+            'afterheat_model' => ['gain' => null, 'delay_minutes' => null]
+        ];
+        foreach ($statFamilies as $family => $kinds) {
+            $saved = is_array($room[$family] ?? null) ? $room[$family] : [];
+            $clean = [];
+            foreach ($kinds as $kind => $bands) {
+                if ($bands === null) {
+                    $v = $stat($saved[$kind] ?? null);
+                    if ($v !== []) { $clean[$kind] = $v; }
+                    continue;
+                }
+                $sub = is_array($saved[$kind] ?? null) ? $saved[$kind] : [];
+                foreach ($bands as $band) {
+                    $v = $stat($sub[$band] ?? null);
+                    if ($v !== []) { $clean[$kind][$band] = $v; }
+                }
+            }
+            if ($clean === []) { unset($room[$family]); }
+            else { $room[$family] = $clean; }
+        }
+        $loss = $stat($room['loss_proxy'] ?? null);
+        if ($loss === []) { unset($room['loss_proxy']); }
+        else { $room['loss_proxy'] = $loss; }
+
+        foreach (['last', 'phase'] as $field) {
+            if (!is_array($room[$field] ?? null)) { unset($room[$field]); continue; }
+            $room[$field] = array_intersect_key($room[$field], array_flip([
+                'time','temp','target','valve','outside','temp_sample_at',
+                'valve_sample_at','valve_changed_at','outside_lag'
+            ]));
+        }
+        if (isset($room['afterheat'])) {
+            $room['afterheat'] = is_array($room['afterheat'])
+                ? array_intersect_key($room['afterheat'], array_flip([
+                    'valid','begin_at','begin_temp','peak','peak_at'
+                ])) : [];
+        }
+        $counts = is_array($room['house_context_by_valve'] ?? null)
+            ? $room['house_context_by_valve'] : [];
+        $cleanCounts = [];
+        foreach (['valve_on','valve_off'] as $kind) {
+            $v = is_array($counts[$kind] ?? null) ? $counts[$kind] : [];
+            foreach (['similar','above','below'] as $label) {
+                if (isset($v[$label]) && is_numeric($v[$label])) {
+                    $cleanCounts[$kind][$label] =
+                        min(10000, max(0, (int) $v[$label]));
+                }
+            }
+        }
+        if ($cleanCounts === []) { unset($room['house_context_by_valve']); }
+        else { $room['house_context_by_valve'] = $cleanCounts; }
+        if (isset($room['name'])) {
+            $room['name'] = is_string($room['name'])
+                ? substr($room['name'], 0, 120) : '';
+        }
+        foreach (['resets','rejected_stale','hidden_switches'] as $key) {
+            if (isset($room[$key])) {
+                $room[$key] = min(100000, max(0, (int) $room[$key]));
+            }
+        }
+        return $room;
+    }
+
     /** Pure, bounded state transition; callable in the PHP offline test without Symcon. */
     public static function observe(array $state, array $input): array
     {
@@ -380,12 +484,7 @@ trait LCNClimateThermalLearning
             // Do not persist transient or unknown fields from old/foreign schemas.
             // Each room has a fixed set of fields: no event history or daily samples.
             foreach ($state['rooms'] as &$compactRoom) {
-                $compactRoom = array_intersect_key((array) $compactRoom, array_flip([
-                    'name', 'last', 'phase', 'afterheat', 'afterheat_model', 'rates',
-                    'last_evidence_at', 'resets', 'rejected_stale', 'gradient_rates',
-                    'weather_trend_rates', 'loss_proxy', 'house_context_by_valve',
-                    'hidden_switches', 'source_temp_id', 'source_relay_id'
-                ]));
+                $compactRoom = LCNThermalLearningModel::compactRoom((array) $compactRoom);
             }
             unset($compactRoom);
             // Bounded JSON guard: refuse unexpected growth rather than persisting
