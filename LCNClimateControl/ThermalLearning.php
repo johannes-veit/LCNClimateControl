@@ -807,7 +807,12 @@ trait LCNClimateThermalLearning
                             || $relayAge > 1800) {
                             $reason = 'Relaisrückmeldung fehlt/älter als 30 Minuten';
                         } else {
-                            $relayOn = (bool) GetValue($relayID);
+                            $rawRelay = GetValue($relayID);
+                            if (!is_bool($rawRelay) && $rawRelay !== 0 && $rawRelay !== 1) {
+                                $reason = 'Relaisstatus mit ungueltigem Datentyp';
+                            } else {
+                                $relayOn = (bool) $rawRelay;
+                            }
                         }
                     }
                 }
