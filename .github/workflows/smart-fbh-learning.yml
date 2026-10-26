@@ -7,6 +7,7 @@ on:
     paths:
       - 'LCNClimateControl/ThermalLearning.php'
       - 'tests/thermal_learning_quality.php'
+      - 'tests/thermal_learning_five_years.php'
       - '.github/workflows/smart-fbh-learning.yml'
   workflow_dispatch:
 jobs:
@@ -24,5 +25,8 @@ jobs:
         run: |
           php -l LCNClimateControl/ThermalLearning.php
           php -l tests/thermal_learning_quality.php
+          php -l tests/thermal_learning_five_years.php
       - name: Regression tests (no Symcon required)
         run: php tests/thermal_learning_quality.php
+      - name: Five-year simulation (11 rooms, constant storage)
+        run: php tests/thermal_learning_five_years.php
