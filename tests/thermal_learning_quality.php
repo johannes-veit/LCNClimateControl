@@ -166,4 +166,22 @@ for ($i=0; $i<=2; ++$i) {
 verify(($s['rates']['heating']['all']['n'] ?? 0) === 1,
     'continuous genuine relay phase should be learned');
 
+// Two time scales: recent behaviour must respond to a change without
+// immediately overwriting the multi-month/multi-year thermal baseline.
+$trendStats = [];
+for ($i = 0; $i < 150; ++$i) {
+    $rate = $i < 130 ? 0.10 : 0.40; // last 20 periods have a new heating rate
+    $base = ['rates' => ['heating' => ['all' => $trendStats]]];
+    $base = obs($base, $t, 20.0, true);
+    $base = obs($base, $t+1800, 20.0 + $rate/2, true);
+    $base = obs($base, $t+3600, 20.0 + $rate, true);
+    $trendStats = $base['rates']['heating']['all'] ?? [];
+}
+verify((float) ($trendStats['mean'] ?? 0) >
+    (float) ($trendStats['long_mean'] ?? 0) + 0.15,
+    'recent heating response should differ from long-term baseline');
+verify((float) ($trendStats['long_mean'] ?? 0) > 0.10 &&
+    (float) ($trendStats['long_mean'] ?? 0) < 0.20,
+    'long baseline must not react as fast as recent EWMA');
+
 echo "30-minute SMART-FBH model regression tests passed\n";
