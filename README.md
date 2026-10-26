@@ -1,5 +1,14 @@
 # LCN Climate Control – IP-Symcon 9
 
+## SMART-FBH – robustes Mehrschrittpaket (Entwicklung, 26.10.2026)
+
+- Bei Austausch einer Isttemperaturquelle oder eines Relais fuer einen gleichbleibenden S1-Raum wird der zugehoerige Lernzustand neu begonnen; alte Messwerte werden nicht als Eigenschaft der neuen Sensorquelle fortgeschrieben.
+- Die Heiz-/Auskuehlrate darf nur gelernt werden, wenn der letzte Relaiswertwechsel vor dem Beginn des ganzen Lernfensters liegt. Letzte erkannte Zwischenschaltungen unterbrechen die Lernphase.
+- Das persistierte JSON-Attribut `ThermalLearningState` hat eine harte Obergrenze von 131072 Bytes (128 KiB); bei Ueberschreitung wird ein fehlerhafter Schreibversuch verworfen und debug-protokolliert. Kein Rohdatenarchiv.
+- Die ChatGPT-Lerndiagnose nennt die aktuelle Bytegroesse des Lernzustandes.
+- Zugehoerige Regressionstests fuer durchgehende und unterbrochene Heizfenster hinzugefuegt; realer Relaisrueckmeldungsnachweis weiterhin offen.
+- Kein Eingriff in die Regelung, A7/A8, S1 oder Relais, keine neuen Variablen.
+
 ## SMART-FBH – Langzeitqualitaet (Entwicklung, noch nicht freigegeben)
 
 - Pro erlerntem Mittelwert werden nur Zaehler, gleitender Mittelwert und gleitende Varianz gespeichert (konstanter Platzbedarf).
