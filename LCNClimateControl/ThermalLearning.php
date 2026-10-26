@@ -453,9 +453,20 @@ trait LCNClimateThermalLearning
                     // Weather is optional: learn indoor behaviour without inventing weather.
                 }
             }
-            $state = json_decode($this->ReadAttributeString('ThermalLearningState'), true);
-            if (!is_array($state) || ($state['schema'] ?? 0) !== 1) {
+            $rawState = $this->ReadAttributeString('ThermalLearningState');
+            // A damaged persisted model must never silently erase years of
+            // learning. Only the documented empty fresh-install state may
+            // initialize schema 1. Recovery requires explicit user action.
+            if ($rawState === '{}' || $rawState === '') {
                 $state = ['schema' => 1, 'rooms' => [], 'created_at' => $now];
+            } else {
+                $state = json_decode($rawState, true);
+                if (!is_array($state) || ($state['schema'] ?? null) !== 1
+                    || !is_array($state['rooms'] ?? null)) {
+                    $this->SendDebug('PassiveThermalLearning',
+                        'Stored learning state invalid: preserved without overwrite', 0);
+                    return;
+                }
             }
             // Retain known state only: a broken previous schema or a legacy
             // unknown field cannot permanently prevent the 128 KiB guard.
