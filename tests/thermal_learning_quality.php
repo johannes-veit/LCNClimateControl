@@ -61,4 +61,20 @@ for ($i=0; $i<=2; ++$i) {
 verify(($s['rates']['heating']['all']['n'] ?? 0) === 1, 'weather-independent base rate');
 verify(!isset($s['gradient_rates']), 'missing weather produced gradient evidence');
 
+// Two-hour outdoor comparison classifies only sufficiently changed weather.
+$s = [];
+for ($i=0; $i<=2; ++$i) {
+    $now = $t + 1800*$i;
+    $s = LCNThermalLearningModel::observe($s, [
+        'time'=>$now, 'temp'=>20.0 + $i*0.2, 'target'=>22.0,
+        'valve'=>true, 'outside'=>9.0,
+        'outside_lag'=>7.5, 'temp_sample_at'=>$now,
+        'valve_sample_at'=>$now
+    ]);
+}
+verify(($s['weather_trend_rates']['heating']['outside_rising']['n'] ?? 0) === 1,
+    'two-hour rising outdoor trend missing');
+verify(!isset($s['weather_trend_rates']['heating']['outside_falling']),
+    'incorrect weather trend classification');
+
 echo "30-minute SMART-FBH model regression tests passed\n";
