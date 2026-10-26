@@ -74,7 +74,9 @@ final class LCNThermalLearningModel
             'time' => $time, 'temp' => $temp, 'target' => $target,
             'valve' => $valve, 'outside' => $outside,
             'temp_sample_at' => $tempSampleAt,
-            'valve_sample_at' => $valveSampleAt
+            'valve_sample_at' => $valveSampleAt,
+            'outside_lag' => isset($input['outside_lag']) && is_numeric($input['outside_lag'])
+                ? (float) $input['outside_lag'] : null
         ];
         $previous = $state['last'] ?? null;
         if (!is_array($previous)) {
@@ -159,6 +161,15 @@ final class LCNThermalLearningModel
                                 (array) ($state['gradient_rates'][$kind][$gradientBand] ?? []), abs($rate));
                         }
                     }
+                    // The outdoor air from roughly two hours earlier is a
+                    // descriptive context, NOT proof of an individual room's lag.
+                    $lag = $observation['outside_lag'] ?? null;
+                    if ($lag !== null && is_finite((float) $lag)
+                        && $outside !== null && abs($outside - (float) $lag) >= 1.0) {
+                        $direction = $outside > (float) $lag ? 'outside_rising' : 'outside_falling';
+                        $state['weather_trend_rates'][$kind][$direction] = self::mean(
+                            (array) ($state['weather_trend_rates'][$kind][$direction] ?? []), abs($rate));
+                    }
                     $state['last_evidence_at'] = $time;
                 }
                 // Non-overlapping windows: avoid counting one warm-up many times.
@@ -226,6 +237,27 @@ trait LCNClimateThermalLearning
                 }
             }
             $state['rooms'] = array_intersect_key((array) ($state['rooms'] ?? []), $configuredKeys);
+            // Fixed, six-entry outdoor history (at most 3 hours at 30-min cadence).
+            // Shared by all rooms: O(1) persistent storage over months or years.
+            $laggedOutdoor = null;
+            $weatherHistory = (array) ($state['weather_history'] ?? []);
+            $weatherHistory = array_values(array_filter($weatherHistory, static function ($v) use ($now): bool {
+                return is_array($v) && isset($v['t'], $v['c'])
+                    && is_numeric($v['t']) && is_numeric($v['c'])
+                    && (int) $v['t'] <= $now && $now - (int) $v['t'] <= 10800;
+            }));
+            $weatherHistory = array_slice($weatherHistory, -6);
+            if ($outside !== null) {
+                foreach (array_reverse($weatherHistory) as $point) {
+                    $age = $now - (int) $point['t'];
+                    if ($age >= 6300 && $age <= 8100) {
+                        $laggedOutdoor = (float) $point['c'];
+                        break;
+                    }
+                }
+                $weatherHistory[] = ['t' => $now, 'c' => round($outside, 2)];
+            }
+            $state['weather_history'] = array_slice($weatherHistory, -6);
             $processed = 0;
             foreach ($this->GetRooms() as $room) {
                 if (empty($room['Enabled'])) {
@@ -262,7 +294,8 @@ trait LCNClimateThermalLearning
                     'time' => $now, 'temp' => (float) $temp, 'target' => $target,
                     'valve' => (bool) GetValue($statusID), 'outside' => $outside,
                     'temp_sample_at' => (int) ($tMeta['VariableUpdated'] ?? 0),
-                    'valve_sample_at' => (int) ($meta['VariableUpdated'] ?? 0)
+                    'valve_sample_at' => (int) ($meta['VariableUpdated'] ?? 0),
+                    'outside_lag' => $laggedOutdoor
                 ]);
                 ++$processed;
             }
@@ -274,7 +307,8 @@ trait LCNClimateThermalLearning
             foreach ($state['rooms'] as &$compactRoom) {
                 $compactRoom = array_intersect_key((array) $compactRoom, array_flip([
                     'name', 'last', 'phase', 'afterheat', 'afterheat_model', 'rates',
-                    'last_evidence_at', 'resets', 'rejected_stale', 'gradient_rates'
+                    'last_evidence_at', 'resets', 'rejected_stale', 'gradient_rates',
+                    'weather_trend_rates'
                 ]));
             }
             unset($compactRoom);
@@ -504,6 +538,12 @@ trait LCNClimateThermalLearning
                 . ' | Fenster-Resets: ' . (int) ($saved['resets'] ?? 0)
                 . ' | stale Abweisungen: ' . (int) ($saved['rejected_stale'] ?? 0);
             $lines[] = '  Innen-Aussen-Differenz: ' . implode(' | ', $gradientDetail);
+            $trend = (array) ($saved['weather_trend_rates'] ?? []);
+            $lines[] = '  Aussenwetter seit ca. 2h: steigend H '
+                . $describeRate((array) ($trend['heating']['outside_rising'] ?? []), '°C/h')
+                . ', A ' . $describeRate((array) ($trend['passive_cooling']['outside_rising'] ?? []), '°C/h')
+                . ' | fallend H ' . $describeRate((array) ($trend['heating']['outside_falling'] ?? []), '°C/h')
+                . ', A ' . $describeRate((array) ($trend['passive_cooling']['outside_falling'] ?? []), '°C/h');
         }
         $lines[] = '--- ZUSAMMENFASSUNG ---';
         $lines[] = 'Aktive Räume: ' . $configured . ' | Datenquellen jetzt verwertbar: '
@@ -512,6 +552,7 @@ trait LCNClimateThermalLearning
             . 'Lernraten benoetigen neuere Temperatur- UND Relaisstatusmessungen am Fensterende (max. 30 min alt).';
         $lines[] = 'Ein gültiger Sensorwert bedeutet noch keinen gültigen Lernzyklus. '
             . 'Sonneneinstrahlung, offene Türen und unbekannter Vorlauf können Lernwerte beeinflussen.';
+        $lines[] = 'Wettertrend ueber ca. 2h: nur bei >=1 K Aenderung; maximal sechs gemeinsame Wetterpunkte gespeichert. ';
         $lines[] = 'Innen-Aussen-Vergleich: Beobachtete Trends, keine kausale Heizlast oder Energiebedarf; '
             . 'Fenster nur bei Wetterveraenderung <=3 K, je Differenzklasse mindestens 3 Fenster.';
         $lines[] = 'Keine aktive Fußbodenkühlung angelernt; Abkühlen bedeutet passives Auskühlen bei Ventil AUS.';
