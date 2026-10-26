@@ -184,4 +184,28 @@ verify((float) ($trendStats['long_mean'] ?? 0) > 0.10 &&
     (float) ($trendStats['long_mean'] ?? 0) < 0.20,
     'long baseline must not react as fast as recent EWMA');
 
+// Sensor/relay source audit: 30-minute spacing, no raw readings retained.
+$audit = [];
+for ($i = 0; $i < 8; ++$i) {
+    $audit = LCNThermalLearningModel::auditSource($audit, 'OK', $t + $i * 1800);
+}
+verify(($audit['checks'] ?? 0) === 8, 'source audit counts one 30-min window');
+verify(LCNThermalLearningModel::auditLabel($audit) === 'QUELLEN_REGELMAESSIG',
+    'stable read-only sources must be declared regular');
+$auditDuplicate = LCNThermalLearningModel::auditSource($audit, 'RELAY_STALE', $t+7*1800+5);
+verify($auditDuplicate === $audit, 'rapid manual extra run must not double-count');
+for ($i = 8; $i < 13; ++$i) {
+    $audit = LCNThermalLearningModel::auditSource($audit, 'RELAY_STALE', $t + $i * 1800);
+}
+verify(LCNThermalLearningModel::auditLabel($audit) === 'DATENQUELLE_BLOCKIERT',
+    'repeated stale relay must block source readiness');
+verify(($audit['bad_streak'] ?? 0) === 5, 'bad source streak not counted');
+$compacted = LCNThermalLearningModel::compactRoom([
+    'source_audit' => $audit + ['unbounded_events' => str_repeat('X', 100000)]
+]);
+verify(!isset($compacted['source_audit']['unbounded_events']),
+    'source audit must not persist arbitrary history');
+verify(strlen(json_encode($compacted, JSON_THROW_ON_ERROR)) < 350,
+    'compact audit exceeds intended size');
+
 echo "30-minute SMART-FBH model regression tests passed\n";
