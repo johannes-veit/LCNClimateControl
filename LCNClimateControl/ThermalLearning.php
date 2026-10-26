@@ -54,6 +54,7 @@ final class LCNThermalLearningModel
         $valve = $input['valve'] ?? null;
         $tempSampleAt = (int) ($input['temp_sample_at'] ?? $time);
         $valveSampleAt = (int) ($input['valve_sample_at'] ?? $time);
+        $valveChangedAt = (int) ($input['valve_changed_at'] ?? 0);
         // Reject future, absent or stale source readings before opening a window.
         if ($tempSampleAt <= 0 || $tempSampleAt > $time || $time - $tempSampleAt > 1800
             || $valveSampleAt <= 0 || $valveSampleAt > $time || $time - $valveSampleAt > 1800) {
@@ -75,6 +76,7 @@ final class LCNThermalLearningModel
             'valve' => $valve, 'outside' => $outside,
             'temp_sample_at' => $tempSampleAt,
             'valve_sample_at' => $valveSampleAt,
+            'valve_changed_at' => $valveChangedAt,
             'outside_lag' => isset($input['outside_lag']) && is_numeric($input['outside_lag'])
                 ? (float) $input['outside_lag'] : null
         ];
@@ -89,6 +91,18 @@ final class LCNThermalLearningModel
             return $state;
         }
         $changed = $valve !== (bool) ($previous['valve'] ?? false);
+        // VariableChanged reveals a relay transition even if both 30-min
+        // snapshots show the same state (ON -> OFF -> ON).
+        $intermediateSwitch = $valveChangedAt > (int) ($previous['time'] ?? 0)
+            && $valveChangedAt <= $time;
+        if ($intermediateSwitch && !$changed) {
+            unset($state['afterheat']);
+            $state['phase'] = $observation;
+            $state['last'] = $observation;
+            $state['resets'] = min(100000, 1 + (int) ($state['resets'] ?? 0));
+            $state['hidden_switches'] = min(100000, 1 + (int) ($state['hidden_switches'] ?? 0));
+            return $state;
+        }
         $targetChanged = abs($target - (float) ($previous['target'] ?? $target)) > 0.15;
         $implausibleJump = abs($temp - (float) ($previous['temp'] ?? $temp)) > max(1.2, 3.0 * $gap / 3600);
         if ($gap > 2700 || $targetChanged || $implausibleJump) {
@@ -308,7 +322,8 @@ trait LCNClimateThermalLearning
                     if (abs($delta) <= 0.8 && isset($prior['valve'])
                         && (bool) $prior['valve'] === (bool) GetValue($statusID)
                         && abs((float) $target - (float) ($prior['target'] ?? $target)) <= 0.15
-                        && $now - (int) ($meta['VariableUpdated'] ?? 0) <= 1800) {
+                        && $now - (int) ($meta['VariableUpdated'] ?? 0) <= 1800
+                        && (int) ($meta['VariableChanged'] ?? 0) <= (int) ($prior['time'] ?? 0)) {
                         $changes[$key] = ['delta' => $delta, 'valve' => (bool) GetValue($statusID)];
                     }
                 }
@@ -317,6 +332,7 @@ trait LCNClimateThermalLearning
                     'valve' => (bool) GetValue($statusID), 'outside' => $outside,
                     'temp_sample_at' => (int) ($tMeta['VariableUpdated'] ?? 0),
                     'valve_sample_at' => (int) ($meta['VariableUpdated'] ?? 0),
+                    'valve_changed_at' => (int) ($meta['VariableChanged'] ?? 0),
                     'outside_lag' => $laggedOutdoor
                 ]);
                 ++$processed;
@@ -341,7 +357,8 @@ trait LCNClimateThermalLearning
                 $compactRoom = array_intersect_key((array) $compactRoom, array_flip([
                     'name', 'last', 'phase', 'afterheat', 'afterheat_model', 'rates',
                     'last_evidence_at', 'resets', 'rejected_stale', 'gradient_rates',
-                    'weather_trend_rates', 'loss_proxy', 'house_context_by_valve'
+                    'weather_trend_rates', 'loss_proxy', 'house_context_by_valve',
+                    'hidden_switches'
                 ]));
             }
             unset($compactRoom);
@@ -569,7 +586,8 @@ trait LCNClimateThermalLearning
                 . ' | passives Auskühlen: ' . $describeRate($cool, '°C/h')
                 . ' | Nachlauf: ' . $describeRate($after, '°C')
                 . ' | Fenster-Resets: ' . (int) ($saved['resets'] ?? 0)
-                . ' | stale Abweisungen: ' . (int) ($saved['rejected_stale'] ?? 0);
+                . ' | stale Abweisungen: ' . (int) ($saved['rejected_stale'] ?? 0)
+                . ' | erkannte Zwischenschaltungen: ' . (int) ($saved['hidden_switches'] ?? 0);
             $lines[] = '  Innen-Aussen-Differenz: ' . implode(' | ', $gradientDetail);
             $trend = (array) ($saved['weather_trend_rates'] ?? []);
             $loss = (array) ($saved['loss_proxy'] ?? []);
