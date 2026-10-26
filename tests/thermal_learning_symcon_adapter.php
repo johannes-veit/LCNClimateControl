@@ -27,9 +27,13 @@ final class ThermalTickHarness
     public array $debug = [];
     public int $InstanceID = 17597;
     public bool $enabled = true;
+    public bool $preflight = false;
     public int $mode = 0;
     public bool $throwRoom = true;
-    public function ReadPropertyBoolean(string $name): bool { return $this->enabled; }
+    public function ReadPropertyBoolean(string $name): bool {
+        return $name === 'ThermalLearningEnabled' ? $this->enabled
+            : ($name === 'ThermalSourcePreflightEnabled' ? $this->preflight : false);
+    }
     public function ReadPropertyInteger(string $name): int { return 0; }
     public function ReadAttributeString(string $name): string { return $this->attrs[$name] ?? ''; }
     public function WriteAttributeString(string $name, string $value): void {
@@ -209,6 +213,49 @@ smartAssert(($fresh['schema'] ?? 0) === 1 &&
     ($fresh['last_processed'] ?? -1) === 5 &&
     ($fresh['last_eligible'] ?? -1) === 0,
     'new installation must still initialize correctly');
+
+// Source-only preflight: may collect only bounded source counters, never
+// start thermal observations, even if old heating values are present.
+$preflightSeed = $fresh;
+$preflightSeed['rooms']['1008']['rates']['heating']['all'] = [
+    'n'=>20,'mean'=>0.25,'variance'=>0.002,'quality_n'=>20,'long_mean'=>0.21
+];
+$preflightSeed['rooms']['1008']['last'] = ['time'=>$now-1800,'temp'=>21.0,
+    'target'=>21.5,'valve'=>true,'temp_sample_at'=>$now-1800,
+    'valve_sample_at'=>$now-1800];
+$h->attrs['ThermalLearningState'] = json_encode($preflightSeed, JSON_THROW_ON_ERROR);
+$h->enabled = false;
+$h->preflight = true;
+$h->mode = 0;
+$h->ThermalLearningTick();
+$observing = json_decode($h->ReadAttributeString('ThermalLearningState'), true,
+    512, JSON_THROW_ON_ERROR);
+smartAssert(($observing['last_processed'] ?? -1) === 5,
+    'source-only mode did not collect valid source pairs');
+smartAssert(($observing['last_eligible'] ?? -1) === 0,
+    'preflight mode falsely permitted thermal learning');
+smartAssert(!isset($observing['rooms']['1008']['last'])
+    && !isset($observing['rooms']['1008']['phase']),
+    'preflight mode kept or generated thermal windows');
+smartAssert(($observing['rooms']['1008']['rates']['heating']['all']['n'] ?? 0) === 20,
+    'preflight must preserve historical thermal statistics');
+smartAssert(!isset($observing['weather_history']),
+    'preflight mode unexpectedly requested or stored weather context');
+smartAssert(str_contains($h->ThermalLearningDiagnosticReport(),
+    'Quellen-Vorpruefung: AKTIV'), 'preflight status missing from diagnostic');
+$h->mode = 1; // source acceptance is read-only, also outside HEIZEN
+$h->ThermalLearningTick();
+$preflightCooling = json_decode($h->ReadAttributeString('ThermalLearningState'),
+    true, 512, JSON_THROW_ON_ERROR);
+smartAssert(($preflightCooling['last_processed'] ?? -1) === 5
+    && ($preflightCooling['last_eligible'] ?? -1) === 0,
+    'preflight must work independently without heating or actuation');
+$h->preflight = false;
+$h->enabled = false;
+$oldPreflight = $h->ReadAttributeString('ThermalLearningState');
+$h->ThermalLearningTick();
+smartAssert($h->ReadAttributeString('ThermalLearningState') === $oldPreflight,
+    'disabling both opt-ins must stop all state writes');
 
 echo 'SMART-FBH read-only 11-room Symcon adapter integration passed' . PHP_EOL;
 echo json_encode([
