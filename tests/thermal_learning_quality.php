@@ -232,3 +232,10 @@ verify(strlen(json_encode($compacted, JSON_THROW_ON_ERROR)) < 350,
     'compact audit exceeds intended size');
 
 echo "30-minute SMART-FBH model regression tests passed\n";
+
+// Reference-only experiment: one S1 target controls learning eligibility,
+// while all other rooms can still be audited without creating samples.
+verify(LCNThermalLearningModel::isReferenceRoom(21099, 21099), 'EG Bad reference enabled');
+verify(!LCNThermalLearningModel::isReferenceRoom(34107, 21099), 'EG Buero must not learn in reference mode');
+verify(LCNThermalLearningModel::isReferenceRoom(34107, 0), 'optional all-room learning');
+verify(!LCNThermalLearningModel::isReferenceRoom(0, 0), 'invalid target rejected');
