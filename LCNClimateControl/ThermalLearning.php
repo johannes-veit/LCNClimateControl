@@ -20,8 +20,15 @@ final class LCNThermalLearningModel
         // Existing legacy averages have no known historical variance. Gather
         // ten fresh observations before describing their dispersion as stable.
         $qualityN = min(10000, max(0, (int) ($entry['quality_n'] ?? 0)) + 1);
+        // Two time scales: recent EWMA and persistent slowly moving baseline.
+        // Older models start their baseline at the existing estimate; no old
+        // samples are invented. The count is capped at 10000 for bounded state.
+        $longOld = isset($entry['long_mean']) && is_numeric($entry['long_mean'])
+            && is_finite((float) $entry['long_mean'])
+            ? (float) $entry['long_mean'] : $old;
+        $longMean = $n === 1 ? $value : $longOld + ($value - $longOld) / $n;
         return ['n' => $n, 'mean' => round($next, 4), 'variance' => round($variance, 6),
-            'quality_n' => $qualityN];
+            'quality_n' => $qualityN, 'long_mean' => round($longMean, 4)];
     }
 
     private static function outdoorBand(?float $outdoor): string
@@ -112,6 +119,10 @@ final class LCNThermalLearningModel
             }
             if (isset($value['quality_n'])) {
                 $s['quality_n'] = min(10000, max(0, (int) $value['quality_n']));
+            }
+            if (isset($value['long_mean']) && is_numeric($value['long_mean'])
+                && is_finite((float) $value['long_mean'])) {
+                $s['long_mean'] = round((float) $value['long_mean'], 4);
             }
             return $s;
         };
@@ -753,6 +764,15 @@ trait LCNClimateThermalLearning
             $lines[] = '  Lernqualitaet: Heizen ' . $quality($heat)
                 . ', Auskuehlen ' . $quality($cool)
                 . ', Nachlauf ' . $quality($after);
+            $longText = static function (array $v): string {
+                if ((int) ($v['quality_n'] ?? 0) < 30 || !isset($v['long_mean'])) {
+                    return 'lernt (<30 neue Fenster)';
+                }
+                return number_format((float) $v['long_mean'], 3, ',', '.') . ' °C/h';
+            };
+            $lines[] = '  Langzeitreferenz: Heizen ' . $longText($heat)
+                . ' | passiv Auskuehlen ' . $longText($cool)
+                . ' (getrennt vom gleitenden Kurzzeitwert)';
             $lines[] = '  Innen-Aussen-Differenz: ' . implode(' | ', $gradientDetail);
             $trend = (array) ($saved['weather_trend_rates'] ?? []);
             $loss = (array) ($saved['loss_proxy'] ?? []);
