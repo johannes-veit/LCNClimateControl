@@ -25,6 +25,7 @@ final class ThermalTickHarness
     public array $rooms = [];
     public array $attrs = ['ThermalLearningState' => '{}'];
     public array $debug = [];
+    public int $InstanceID = 17597;
     public bool $enabled = true;
     public int $mode = 0;
     public bool $throwRoom = true;
@@ -95,6 +96,8 @@ smartAssert(strlen($h->ReadAttributeString('ThermalLearningState')) < 131072,
 smartAssert(count($h->debug) === 1, 'read error must be isolated and diagnosed');
 smartAssert(str_contains($h->ThermalLearningDiagnosticReport(),
     'Im letzten Lernlauf ausgeschlossen:'), 'diagnostic lacks exclusions');
+smartAssert(str_contains($h->ThermalLearningDiagnosticReport(),
+    'Datenquellen jetzt verwertbar: 5'), 'diagnostic overreports invalid relay as ready');
 
 $before = $h->ReadAttributeString('ThermalLearningState');
 $h->enabled = false;
