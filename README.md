@@ -1,5 +1,16 @@
 # LCN Climate Control – IP-Symcon 9
 
+## SMART-FBH – separat aktivierbare Quellen-Vorpruefung (Entwicklung, nicht produktiv freigegeben)
+
+- Neuer optionaler Schalter `ThermalSourcePreflightEnabled` im SMART-FBH-Konfigurationsbereich. **Ab Werk AUS.** Der bestehende `ThermalLearningEnabled` bleibt unabhaengig und standardmaessig AUS.
+- Wenn NUR die Quellen-Vorpruefung aktiviert ist, laeuft alle **30 Minuten** derselbe vorhandene passive Timer; er liest bestehende IP-Symcon-Variablen und schreibt ausschliesslich komprimierte Quellenqualitaetszaehler in das bereits vorhandene `ThermalLearningState`-Attribut. **Keine Heiz- oder Abkuehlmodelle, kein `observe()`, keine Wetterabfragen, keine A7/A8-, S1-, Relais- oder Sollwertbefehle.**
+- Vorpruefung funktioniert auch bei Symcon-Betriebsart nicht HEIZEN, waehrend das eigentliche thermische Lernen weiterhin nur in HEIZEN erlaubt ist. Alle alten thermischen Mittelwerte bleiben erhalten; aktive Heiz-/Nachlauf-Beobachtungsphasen werden waehrend der Vorpruefung zur sicheren Neuaufnahme beendet.
+- Der vorhandene Diagnose-Timer ist bei Vorpruefung ebenfalls alle 30 Minuten aktiv; keine weitere sichtbare Variable, kein weiterer Timer, kein Datenarchiv, keine neue Hardware.
+- Die ChatGPT-Lerndiagnose zeigt Vorpruef-Status, aktuelle Datenpaare, Qualifikation und pro Raum: letzte Relay-`VariableUpdated`-Meldung gegen `VariableChanged`-Statuswechsel. Nur die erste beweist eine erneute Statusmeldung.
+- Die Konfigurationsbeschriftung wurde von der ueberholten Angabe **5 Minuten** auf den tatsaechlichen **30-Minuten**-Takt korrigiert.
+- Beim spaeteren ersten Test in Symcon: ausschliesslich `NUR Quellen-Vorabpruefung` einschalten, `Passives Lernprogramm aktivieren` ausgeschaltet lassen. Nach mindestens sechs halbstuendlichen Laeufen den vorhandenen Button **SMART-FBH: Lern-Diagnose fuer ChatGPT anzeigen (nur lesen)** benutzen. Datenquellen mit ausschliesslich schaltbedingtem `VariableUpdated` duerfen keinen gruenen Lernstatus bekommen. Bei ungewoehnlichem Verhalten Vorpruefung deaktivieren, keine LCN-Konfiguration veraendern.
+- Echtes Verhalten der elf nativen LCN-Relaisrueckmeldungen weiterhin unbestaetigt; aktuelle Tests verwenden ausschliesslich synthetische Daten. **Nicht auf `main` uebernommen.**
+
 ## SMART-FBH – Zwei-Stufen-Freigabe fuer echte Datenquellen (Entwicklungszweig)
 
 - **Stufe 1 Datenquellen-Abnahme:** Isttemperatur und nativer Relaisstatus muessen per `VariableUpdated` regelmaessig aktuelle Meldungen liefern. Sechs erfolgreiche Quellenpruefungen in Folge im festen 30-Minuten-Takt und eine geglaettete Verfuegbarkeit von mindestens 80% sind noetig.
