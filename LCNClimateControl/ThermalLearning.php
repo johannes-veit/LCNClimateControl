@@ -49,8 +49,8 @@ final class LCNThermalLearningModel
         $tempSampleAt = (int) ($input['temp_sample_at'] ?? $time);
         $valveSampleAt = (int) ($input['valve_sample_at'] ?? $time);
         // Reject future, absent or stale source readings before opening a window.
-        if ($tempSampleAt <= 0 || $tempSampleAt > $time || $time - $tempSampleAt > 600
-            || $valveSampleAt <= 0 || $valveSampleAt > $time || $time - $valveSampleAt > 600) {
+        if ($tempSampleAt <= 0 || $tempSampleAt > $time || $time - $tempSampleAt > 1800
+            || $valveSampleAt <= 0 || $valveSampleAt > $time || $time - $valveSampleAt > 1800) {
             unset($state['last'], $state['phase'], $state['afterheat']);
             $state['rejected_stale'] = min(100000, 1 + (int) ($state['rejected_stale'] ?? 0));
             return $state;
@@ -83,7 +83,7 @@ final class LCNThermalLearningModel
         $changed = $valve !== (bool) ($previous['valve'] ?? false);
         $targetChanged = abs($target - (float) ($previous['target'] ?? $target)) > 0.15;
         $implausibleJump = abs($temp - (float) ($previous['temp'] ?? $temp)) > max(1.2, 3.0 * $gap / 3600);
-        if ($gap > 1800 || $targetChanged || $implausibleJump) {
+        if ($gap > 2700 || $targetChanged || $implausibleJump) {
             unset($state['afterheat']);
             $state['phase'] = $observation;
             $state['last'] = $observation;
@@ -127,7 +127,7 @@ final class LCNThermalLearningModel
                 $endSampleAt = (int) ($observation['temp_sample_at'] ?? 0);
                 $startSampleAt = (int) ($phase['temp_sample_at'] ?? 0);
                 $freshEvidence = $endSampleAt > $startSampleAt
-                    && $endSampleAt <= $time && $time - $endSampleAt <= 600;
+                    && $endSampleAt <= $time && $time - $endSampleAt <= 1800;
                 // A status unchanged for hours must not imply that a relay never switched.
                 $startRelayAt = (int) ($phase['valve_sample_at'] ?? 0);
                 $endRelayAt = (int) ($observation['valve_sample_at'] ?? 0);
@@ -316,8 +316,8 @@ trait LCNClimateThermalLearning
         $lines[] = 'Lernlauf zuletzt erfasste Räume: ' . (int) ($state['last_processed'] ?? 0);
         $lines[] = 'Lernstatistik angelegt: ' . (isset($state['created_at'])
             ? date('d.m.Y H:i:s', (int) $state['created_at']) : 'noch nicht');
-        if ($enabled && ($tickAge === null || $tickAge > 900)) {
-            $lines[] = 'WARNUNG: Lern-Timer noch nicht gelaufen oder seit mehr als 15 Minuten ohne Lauf.';
+        if ($enabled && ($tickAge === null || $tickAge > 4500)) {
+            $lines[] = 'WARNUNG: Lern-Timer noch nicht gelaufen oder seit mehr als 75 Minuten ohne Lauf.';
         }
         if (($state['paused_reason'] ?? '') !== '') {
             $lines[] = 'Lernpause/Hinweis: ' . (string) $state['paused_reason'];
@@ -460,7 +460,7 @@ trait LCNClimateThermalLearning
         $lines[] = 'Aktive Räume: ' . $configured . ' | Datenquellen jetzt verwertbar: '
             . $ready . ' | Räume mit >=3 Lernfenstern: ' . $withEvidence;
         $lines[] = 'Qualitaetsschutz: Passive Auskuehlfenster beginnen erst nach dem Estrich-Nachlauf; '
-            . 'Lernraten benoetigen neuere Temperatur- UND Relaisstatusmessungen am Fensterende (max. 10 min alt).';
+            . 'Lernraten benoetigen neuere Temperatur- UND Relaisstatusmessungen am Fensterende (max. 30 min alt).';
         $lines[] = 'Ein gültiger Sensorwert bedeutet noch keinen gültigen Lernzyklus. '
             . 'Sonneneinstrahlung, offene Türen und unbekannter Vorlauf können Lernwerte beeinflussen.';
         $lines[] = 'Keine aktive Fußbodenkühlung angelernt; Abkühlen bedeutet passives Auskühlen bei Ventil AUS.';
