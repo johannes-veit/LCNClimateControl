@@ -14,9 +14,14 @@ final class LCNThermalLearningModel
         $old = isset($entry['mean']) ? (float) $entry['mean'] : $value;
         $next = $n === 1 ? $value : (0.85 * $old + 0.15 * $value);
         // Fixed-size dispersion estimate; no accumulated samples or history.
-        $oldVar = max(0.0, (float) ($entry['variance'] ?? 0.0));
+        $hasVariance = isset($entry['variance']) && is_numeric($entry['variance']);
+        $oldVar = $hasVariance ? max(0.0, (float) $entry['variance']) : 0.0;
         $variance = $n === 1 ? 0.0 : 0.85 * ($oldVar + 0.15 * ($value - $old) ** 2);
-        return ['n' => $n, 'mean' => round($next, 4), 'variance' => round($variance, 6)];
+        // Existing legacy averages have no known historical variance. Gather
+        // ten fresh observations before describing their dispersion as stable.
+        $qualityN = min(10000, max(0, (int) ($entry['quality_n'] ?? ($hasVariance ? $n - 1 : 0))) + 1);
+        return ['n' => $n, 'mean' => round($next, 4), 'variance' => round($variance, 6),
+            'quality_n' => $qualityN];
     }
 
     private static function outdoorBand(?float $outdoor): string
@@ -490,8 +495,9 @@ trait LCNClimateThermalLearning
         $withEvidence = 0;
         $quality = static function (array $sample): string {
             $n = (int) ($sample['n'] ?? 0);
-            if ($n < 3) { return 'UNZUREICHEND'; }
-            if ($n < 10) { return 'VORLAEUFIG'; }
+            $qualityN = (int) ($sample['quality_n'] ?? 0);
+            if ($qualityN < 3) { return 'UNZUREICHEND'; }
+            if ($qualityN < 10) { return 'VORLAEUFIG'; }
             if (!isset($sample['variance'])) { return 'STREUUNG_UNBEKANNT'; }
             $mean = abs((float) ($sample['mean'] ?? 0));
             $sigma = sqrt(max(0.0, (float) $sample['variance']));
