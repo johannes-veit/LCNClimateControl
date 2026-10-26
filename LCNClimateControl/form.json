@@ -324,6 +324,15 @@
       "items": [
         {
           "type": "CheckBox",
+          "name": "ThermalSourcePreflightEnabled",
+          "caption": "NUR Quellen-Vorabpruefung (30 Minuten, KEINE thermischen Lernwerte)"
+        },
+        {
+          "type": "Label",
+          "caption": "Vorpruefung: Temperatur-/Relaisstatus der 11 Raeume NUR LESEN. Ergebnisse im bestehenden ChatGPT-Lernbericht. Keine LCN-Anfragen, Stellbefehle, Sollwertaenderungen oder neuen Variablen."
+        },
+        {
+          "type": "CheckBox",
           "name": "ThermalLearningEnabled",
           "caption": "Passives Lernprogramm aktivieren (keine LCN-Befehle)"
         },
@@ -335,7 +344,7 @@
         },
         {
           "type": "Label",
-          "caption": "Beobachtet alle 5 Minuten nur gültige Ist-/Solltemperaturen und native Ventil-Rückmeldungen. Fehlende oder alte Werte werden verworfen. Lernstand getrennt von der Regelung gespeichert; kein Einfluss auf HEIZEN/KUEHLEN."
+          "caption": "Lern- und Vorprueftimer laufen maximal alle 30 Minuten. Nur die ausdruecklich aktivierte Lernfunktion erfasst thermische Heiz-/Abkuehlwerte. Vorpruefung allein erhebt ausschliesslich begrenzte Quellstatus-Zaehler im selben Lernattribut."
         },
         {
           "type": "Label",
