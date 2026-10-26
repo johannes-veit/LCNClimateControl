@@ -76,6 +76,14 @@ $module = file_get_contents(dirname(__DIR__) . '/LCNClimateControl/module.php');
 check_learning(is_string($module), 'module source readable');
 check_learning(str_contains($module, "RegisterPropertyBoolean('ThermalLearningEnabled', false)"),
     'learning disabled by default');
+check_learning(str_contains($module, "RegisterPropertyBoolean('ThermalSourcePreflightEnabled', false)"),
+    'source-only preflight must be disabled by default');
+check_learning(str_contains($module, "|| $this->ReadPropertyBoolean('ThermalSourcePreflightEnabled')"),
+    'source-only preflight uses existing passive timer');
+$form = json_decode((string) file_get_contents(dirname(__DIR__) . '/LCNClimateControl/form.json'), true);
+check_learning(is_array($form), 'form JSON must be valid');
+check_learning(str_contains(json_encode($form, JSON_UNESCAPED_UNICODE) ?: '',
+    '"name":"ThermalSourcePreflightEnabled"'), 'source-only preflight setting not visible');
 check_learning(str_contains($module, "LCNC_ThermalLearningTick"),
     'learning timer correctly wired');
 check_learning(!str_contains($module, "ThermalLearningTick();"),
