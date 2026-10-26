@@ -70,6 +70,7 @@ for ($i=1; $i<=11; ++$i) {
     ];
 }
 unset($GLOBALS['smart_fake_vars'][3004]); // missing relay status
+$GLOBALS['smart_fake_vars'][3006]['Value'] = 'invalid'; // wrong type
 $h->attrs['ThermalLearningState'] = json_encode([
     'schema' => 1, 'rooms' => [], 'created_at' => $now-86400,
     'unbounded_legacy_data' => str_repeat('X', 160000)
@@ -77,20 +78,23 @@ $h->attrs['ThermalLearningState'] = json_encode([
 $h->ThermalLearningTick();
 $state = json_decode($h->ReadAttributeString('ThermalLearningState'), true, 512, JSON_THROW_ON_ERROR);
 
-smartAssert(($state['last_processed'] ?? -1) === 6, 'one bad room affected good rooms');
+smartAssert(($state['last_processed'] ?? -1) === 5, 'one bad room affected good rooms');
 $want = [
     '1001' => 'TEMP_STALE',
     '1002' => 'RELAY_STALE',
     '1003' => 'READ_ERROR',
     '1004' => 'RELAY_MISSING',
-    '1005' => 'TEMP_OR_TARGET_INVALID'
+    '1005' => 'TEMP_OR_TARGET_INVALID',
+    '1006' => 'RELAY_INVALID'
 ];
 smartAssert(($state['last_exclusions'] ?? []) === $want, 'wrong per-room exclusion reasons');
-smartAssert(count($state['rooms']) === 6, 'successful room ingestion incomplete');
+smartAssert(count($state['rooms']) === 5, 'successful room ingestion incomplete');
 smartAssert(!isset($state['unbounded_legacy_data']), 'unbounded legacy root survived');
 smartAssert(strlen($h->ReadAttributeString('ThermalLearningState')) < 131072,
     'tick exceeded state storage budget');
 smartAssert(count($h->debug) === 1, 'read error must be isolated and diagnosed');
+smartAssert(str_contains($h->ThermalLearningDiagnosticReport(),
+    'Im letzten Lernlauf ausgeschlossen:'), 'diagnostic lacks exclusions');
 
 $before = $h->ReadAttributeString('ThermalLearningState');
 $h->enabled = false;
