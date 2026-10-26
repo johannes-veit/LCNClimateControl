@@ -163,6 +163,11 @@ final class LCNThermalLearningModel
                 $startRelayAt = (int) ($phase['valve_sample_at'] ?? 0);
                 $endRelayAt = (int) ($observation['valve_sample_at'] ?? 0);
                 $freshEvidence = $freshEvidence && $endRelayAt > $startRelayAt;
+                // No relay value change may have occurred since this phase began.
+                // A recent VariableChanged timestamp proves interrupted exposure.
+                $lastRelaySwitch = (int) ($observation['valve_changed_at'] ?? 0);
+                $freshEvidence = $freshEvidence && ($lastRelaySwitch <= 0
+                    || $lastRelaySwitch <= (int) ($phase['time'] ?? 0));
                 // OFF does not yet mean passive cooling: the slab may still heat.
                 $residualHeat = !$valve && isset($state['afterheat']);
                 if ($valid && $freshEvidence && !$residualHeat) {
@@ -325,6 +330,15 @@ trait LCNClimateThermalLearning
                 }
                 $key = (string) $targetID; // Stable across room renaming.
                 $previous = (array) ($state['rooms'][$key] ?? []);
+                // Invalidate old learning when a sensor or relay is remapped.
+                // The S1 key alone does not guarantee physical source identity.
+                if (isset($previous['source_temp_id'], $previous['source_relay_id'])
+                    && ((int) $previous['source_temp_id'] !== $tempID
+                        || (int) $previous['source_relay_id'] !== $statusID)) {
+                    $previous = [];
+                }
+                $previous['source_temp_id'] = $tempID;
+                $previous['source_relay_id'] = $statusID;
                 $previous['name'] = (string) ($room['Name'] ?? ('Raum #' . $targetID));
                 $prior = (array) ($previous['last'] ?? []);
                 $age = $now - (int) ($prior['time'] ?? 0);
@@ -370,12 +384,18 @@ trait LCNClimateThermalLearning
                     'name', 'last', 'phase', 'afterheat', 'afterheat_model', 'rates',
                     'last_evidence_at', 'resets', 'rejected_stale', 'gradient_rates',
                     'weather_trend_rates', 'loss_proxy', 'house_context_by_valve',
-                    'hidden_switches'
+                    'hidden_switches', 'source_temp_id', 'source_relay_id'
                 ]));
             }
             unset($compactRoom);
-            // No unbounded raw timeseries; only last sample, current period and aggregates.
-            $this->WriteAttributeString('ThermalLearningState', json_encode($state, JSON_UNESCAPED_UNICODE) ?: '{}');
+            // Bounded JSON guard: refuse unexpected growth rather than persisting
+            // arbitrarily large state. Previous valid state stays available.
+            $encodedState = json_encode($state, JSON_UNESCAPED_UNICODE);
+            if (!is_string($encodedState) || strlen($encodedState) > 131072) {
+                $this->SendDebug('PassiveThermalLearning', 'State rejected: invalid JSON or over 128 KiB', 0);
+                return;
+            }
+            $this->WriteAttributeString('ThermalLearningState', $encodedState);
         } catch (Throwable $error) {
             // Learning failure must NEVER propagate into working regulation or instance status.
             $this->SendDebug('PassiveThermalLearning', $error->getMessage(), 0);
@@ -450,6 +470,8 @@ trait LCNClimateThermalLearning
             ? date('d.m.Y H:i:s', $lastTick) . ' (' . $tickAge . ' s alt)'
             : 'NOCH KEIN LERNLAUF');
         $lines[] = 'Lernlauf zuletzt erfasste Räume: ' . (int) ($state['last_processed'] ?? 0);
+        $lines[] = 'Lernzustand: ' . strlen($this->ReadAttributeString('ThermalLearningState'))
+            . ' Bytes (Speichergrenze 131072 Bytes).';
         $lines[] = 'Lernstatistik angelegt: ' . (isset($state['created_at'])
             ? date('d.m.Y H:i:s', (int) $state['created_at']) : 'noch nicht');
         if ($enabled && ($tickAge === null || $tickAge > 4500)) {
