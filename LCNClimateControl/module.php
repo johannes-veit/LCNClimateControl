@@ -119,6 +119,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterTimer('M11ProbeTimer', 0, 'LCNC_M11ProbeWorker($_IPS[\'TARGET\']);');
         $this->RegisterTimer('CoolingCommissionTimer', 0, 'LCNC_CoolingCommissionWorker($_IPS[\'TARGET\']);');
         $this->RegisterTimer('ThermalLearningTimer', 0, 'LCNC_ThermalLearningTick($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('ThermalLearningDiagnosticTimer', 0, 'LCNC_UpdateThermalLearningDiagnostic($_IPS[\'TARGET\']);');
 
         $this->EnsureProfiles();
 
@@ -171,6 +172,8 @@ class LCNClimateControl extends IPSModuleStrict
         $this->SetTimerInterval('DirectCoolingGuard', $this->UsesDirectCooling() ? 15000 : 0);
         $this->SetTimerInterval('ChatGPTDiagnosticTimer', 60000);
         $this->SetTimerInterval('ThermalLearningTimer',
+            $this->ReadPropertyBoolean('ThermalLearningEnabled') ? 5 * 60 * 1000 : 0);
+        $this->SetTimerInterval('ThermalLearningDiagnosticTimer',
             $this->ReadPropertyBoolean('ThermalLearningEnabled') ? 5 * 60 * 1000 : 0);
         // Persistent test is not discarded on ApplyChanges / kernel restart.
         // If interrupted, RE-ISSUE RELEASE; NEVER re-issue LOCK.
@@ -232,6 +235,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->MaintainVariable('Mode', 'Betriebsart', VARIABLETYPE_INTEGER, self::PROFILE_MODE, 10, true);
         // Ein einziger kopierbarer Bericht statt elf Raumdiagnosen oder vieler Buttons.
         $this->MaintainVariable('ChatGPTDiagnostic', 'Senden an ChatGPT', VARIABLETYPE_STRING, '', 900, true);
+        $this->MaintainVariable('ThermalLearningDiagnostic', 'SMART-FBH – Senden an ChatGPT', VARIABLETYPE_STRING, '', 910, true);
         $this->EnableAction('Mode');
         $this->SetValueIfChanged('Mode', $this->ReadAttributeInteger('OperatingMode'));
 
@@ -355,6 +359,7 @@ class LCNClimateControl extends IPSModuleStrict
 
         $this->RefreshRuntimeStatus();
         $this->UpdateChatGPTDiagnostic();
+        $this->UpdateThermalLearningDiagnostic();
         $this->PushVisualizationState();
         } finally {
             IPS_SemaphoreLeave($applyLock);
