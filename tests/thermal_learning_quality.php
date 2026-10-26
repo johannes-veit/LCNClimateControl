@@ -133,4 +133,33 @@ verify(($s['rates']['heating']['all']['quality_n'] ?? -1) === 1,
 verify(($s['rates']['heating']['all']['n'] ?? 0) === 101,
     'legacy count must be preserved');
 
+// A switched relay in the middle of an otherwise steady two-hour phase
+// must not generate a false full-duration heating rate.
+$s = [];
+for ($i = 0; $i <= 2; ++$i) {
+    $when = $t + 1800 * $i;
+    $s = LCNThermalLearningModel::observe($s, [
+        'time' => $when, 'temp' => 20.0 + 0.2*$i,
+        'target'=>22.0, 'valve'=>true, 'outside'=>8.0,
+        'temp_sample_at'=>$when, 'valve_sample_at'=>$when,
+        'valve_changed_at'=>$i === 0 ? $t-3600 : $t+900
+    ]);
+}
+verify(($s['rates']['heating']['all']['n'] ?? 0) === 0,
+    'relay interruption must not produce a full heating window');
+
+// Fresh valid stable observations should still learn successfully.
+$s = [];
+for ($i=0; $i<=2; ++$i) {
+    $when = $t + 1800*$i;
+    $s = LCNThermalLearningModel::observe($s, [
+        'time'=>$when, 'temp'=>20.0 + 0.2*$i,
+        'target'=>22.0, 'valve'=>true, 'outside'=>8.0,
+        'temp_sample_at'=>$when, 'valve_sample_at'=>$when,
+        'valve_changed_at'=>$t-3600
+    ]);
+}
+verify(($s['rates']['heating']['all']['n'] ?? 0) === 1,
+    'continuous genuine relay phase should be learned');
+
 echo "30-minute SMART-FBH model regression tests passed\n";
