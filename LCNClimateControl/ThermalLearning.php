@@ -268,6 +268,7 @@ trait LCNClimateThermalLearning
             }
             $state['weather_history'] = array_slice($weatherHistory, -6);
             $processed = 0;
+            $changes = [];
             foreach ($this->GetRooms() as $room) {
                 if (empty($room['Enabled'])) {
                     continue;
@@ -299,6 +300,13 @@ trait LCNClimateThermalLearning
                 $key = (string) $targetID; // Stable across room renaming.
                 $previous = (array) ($state['rooms'][$key] ?? []);
                 $previous['name'] = (string) ($room['Name'] ?? ('Raum #' . $targetID));
+                $prior = (array) ($previous['last'] ?? []);
+                $age = $now - (int) ($prior['time'] ?? 0);
+                if ($age >= 1500 && $age <= 2700 && is_numeric($prior['temp'] ?? null)
+                    && (int) ($tMeta['VariableUpdated'] ?? 0) > (int) ($prior['temp_sample_at'] ?? 0)) {
+                    $delta = (float) $temp - (float) $prior['temp'];
+                    if (abs($delta) <= 0.8) { $changes[$key] = $delta; }
+                }
                 $state['rooms'][$key] = LCNThermalLearningModel::observe($previous, [
                     'time' => $now, 'temp' => (float) $temp, 'target' => $target,
                     'valve' => (bool) GetValue($statusID), 'outside' => $outside,
@@ -307,6 +315,16 @@ trait LCNClimateThermalLearning
                     'outside_lag' => $laggedOutdoor
                 ]);
                 ++$processed;
+            }
+            if (count($changes) >= 4) {
+                $sum = array_sum($changes);
+                $count = count($changes);
+                foreach ($changes as $id => $change) {
+                    $relative = $change - ($sum - $change) / ($count - 1);
+                    $label = abs($relative) <= 0.05 ? 'similar' : ($relative > 0 ? 'above' : 'below');
+                    $state['rooms'][$id]['house_context'][$label] = min(10000,
+                        1 + (int) ($state['rooms'][$id]['house_context'][$label] ?? 0));
+                }
             }
             $state['last_tick_at'] = $now;
             $state['last_processed'] = $processed;
@@ -317,7 +335,7 @@ trait LCNClimateThermalLearning
                 $compactRoom = array_intersect_key((array) $compactRoom, array_flip([
                     'name', 'last', 'phase', 'afterheat', 'afterheat_model', 'rates',
                     'last_evidence_at', 'resets', 'rejected_stale', 'gradient_rates',
-                    'weather_trend_rates', 'loss_proxy'
+                    'weather_trend_rates', 'loss_proxy', 'house_context'
                 ]));
             }
             unset($compactRoom);
@@ -549,6 +567,10 @@ trait LCNClimateThermalLearning
             $lines[] = '  Innen-Aussen-Differenz: ' . implode(' | ', $gradientDetail);
             $trend = (array) ($saved['weather_trend_rates'] ?? []);
             $loss = (array) ($saved['loss_proxy'] ?? []);
+            $context = (array) ($saved['house_context'] ?? []);
+            $lines[] = '  Hausvergleich: aehnlich ' . (int) ($context['similar'] ?? 0)
+                . ', relativ staerker ' . (int) ($context['above'] ?? 0)
+                . ', relativ schwaecher ' . (int) ($context['below'] ?? 0);
             $lines[] = '  Auskuehlindikator pro 10 K Innen-Aussen-Differenz: '
                 . $describeRate($loss, '°C/h')
                 . ' (nur passiv, kein Heizlastwert)';
