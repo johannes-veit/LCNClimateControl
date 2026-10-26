@@ -305,7 +305,12 @@ trait LCNClimateThermalLearning
                 if ($age >= 1500 && $age <= 2700 && is_numeric($prior['temp'] ?? null)
                     && (int) ($tMeta['VariableUpdated'] ?? 0) > (int) ($prior['temp_sample_at'] ?? 0)) {
                     $delta = (float) $temp - (float) $prior['temp'];
-                    if (abs($delta) <= 0.8) { $changes[$key] = $delta; }
+                    if (abs($delta) <= 0.8 && isset($prior['valve'])
+                        && (bool) $prior['valve'] === (bool) GetValue($statusID)
+                        && abs((float) $target - (float) ($prior['target'] ?? $target)) <= 0.15
+                        && $now - (int) ($meta['VariableUpdated'] ?? 0) <= 1800) {
+                        $changes[$key] = ['delta' => $delta, 'valve' => (bool) GetValue($statusID)];
+                    }
                 }
                 $state['rooms'][$key] = LCNThermalLearningModel::observe($previous, [
                     'time' => $now, 'temp' => (float) $temp, 'target' => $target,
@@ -317,13 +322,14 @@ trait LCNClimateThermalLearning
                 ++$processed;
             }
             if (count($changes) >= 4) {
-                $sum = array_sum($changes);
+                $sum = array_sum(array_column($changes, 'delta'));
                 $count = count($changes);
-                foreach ($changes as $id => $change) {
-                    $relative = $change - ($sum - $change) / ($count - 1);
+                foreach ($changes as $id => $entry) {
+                    $relative = $entry['delta'] - ($sum - $entry['delta']) / ($count - 1);
                     $label = abs($relative) <= 0.05 ? 'similar' : ($relative > 0 ? 'above' : 'below');
-                    $state['rooms'][$id]['house_context'][$label] = min(10000,
-                        1 + (int) ($state['rooms'][$id]['house_context'][$label] ?? 0));
+                    $mode = $entry['valve'] ? 'valve_on' : 'valve_off';
+                    $state['rooms'][$id]['house_context_by_valve'][$mode][$label] = min(10000,
+                        1 + (int) ($state['rooms'][$id]['house_context_by_valve'][$mode][$label] ?? 0));
                 }
             }
             $state['last_tick_at'] = $now;
@@ -335,7 +341,7 @@ trait LCNClimateThermalLearning
                 $compactRoom = array_intersect_key((array) $compactRoom, array_flip([
                     'name', 'last', 'phase', 'afterheat', 'afterheat_model', 'rates',
                     'last_evidence_at', 'resets', 'rejected_stale', 'gradient_rates',
-                    'weather_trend_rates', 'loss_proxy', 'house_context'
+                    'weather_trend_rates', 'loss_proxy', 'house_context_by_valve'
                 ]));
             }
             unset($compactRoom);
@@ -568,9 +574,14 @@ trait LCNClimateThermalLearning
             $trend = (array) ($saved['weather_trend_rates'] ?? []);
             $loss = (array) ($saved['loss_proxy'] ?? []);
             $context = (array) ($saved['house_context'] ?? []);
-            $lines[] = '  Hausvergleich: aehnlich ' . (int) ($context['similar'] ?? 0)
-                . ', relativ staerker ' . (int) ($context['above'] ?? 0)
-                . ', relativ schwaecher ' . (int) ($context['below'] ?? 0);
+            $byValve = (array) ($saved['house_context_by_valve'] ?? []);
+            foreach (['valve_on' => 'Ventil EIN', 'valve_off' => 'Ventil AUS'] as $group => $caption) {
+                $values = (array) ($byValve[$group] ?? []);
+                $lines[] = '  Hausvergleich ' . $caption . ': gleichlaufend '
+                    . (int) ($values['similar'] ?? 0) . ', staerker '
+                    . (int) ($values['above'] ?? 0) . ', schwaecher '
+                    . (int) ($values['below'] ?? 0);
+            }
             $lines[] = '  Auskuehlindikator pro 10 K Innen-Aussen-Differenz: '
                 . $describeRate($loss, '°C/h')
                 . ' (nur passiv, kein Heizlastwert)';
