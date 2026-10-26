@@ -159,6 +159,15 @@ final class LCNThermalLearningModel
                             $gradientBand = self::gradientBand($delta);
                             $state['gradient_rates'][$kind][$gradientBand] = self::mean(
                                 (array) ($state['gradient_rates'][$kind][$gradientBand] ?? []), abs($rate));
+                            // Observed normalized passive cooling, per 10 K difference.
+                            // Comparative indicator only; open doors and free gains confound it.
+                            if (!$valve && $delta >= 5.0 && $delta <= 35.0) {
+                                $normalized = abs($rate) * 10.0 / $delta;
+                                if ($normalized >= 0.005 && $normalized <= 3.0) {
+                                    $state['loss_proxy'] = self::mean(
+                                        (array) ($state['loss_proxy'] ?? []), $normalized);
+                                }
+                            }
                         }
                     }
                     // The outdoor air from roughly two hours earlier is a
@@ -308,7 +317,7 @@ trait LCNClimateThermalLearning
                 $compactRoom = array_intersect_key((array) $compactRoom, array_flip([
                     'name', 'last', 'phase', 'afterheat', 'afterheat_model', 'rates',
                     'last_evidence_at', 'resets', 'rejected_stale', 'gradient_rates',
-                    'weather_trend_rates'
+                    'weather_trend_rates', 'loss_proxy'
                 ]));
             }
             unset($compactRoom);
@@ -539,6 +548,10 @@ trait LCNClimateThermalLearning
                 . ' | stale Abweisungen: ' . (int) ($saved['rejected_stale'] ?? 0);
             $lines[] = '  Innen-Aussen-Differenz: ' . implode(' | ', $gradientDetail);
             $trend = (array) ($saved['weather_trend_rates'] ?? []);
+            $loss = (array) ($saved['loss_proxy'] ?? []);
+            $lines[] = '  Auskuehlindikator pro 10 K Innen-Aussen-Differenz: '
+                . $describeRate($loss, '°C/h')
+                . ' (nur passiv, kein Heizlastwert)';
             $lines[] = '  Aussenwetter seit ca. 2h: steigend H '
                 . $describeRate((array) ($trend['heating']['outside_rising'] ?? []), '°C/h')
                 . ', A ' . $describeRate((array) ($trend['passive_cooling']['outside_rising'] ?? []), '°C/h')
