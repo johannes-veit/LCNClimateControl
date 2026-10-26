@@ -19,7 +19,7 @@ final class LCNThermalLearningModel
         $variance = $n === 1 ? 0.0 : 0.85 * ($oldVar + 0.15 * ($value - $old) ** 2);
         // Existing legacy averages have no known historical variance. Gather
         // ten fresh observations before describing their dispersion as stable.
-        $qualityN = min(10000, max(0, (int) ($entry['quality_n'] ?? ($hasVariance ? $n - 1 : 0))) + 1);
+        $qualityN = min(10000, max(0, (int) ($entry['quality_n'] ?? 0)) + 1);
         return ['n' => $n, 'mean' => round($next, 4), 'variance' => round($variance, 6),
             'quality_n' => $qualityN];
     }
@@ -230,12 +230,15 @@ trait LCNClimateThermalLearning
             if ($weatherID > 0 && function_exists('JVWC_Snapshot') && IPS_InstanceExists($weatherID)) {
                 try {
                     $raw = json_decode((string) JVWC_Snapshot($weatherID), true);
-                    if (is_array($raw) && $now - (int) ($raw['issued_at'] ?? 0) <= 2100
+                    if (is_array($raw) && (int) ($raw['issued_at'] ?? 0) > 0
+                        && (int) $raw['issued_at'] <= $now
+                        && $now - (int) $raw['issued_at'] <= 2100
                         && in_array((string) ($raw['quality'] ?? ''), [
                             'VERIFIED', 'MODEL_SUPPORTED', 'PWS_ONLY', 'DWD_ONLY', 'DWD_REMOTE'
                         ], true) && is_array($raw['current'] ?? null)) {
                         $value = $raw['current']['temperature'] ?? null;
-                        if (is_numeric($value)) {
+                        if (is_numeric($value) && is_finite((float) $value)
+                            && (float) $value >= -45 && (float) $value <= 55) {
                             $outside = (float) $value;
                         }
                     }
@@ -472,7 +475,7 @@ trait LCNClimateThermalLearning
                     $age = $issued > 0 ? max(0, $now - $issued) : -1;
                     $quality = (string) ($weather['quality'] ?? 'UNAVAILABLE');
                     $current = $weather['current'] ?? null;
-                    $usable = $issued > 0 && $age <= 2100
+                    $usable = $issued > 0 && $issued <= $now && $age <= 2100
                         && in_array($quality, ['VERIFIED','MODEL_SUPPORTED','PWS_ONLY','DWD_ONLY','DWD_REMOTE'], true)
                         && is_array($current)
                         && is_numeric($current['temperature'] ?? null);
