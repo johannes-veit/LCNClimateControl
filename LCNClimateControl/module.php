@@ -172,9 +172,9 @@ class LCNClimateControl extends IPSModuleStrict
         $this->SetTimerInterval('DirectCoolingGuard', $this->UsesDirectCooling() ? 15000 : 0);
         $this->SetTimerInterval('ChatGPTDiagnosticTimer', 60000);
         $this->SetTimerInterval('ThermalLearningTimer',
-            $this->ReadPropertyBoolean('ThermalLearningEnabled') ? 5 * 60 * 1000 : 0);
+            $this->ReadPropertyBoolean('ThermalLearningEnabled') ? 30 * 60 * 1000 : 0);
         $this->SetTimerInterval('ThermalLearningDiagnosticTimer',
-            $this->ReadPropertyBoolean('ThermalLearningEnabled') ? 5 * 60 * 1000 : 0);
+            $this->ReadPropertyBoolean('ThermalLearningEnabled') ? 30 * 60 * 1000 : 0);
         // Persistent test is not discarded on ApplyChanges / kernel restart.
         // If interrupted, RE-ISSUE RELEASE; NEVER re-issue LOCK.
         if ($this->M11ProbeActive()) {
