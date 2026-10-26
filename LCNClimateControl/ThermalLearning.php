@@ -934,6 +934,7 @@ trait LCNClimateThermalLearning
             $relayOn = null;
             $tempAge = null;
             $relayAge = null;
+            $relayChangeAge = null;
             $relayID = 0;
             try {
                 if ($tempID <= 0 || !IPS_VariableExists($tempID)) {
@@ -969,6 +970,10 @@ trait LCNClimateThermalLearning
                         $meta = IPS_GetVariable($relayID);
                         $relayAge = (int) ($meta['VariableUpdated'] ?? 0) > 0
                             ? max(0, $now - (int) $meta['VariableUpdated']) : null;
+                        $changedAt = (int) ($meta['VariableChanged'] ?? 0);
+                        if ($changedAt > 0 && $changedAt <= $now) {
+                            $relayChangeAge = $now - $changedAt;
+                        }
                         if ($relayAge === null || (int) $meta['VariableUpdated'] > $now
                             || $relayAge > 1800) {
                             $reason = 'Relaisrückmeldung fehlt/älter als 30 Minuten';
@@ -1021,7 +1026,9 @@ trait LCNClimateThermalLearning
                 . ($setpoint === null ? '–' : number_format((float) $setpoint, 1, ',', '.') . ' °C');
             $lines[] = '  Relaisstatus #' . $relayID . ': '
                 . ($relayOn === null ? 'unbekannt' : ($relayOn ? 'EIN' : 'AUS'))
-                . ' (Alter ' . ($relayAge === null ? '?' : $relayAge . ' s') . ')'
+                . ' (letzte Meldung vor ' . ($relayAge === null ? '?' : $relayAge . ' s') . ')'
+                . ' | Statuswechsel vor '
+                . ($relayChangeAge === null ? '?' : $relayChangeAge . ' s')
                 . ' | letzte verwertete Messung: '
                 . ($lastAge === null ? 'keine' : $lastAge . ' s alt');
             $lines[] = '  Heizanstieg: ' . $describeRate($heat, '°C/h')
@@ -1075,6 +1082,9 @@ trait LCNClimateThermalLearning
             . 'Fenster nur bei Wetterveraenderung <=3 K, je Differenzklasse mindestens 3 Fenster.';
         $lines[] = 'Lernfreigabe: Nur bei mindestens sechs aufeinanderfolgenden guten Quellpruefungen, '
             . 'mit gleitender Verfuegbarkeit >=80 Prozent. Nach laengerer Pause neue Abnahme.';
+        $lines[] = 'LCN-Rueckmeldung: VariableUpdated = letzte Statusmeldung; '
+            . 'VariableChanged = letzter tatsaechlich gemeldeter Wertwechsel. '
+            . 'Ein unveraenderter Wert ist kein Beleg fuer eine neue Meldung.';
         $lines[] = 'Datenquellen-Abnahme: Erst ab sechs getrennten Lernlaeufen klassifiziert; '
             . 'Quelle regelmaessig bedeutet NICHT verlaesslichen Heizwirkungsnachweis.';
         $lines[] = 'Keine aktive Fußbodenkühlung angelernt; Abkühlen bedeutet passives Auskühlen bei Ventil AUS.';
