@@ -2,12 +2,14 @@
 
 ## SMART-FBH – SymBox-Datenqualitaet und isolierte Raumfehler (Entwicklung)
 
-- Der 30-Minuten-Lernlauf klassifiziert die letzte vergebliche Raumerfassung getrennt: `TEMP_MISSING`, `TEMP_STALE`, `TEMP_OR_TARGET_INVALID`, `RELAY_MISSING`, `RELAY_STALE`, `READ_ERROR`.
+- Der 30-Minuten-Lernlauf klassifiziert die letzte vergebliche Raumerfassung getrennt: `TEMP_MISSING`, `TEMP_STALE`, `TEMP_OR_TARGET_INVALID`, `RELAY_MISSING`, `RELAY_STALE`, `RELAY_INVALID`, `READ_ERROR`.
 - Ausschlussgruende werden im bestehenden internen Attribut gespeichert und in `SMART-FBH – Senden an ChatGPT` zusammengefasst. Keine neue IP-Symcon-Variable.
 - Das Alter der Temperatur und der Relaisrueckmeldung wird anhand `VariableUpdated` geprueft (maximal 1800 Sekunden). Ein altes `VariableChanged` bedeutet nicht automatisch eine veraltete Statusrueckmeldung, ersetzt aber auch keine regelmaessige Statusaktualisierung.
 - Lesefehler eines einzelnen Raums werden intern protokolliert. Andere Raeume werden weiter ausgewertet. Fehlende Werte fuehren niemals zu Schaltbefehlen.
 - Schutz gegen ungueltige/zukuenftige Quellzeitstempel, unbekannte Wurzelattribute und verschachtelte Altdaten.
 - Der Speichergrenzwert von 128 KiB und die Raumbereinigung gelten auch beim Pausieren der Lernfunktion im Nicht-Heizbetrieb.
+- Erfasste Temperaturen und Sollwerte muessen physikalisch plausibel sein; Relaiswerte werden je Raum einmalig gelesen und nur bei Boolean oder echtem 0/1 akzeptiert.
+- Die Diagnose verwendet dieselbe Zeitstempel- und Relaistyp-Pruefung wie die Lernfunktion, damit die Zahl der verwertbaren Raeume nicht zu optimistisch ausfaellt.
 - Gemeinsame Raumtemperaturbewegungen bei Ventil AUS zaehlen nicht als passiv, solange ein erkannter Estrich-Nachlauf aktiv ist.
 - Eigenstaendiger synthetischer IP-Symcon-Integrationstest fuer elf Raeume prueft parallele Fehler, abgeschaltetes Lernen, Kuehlbetrieb und Datenbereinigung. Er ersetzt keinen Messnachweis von den echten LCN-Rueckmeldungen.
 
