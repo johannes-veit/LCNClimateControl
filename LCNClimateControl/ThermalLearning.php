@@ -57,7 +57,8 @@ final class LCNThermalLearningModel
             ? (float) $input['outside'] : null;
         $observation = [
             'time' => $time, 'temp' => $temp, 'target' => $target,
-            'valve' => $valve, 'outside' => $outside
+            'valve' => $valve, 'outside' => $outside,
+            'temp_sample_at' => (int) ($input['temp_sample_at'] ?? $time)
         ];
         $previous = $state['last'] ?? null;
         if (!is_array($previous)) {
@@ -95,6 +96,8 @@ final class LCNThermalLearningModel
                 $age = $time - (int) ($after['begin_at'] ?? 0);
                 if ($age > 180 * 60 || $temp < (float) ($after['peak'] ?? $temp) - 0.1) {
                     self::finishAfterheat($state);
+                    // A new cooling window starts only AFTER residual slab heat.
+                    $state['phase'] = $observation;
                 } elseif ($temp > (float) ($after['peak'] ?? $temp)) {
                     $state['afterheat']['peak'] = $temp;
                     $state['afterheat']['peak_at'] = $time;
@@ -110,7 +113,14 @@ final class LCNThermalLearningModel
                 $kind = $valve ? 'heating' : 'passive_cooling';
                 $valid = $valve ? ($rate >= 0.05 && $rate <= 2.5)
                     : ($rate <= -0.05 && $rate >= -2.5);
-                if ($valid) {
+                // Do not use cached temperature values as new endpoint evidence.
+                $endSampleAt = (int) ($observation['temp_sample_at'] ?? 0);
+                $startSampleAt = (int) ($phase['temp_sample_at'] ?? 0);
+                $freshEvidence = $endSampleAt > $startSampleAt
+                    && $endSampleAt <= $time && $time - $endSampleAt <= 600;
+                // OFF does not yet mean passive cooling: the slab may still heat.
+                $residualHeat = !$valve && isset($state['afterheat']);
+                if ($valid && $freshEvidence && !$residualHeat) {
                     $band = self::outdoorBand($outside);
                     $state['rates'][$kind]['all'] = self::mean(
                         (array) ($state['rates'][$kind]['all'] ?? []), abs($rate));
@@ -205,7 +215,8 @@ trait LCNClimateThermalLearning
                 $previous['name'] = (string) ($room['Name'] ?? ('Raum #' . $targetID));
                 $state['rooms'][$key] = LCNThermalLearningModel::observe($previous, [
                     'time' => $now, 'temp' => (float) $temp, 'target' => $target,
-                    'valve' => (bool) GetValue($statusID), 'outside' => $outside
+                    'valve' => (bool) GetValue($statusID), 'outside' => $outside,
+                    'temp_sample_at' => (int) ($tMeta['VariableUpdated'] ?? 0)
                 ]);
                 ++$processed;
             }
@@ -432,6 +443,8 @@ trait LCNClimateThermalLearning
         $lines[] = '--- ZUSAMMENFASSUNG ---';
         $lines[] = 'Aktive Räume: ' . $configured . ' | Datenquellen jetzt verwertbar: '
             . $ready . ' | Räume mit >=3 Lernfenstern: ' . $withEvidence;
+        $lines[] = 'Qualitaetsschutz: Passive Auskuehlfenster beginnen erst nach dem Estrich-Nachlauf; '
+            . 'Lernraten benoetigen eine neuere Temperaturmessung am Fensterende.';
         $lines[] = 'Ein gültiger Sensorwert bedeutet noch keinen gültigen Lernzyklus. '
             . 'Sonneneinstrahlung, offene Türen und unbekannter Vorlauf können Lernwerte beeinflussen.';
         $lines[] = 'Keine aktive Fußbodenkühlung angelernt; Abkühlen bedeutet passives Auskühlen bei Ventil AUS.';
