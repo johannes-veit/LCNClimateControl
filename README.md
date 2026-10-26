@@ -1,5 +1,14 @@
 # LCN Climate Control – IP-Symcon 9
 
+## SMART-FBH – Gebaeudekontext nach Ventilzustand (Entwicklung, nur lesen)
+
+- 30-Minuten-Temperaturaenderung jedes Raumes wird mit dem Mittel der anderen gueltigen Raeume verglichen.
+- Getrennte, begrenzte Statistikzaehler fuer Ventil EIN und AUS (gleichlaufend/relativ schneller/relativ langsamer).
+- Nur bei mindestens vier aktuellen Raumvergleichen, gleichem Ventilzustand an beiden Endpunkten und stabilem Sollwert.
+- Keine paarweisen Temperaturarchive, keine neuen Symcon-Variablen, keine Rueckwirkung auf die Regelung.
+- **Grenze:** Zwei gleiche Relaiswerte beweisen keine lueckenlose Heizanforderung. Ein Heizbeitrag oder Waermestrom kann damit nicht ursachlich nachgewiesen werden. Fuer belastbare Schaltzyklen waere spaeter eine sichere Ereigniserfassung oder ein vorhandenes Statusarchiv erforderlich.
+- PHP-Ausfuehrungstests des gesamten Moduls/CI weiterhin ausstehend.
+
 ## SMART-FBH – Langzeit-Speicherung (Entwicklungszweig, noch nicht freigegeben)
 
 - 30-Minuten-Lern- und Diagnosetakt. Die bestehende LCN-Heizregelung ist davon unabhängig.
