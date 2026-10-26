@@ -112,8 +112,16 @@ final class LCNThermalLearningModel
         ];
     }
 
-    public static function auditLabel(array $audit): string
+    public static function auditLabel(array $audit, ?int $now = null): string
     {
+        // Live eligibility requires a recent audit, not merely a formerly
+        // green value left behind after a long stopped timer or cooling mode.
+        if ($now !== null) {
+            $last = (int) ($audit['last_checked_at'] ?? 0);
+            if ($last <= 0 || $last > $now || $now - $last > 2700) {
+                return 'ABNAHME_VERALTET';
+            }
+        }
         $count = (int) ($audit['checks'] ?? 0);
         if ($count < 6) { return 'BEOBACHTUNG (' . $count . '/6)'; }
         if ((int) ($audit['bad_streak'] ?? 0) >= 4) {
@@ -566,6 +574,8 @@ trait LCNClimateThermalLearning
                 }
                 unset($roomState);
                 $state['paused_reason'] = 'Betriebsart nicht HEIZEN';
+                $state['last_eligible'] = 0;
+                $state['last_processed'] = 0;
                 $this->WriteBoundedThermalLearningState($state);
                 return;
             }
@@ -643,7 +653,7 @@ trait LCNClimateThermalLearning
                 // source updates before generating any new thermal samples.
                 // Source audits still collect on the normal 30-minute tick.
                 if (LCNThermalLearningModel::auditLabel(
-                    (array) ($previous['source_audit'] ?? [])) !== 'QUELLEN_REGELMAESSIG') {
+                    (array) ($previous['source_audit'] ?? []), $now) !== 'QUELLEN_REGELMAESSIG') {
                     $state['rooms'][$key] = $previous;
                     ++$processed;
                     continue;
@@ -972,7 +982,7 @@ trait LCNClimateThermalLearning
             $audit = (array) ($saved['source_audit'] ?? []);
             $lines[] = $name . ' | ' . $reason;
             $lines[] = '  Datenquellen-Abnahme: '
-                . LCNThermalLearningModel::auditLabel($audit)
+                . LCNThermalLearningModel::auditLabel($audit, $now)
                 . ' | letzte Ursache: ' . (string) ($audit['last_reason'] ?? 'unbekannt')
                 . ' | aktuelle Zuverlaessigkeit: '
                 . (int) round(100 * (float) ($audit['recent_ok'] ?? 0.0)) . '%';
