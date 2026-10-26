@@ -106,6 +106,28 @@ smartAssert(str_contains($h->ThermalLearningDiagnosticReport(),
 smartAssert(str_contains($h->ThermalLearningDiagnosticReport(),
     'Datenquellen jetzt verwertbar: 5'), 'diagnostic overreports invalid relay as ready');
 
+// A sensor remap on the same S1 key must invalidate learned thermal
+// rates rather than silently attaching old-room behaviour to the new source.
+$mappingState = json_decode($h->ReadAttributeString('ThermalLearningState'),
+    true, 512, JSON_THROW_ON_ERROR);
+$mappingState['rooms']['1007']['rates']['heating']['all'] = [
+    'n' => 99, 'mean' => 0.25, 'variance' => 0.01,
+    'quality_n' => 99, 'long_mean' => 0.22
+];
+$h->attrs['ThermalLearningState'] = json_encode($mappingState, JSON_THROW_ON_ERROR);
+$h->rooms[6]['TemperatureVariable'] = 9007;
+$GLOBALS['smart_fake_vars'][9007] = [
+    'VariableUpdated' => $now, 'VariableChanged' => $now-1200,
+    'Value' => 21.0
+];
+$h->ThermalLearningTick();
+$remapped = json_decode($h->ReadAttributeString('ThermalLearningState'),
+    true, 512, JSON_THROW_ON_ERROR);
+smartAssert(($remapped['rooms']['1007']['source_temp_id'] ?? 0) === 9007,
+    'new temperature source id not recorded');
+smartAssert(!isset($remapped['rooms']['1007']['rates']),
+    'historical rates wrongly transferred to remapped sensor');
+
 $before = $h->ReadAttributeString('ThermalLearningState');
 $h->enabled = false;
 $h->ThermalLearningTick();
