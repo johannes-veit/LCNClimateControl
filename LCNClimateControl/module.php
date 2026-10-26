@@ -94,6 +94,9 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterPropertyBoolean('ThermalLearningEnabled', false);
         $this->RegisterPropertyBoolean('ThermalSourcePreflightEnabled', false);
         $this->RegisterPropertyInteger('ThermalWeatherCenterInstance', 40477);
+        // EG Bad (#21099) is the initial learning reference; 0 enables all rooms.
+        // Does not affect temperature control or actual relay operation.
+        $this->RegisterPropertyInteger('ThermalReferenceRoomTarget', 21099);
 
         // OperatingMode dient nur der verlustfreien Migration aus der fehlerhaften
         // 0.2.0-Vorschau, in der die sichtbare Betriebsart-Variable entfernt wurde.
