@@ -23,6 +23,12 @@ final class LCNThermalLearningModel
         return $outdoor < 0 ? 'frost' : ($outdoor < 8 ? 'cold' : ($outdoor < 18 ? 'mild' : 'warm'));
     }
 
+    // Difference between indoor and outdoor air, not an inferred heat-loss coefficient.
+    private static function gradientBand(float $delta): string
+    {
+        return $delta < 10.0 ? 'delta_lt10' : ($delta < 20.0 ? 'delta_10_20' : 'delta_ge20');
+    }
+
     private static function finishAfterheat(array &$state): void
     {
         $after = $state['afterheat'] ?? null;
@@ -140,6 +146,19 @@ final class LCNThermalLearningModel
                         (array) ($state['rates'][$kind]['all'] ?? []), abs($rate));
                     $state['rates'][$kind][$band] = self::mean(
                         (array) ($state['rates'][$kind][$band] ?? []), abs($rate));
+                    // Compare only stable weather windows; do not mistake rapidly
+                    // changing outdoor conditions for a room's thermal constant.
+                    $startOutdoor = $phase['outside'] ?? null;
+                    if ($outside !== null && is_numeric($startOutdoor)
+                        && abs($outside - (float) $startOutdoor) <= 3.0) {
+                        $delta = (($temp + (float) $phase['temp']) / 2.0)
+                            - (($outside + (float) $startOutdoor) / 2.0);
+                        if ($delta >= 0.0 && $delta <= 50.0) {
+                            $gradientBand = self::gradientBand($delta);
+                            $state['gradient_rates'][$kind][$gradientBand] = self::mean(
+                                (array) ($state['gradient_rates'][$kind][$gradientBand] ?? []), abs($rate));
+                        }
+                    }
                     $state['last_evidence_at'] = $time;
                 }
                 // Non-overlapping windows: avoid counting one warm-up many times.
@@ -255,7 +274,7 @@ trait LCNClimateThermalLearning
             foreach ($state['rooms'] as &$compactRoom) {
                 $compactRoom = array_intersect_key((array) $compactRoom, array_flip([
                     'name', 'last', 'phase', 'afterheat', 'afterheat_model', 'rates',
-                    'last_evidence_at', 'resets', 'rejected_stale'
+                    'last_evidence_at', 'resets', 'rejected_stale', 'gradient_rates'
                 ]));
             }
             unset($compactRoom);
@@ -460,6 +479,14 @@ trait LCNClimateThermalLearning
             $last = (array) ($saved['last'] ?? []);
             $lastAge = (int) ($last['time'] ?? 0) > 0
                 ? max(0, $now - (int) $last['time']) : null;
+            $gradient = (array) ($saved['gradient_rates'] ?? []);
+            $gradientDetail = [];
+            foreach (['delta_lt10' => '<10', 'delta_10_20' => '10–20', 'delta_ge20' => '>=20'] as $band => $label) {
+                $h = (array) ($gradient['heating'][$band] ?? []);
+                $p = (array) ($gradient['passive_cooling'][$band] ?? []);
+                $gradientDetail[] = $label . 'K: H ' . $describeRate($h, '°C/h')
+                    . ', A ' . $describeRate($p, '°C/h');
+            }
             $lines[] = $name . ' | ' . $reason;
             $lines[] = '  Ist #' . $tempID . ': '
                 . ($temp === null ? '–' : number_format((float) $temp, 2, ',', '.') . ' °C')
@@ -476,6 +503,7 @@ trait LCNClimateThermalLearning
                 . ' | Nachlauf: ' . $describeRate($after, '°C')
                 . ' | Fenster-Resets: ' . (int) ($saved['resets'] ?? 0)
                 . ' | stale Abweisungen: ' . (int) ($saved['rejected_stale'] ?? 0);
+            $lines[] = '  Innen-Aussen-Differenz: ' . implode(' | ', $gradientDetail);
         }
         $lines[] = '--- ZUSAMMENFASSUNG ---';
         $lines[] = 'Aktive Räume: ' . $configured . ' | Datenquellen jetzt verwertbar: '
@@ -484,6 +512,8 @@ trait LCNClimateThermalLearning
             . 'Lernraten benoetigen neuere Temperatur- UND Relaisstatusmessungen am Fensterende (max. 30 min alt).';
         $lines[] = 'Ein gültiger Sensorwert bedeutet noch keinen gültigen Lernzyklus. '
             . 'Sonneneinstrahlung, offene Türen und unbekannter Vorlauf können Lernwerte beeinflussen.';
+        $lines[] = 'Innen-Aussen-Vergleich: Beobachtete Trends, keine kausale Heizlast oder Energiebedarf; '
+            . 'Fenster nur bei Wetterveraenderung <=3 K, je Differenzklasse mindestens 3 Fenster.';
         $lines[] = 'Keine aktive Fußbodenkühlung angelernt; Abkühlen bedeutet passives Auskühlen bei Ventil AUS.';
         $lines[] = '--- ENDE – gesamten Bericht an ChatGPT senden ---';
         return implode("\n", $lines);
