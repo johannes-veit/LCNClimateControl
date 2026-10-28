@@ -82,13 +82,17 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterPropertyBoolean('DirectCoolingEnabled', true);
         $this->RegisterPropertyInteger('CoolingSafetyVariable', 0);
         // EWT-Kuehlpumpen-Sicherheitsstopp. Default: AUS, nur beobachten nach Opt-in.
+        // User-authorized EWT pump controller: newly added property defaults to live.
+        // Old GuardEnabled/Simulation flags remain only for backward compatibility.
         $this->RegisterPropertyBoolean('DewPointGuardEnabled', false);
+        $this->RegisterPropertyBoolean('DewPointAutoPumpEnabled', true);
         $this->RegisterPropertyBoolean('DewPointGuardSimulation', true);
         $this->RegisterPropertyInteger('DewPointWaterVariable', 20510);
         $this->RegisterPropertyString('DewPointPumpIP', '192.168.103.67');
         $this->RegisterPropertyFloat('DewPointMarginK', 1.5);
         $this->RegisterPropertyFloat('DewPointHysteresisK', 0.5);
-        $this->RegisterPropertyInteger('DewPointMaxAgeSeconds', 900);
+        // Original LCN humidity variables may only publish on actual change.
+        $this->RegisterPropertyInteger('DewPointMaxAgeSeconds', 43200);
         $this->RegisterPropertyInteger('DewPointMinOffSeconds', 60);
         $this->RegisterPropertyInteger('DewPointPushWebFront', 0);
         // Explicit one-time opt-in: user handles plant HEIZEN/KUEHLEN manually.
@@ -194,7 +198,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->SetTimerInterval('DirectCoolingGuard', $this->UsesDirectCooling() ? 15000 : 0);
         $this->SetTimerInterval('ChatGPTDiagnosticTimer', 60000);
         $this->SetTimerInterval('DewPointGuardTimer',
-            $this->ReadPropertyBoolean('DewPointGuardEnabled') ? 10000 : 0);
+            $this->ReadPropertyBoolean('DewPointAutoPumpEnabled') ? 10000 : 0);
         // Same two existing timers for passive learning OR isolated read-only
         // source acceptance; both opt-ins default OFF. No extra IPS objects.
         $thermalPassiveEnabled = $this->ReadPropertyBoolean('ThermalLearningEnabled')
@@ -264,10 +268,10 @@ class LCNClimateControl extends IPSModuleStrict
         // Ein einziger kopierbarer Bericht statt elf Raumdiagnosen oder vieler Buttons.
         $this->MaintainVariable('ChatGPTDiagnostic', 'Senden an ChatGPT', VARIABLETYPE_STRING, '', 900, true);
         $this->MaintainVariable('DewPointGuardStatus', 'EWT-Taupunktwaechter', VARIABLETYPE_STRING, '', 905, true);
-        $this->SetValueIfChanged('DewPointGuardStatus', $this->ReadPropertyBoolean('DewPointGuardEnabled')
-            ? ($this->ReadPropertyBoolean('DewPointGuardSimulation')
-                ? 'BEOBACHTUNG: warte auf ersten Messlauf' : 'AKTIV: warte auf ersten Messlauf')
-            : 'DEAKTIVIERT – keine Pumpenbefehle');
+        $this->SetValueIfChanged('DewPointGuardStatus',
+            $this->ReadPropertyBoolean('DewPointAutoPumpEnabled')
+                ? 'EWT-Automatik: warte auf ersten Sensor-/Shelly-Abgleich'
+                : 'EWT-Automatik AUS – keine Pumpenbefehle');
         $this->MaintainVariable('ThermalLearningDiagnostic', 'SMART-FBH – Senden an ChatGPT', VARIABLETYPE_STRING, '', 910, true);
         $this->EnableAction('Mode');
         $this->SetValueIfChanged('Mode', $this->ReadAttributeInteger('OperatingMode'));
