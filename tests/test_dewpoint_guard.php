@@ -44,6 +44,9 @@ function IPS_SemaphoreLeave(string $key): void {}
 final class EwtSimulation
 {
     use LCNClimateDewPointGuard;
+    private const MODE_COOLING = 1;
+    public int $symconMode = 1;
+    private function GetMode(): int { return $this->symconMode; }
     public int $InstanceID = 200;
     public array $p = [
         'DewPointAutoPumpEnabled'=>true,
@@ -208,6 +211,37 @@ $sim->DewPointGuardTick();
 check($sim->attr['DewPointGuardState'] === 'UNKNOWN', 'offline during unsafe sensor does not imply OFF');
 check(count(array_filter($sim->rpcCalls, fn($x) => $x[0] === 'Switch.Set')) === 2,
     'unsafe state attempts OFF despite initial status failure');
+
+// HEIZEN is the hardware-unpowered outlet, therefore an unreachable
+// Shelly is expected and MUST NEVER raise a monitoring error.
+$sim->symconMode = 0;
+$sim->remoteOnline = false;
+$sim->rpcCalls = [];
+$sim->DewPointGuardTick();
+check(count($sim->rpcCalls) === 0, 'HEIZEN does not contact an unpowered Shelly');
+check($sim->attr['DewPointGuardState'] === 'HEATING_PAUSED', 'heating has a distinct idle state');
+check(str_contains($sim->values['DewPointGuardStatus'], 'HEIZEN'), 'heating status names operating mode');
+check(!str_contains($sim->values['DewPointGuardStatus'], 'NICHT BESTAETIGT'), 'no false alarm while heating');
+check($sim->attr['DewPointGuardNotifyState'] === 'HEATING_PAUSED', 'old error notification state cleared');
+check($sim->attr['DewPointGuardSafeSince'] === 0 && $sim->attr['DewPointGuardLastRenew'] === 0,
+    'heating resets restart timer and watchdog freshness');
+
+// HEIZEN -> KUEHLEN: Shelly starts unpowered/off then must be
+// reachable and satisfy the full stable-temperature restart.
+$sim->symconMode = 1;
+$sim->remoteOnline = true;
+$sim->remoteOn = false;
+$GLOBALS['ewt_data'][20510]['v'] = 19.0;
+$sim->rpcCalls = [];
+$sim->DewPointGuardTick();
+check($sim->attr['DewPointGuardState'] === 'OFF', 'cooling resumes real Shelly monitoring');
+check($sim->attr['DewPointGuardSafeSince'] > 0 && !$sim->remoteOn,
+    'cooling restarts with a fresh 120-second safe period');
+
+// In KUEHLEN a missing Shelly is still a real fault.
+$sim->remoteOnline = false;
+$sim->DewPointGuardTick();
+check($sim->attr['DewPointGuardState'] === 'UNKNOWN', 'cooling unreachable Shelly is still a fault');
 
 // Disabled automatic controller never touches the pump.
 $sim->remoteOnline = true;

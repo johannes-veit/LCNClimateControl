@@ -1,4 +1,4 @@
-# EWT-Taupunktwaechter – LCNClimateControl 0.5.8
+# EWT-Taupunktwaechter – LCNClimateControl 0.5.9
 
 Automatisch integriert in **bestehende Climate-Instanz #17597**.
 Keine separate Instanz, kein zusätzliches Skript und keine Eingaben
@@ -15,6 +15,29 @@ FBH -> Ruecklauf -> Plattenwaermetauscher (Kuehlen) -> FBH-Wassersensor
 - **Shelly Plug M Gen3 / 192.168.103.67** = EWT-Umwaelzpumpe,
   steckt in der physisch von der Betriebsart KUEHLEN geschalteten Steckdose.
 - FBH-Heizungspumpe wird **niemals** von dieser Funktion geschaltet.
+
+## Betriebsart HEIZEN / KUEHLEN
+
+Die KUEHLEN-Steckdose wird vom vorhandenen physischen Betriebsartschalter
+versorgt. Bei HEIZEN ist der Shelly deshalb normalerweise stromlos und
+nicht erreichbar. Das ist kein Fehler.
+
+- **Symcon HEIZEN**: Taupunktwaechter pausiert, keine HTTP-Abfrage,
+  kein Schaltversuch, keine Fehlermeldung und keine Push-Stoerung.
+  Status: `HEIZEN – EWT-Taupunktwaechter inaktiv (Shelly stromlos erwartet)`.
+  Der tatsächliche Shelly-Ausgang wird dabei **nicht** als AUS bestaetigt.
+- **Symcon KUEHLEN**: Taupunktwaechter aktiv; der Shelly muss bei
+  eingeschalteter physischer KUEHLEN-Versorgung erreichbar sein.
+  Fehlende Kommunikation bleibt eine Sicherheitsstoerung.
+- Beim Wechsel von HEIZEN nach KUEHLEN beginnt die 120-s-Freigabezeit
+  neu. Es wird nicht blind wieder eingeschaltet.
+
+**Wichtig:** Der physische Betriebsartschalter wird mangels Rueckmeldung
+nicht von Symcon gemessen. Die Symcon-Betriebsart muss mit der tatsaechlichen
+Anlagenstellung uebereinstimmen; sonst kann Software die Pumpensicherheit
+nicht sicherstellen. Am Shelly ist `initial_state=off` (Power-on AUS)
+empfohlen, damit nach Wiederkehr der Netzspannung keine unkontrollierte
+Pumpe anlaeuft.
 
 ## Einfacher Entscheidungsweg (alle 10 Sekunden)
 
@@ -78,7 +101,7 @@ in der bereits vorhandenen Raumtabelle ueberschreiben.
 
 ## Software-Installation
 
-Nach einem Update auf 0.5.8 laeuft die neue **EWT-Pumpenautomatik**
+Nach einem Update auf 0.5.9 laeuft die neue **EWT-Pumpenautomatik**
 mit den bereits bekannten IDs und der vorhandenen Shelly-IP,
 sofern der Plug erreichbar und seine Versorgung eingeschaltet ist.
 Die Option `DewPointAutoPumpEnabled` ist standardmaessig EIN.

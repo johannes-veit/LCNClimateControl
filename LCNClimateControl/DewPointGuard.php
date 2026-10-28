@@ -241,6 +241,18 @@ trait LCNClimateDewPointGuard
             return;
         }
         try {
+            // HEIZEN: the physical cooling outlet is intentionally without
+            // power. The Shelly is unreachable by design; that is not a fault.
+            // Do not infer or claim a confirmed plug output from this mode.
+            if ($this->GetMode() !== self::MODE_COOLING) {
+                $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
+                $this->WriteAttributeInteger('DewPointGuardLastRenew', 0);
+                $this->WriteAttributeString('DewPointGuardState', 'HEATING_PAUSED');
+                $this->WriteAttributeString('DewPointGuardNotifyState', 'HEATING_PAUSED');
+                $this->SetValueIfChanged('DewPointGuardStatus',
+                    'HEIZEN – EWT-Taupunktwaechter inaktiv (Shelly stromlos erwartet)');
+                return;
+            }
             $snapshot = $this->DewPointGuardSnapshot();
             try {
                 // If the initial status cannot be read, an unsafe sensor

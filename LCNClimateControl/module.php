@@ -268,9 +268,11 @@ class LCNClimateControl extends IPSModuleStrict
         $this->MaintainVariable('ChatGPTDiagnostic', 'Senden an ChatGPT', VARIABLETYPE_STRING, '', 900, true);
         $this->MaintainVariable('DewPointGuardStatus', 'EWT-Taupunktwaechter', VARIABLETYPE_STRING, '', 905, true);
         $this->SetValueIfChanged('DewPointGuardStatus',
-            $this->ReadPropertyBoolean('DewPointAutoPumpEnabled')
-                ? 'EWT-Automatik: warte auf ersten Sensor-/Shelly-Abgleich'
-                : 'EWT-Automatik AUS – keine Pumpenbefehle');
+            !$this->ReadPropertyBoolean('DewPointAutoPumpEnabled')
+                ? 'EWT-Automatik AUS – keine Pumpenbefehle'
+                : ($this->GetMode() === self::MODE_HEATING
+                    ? 'HEIZEN – EWT-Taupunktwaechter inaktiv (Shelly stromlos erwartet)'
+                    : 'EWT-Automatik: warte auf ersten Sensor-/Shelly-Abgleich'));
         $this->MaintainVariable('ThermalLearningDiagnostic', 'SMART-FBH – Senden an ChatGPT', VARIABLETYPE_STRING, '', 910, true);
         $this->EnableAction('Mode');
         $this->SetValueIfChanged('Mode', $this->ReadAttributeInteger('OperatingMode'));
