@@ -154,13 +154,15 @@ trait LCNClimateDewPointGuard
         try {
             $snapshot = $this->DewPointGuardSnapshot();
             $simulation = $this->ReadPropertyBoolean('DewPointGuardSimulation');
-            $previousOn = $this->ReadAttributeString('DewPointGuardState') === 'ON';
+            $previousOn = $this->ReadAttributeString('DewPointGuardState') === 'ON'
+                && $this->ReadAttributeInteger('DewPointGuardLastRenew') > time() - 25;
             $margin = max(0.5, min(5.0, (float) $this->ReadPropertyFloat('DewPointMarginK')));
             $hysteresis = max(0.1, min(2.0, (float) $this->ReadPropertyFloat('DewPointHysteresisK')));
             $allowed = ($snapshot['ok'] ?? false)
                 && LCNClimateDewPointLogic::allow((float) $snapshot['water'], (float) $snapshot['dew'], $previousOn, $margin, $hysteresis);
             if ($simulation) {
                 $this->WriteAttributeString('DewPointGuardState', 'UNKNOWN');
+                $this->WriteAttributeInteger('DewPointGuardLastRenew', 0);
                 $this->SetValueIfChanged('DewPointGuardStatus', 'BEOBACHTUNG – '
                     . (($snapshot['ok'] ?? false)
                         ? sprintf('Wasser %.2f °C; Taupunkt %.2f °C (%s); Abstand %.2f K; rechnerisch %s',
@@ -188,6 +190,7 @@ trait LCNClimateDewPointGuard
             try {
                 $this->DewPointSetPump($canStart);
                 $this->WriteAttributeString('DewPointGuardState', $canStart ? 'ON' : 'OFF');
+                $this->WriteAttributeInteger('DewPointGuardLastRenew', $canStart ? $now : 0);
                 $this->SetValueIfChanged('DewPointGuardStatus',
                     ($canStart ? 'EWT-PUMPE EIN' : 'EWT-PUMPE AUS') . ' – '
                     . (($snapshot['ok'] ?? false)
@@ -196,6 +199,7 @@ trait LCNClimateDewPointGuard
                         : (string) ($snapshot['reason'] ?? 'Sensor ungültig')));
             } catch (Throwable $e) {
                 $this->WriteAttributeString('DewPointGuardState', 'UNKNOWN');
+                $this->WriteAttributeInteger('DewPointGuardLastRenew', 0);
                 $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
                 $this->WriteAttributeInteger('DewPointGuardLastStop', $now);
                 $this->SetValueIfChanged('DewPointGuardStatus',
