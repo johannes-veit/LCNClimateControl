@@ -191,6 +191,11 @@
           "maximum": 180
         },
         {
+          "type": "SelectInstance",
+          "name": "DewPointPushWebFront",
+          "caption": "Optional: WebFront-Instanz für Push bei Sicherheitsstopp (0 = aus)"
+        },
+        {
           "type": "Label",
           "caption": "In der Raumtabelle die Feuchtevariable zu jedem aktiven Raum zuordnen. Wenn ein Wert fehlt, veraltet oder unplausibel ist, bleibt die EWT-Pumpe AUS. LIVE: Alle 10 s erneuert Symcon die auf 40 s begrenzte Shelly-EIN-Freigabe. Nach Verbindungsabbruch schaltet der Shelly lokal wieder AUS. Start nach 30 s stabilen Werten und Mindestpause. Vorher Shelly Startzustand AUS und Automatik/Handbedienung pruefen."
         },
