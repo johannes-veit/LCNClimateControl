@@ -1,84 +1,102 @@
-# EWT-Taupunktwaechter im LCNClimateControl
+# EWT-Taupunktwaechter – LCNClimateControl 0.5.7
 
-## Funktion / Hydraulik
+Automatisch integriert in **bestehende Climate-Instanz #17597**.
+Keine separate Instanz, kein zusätzliches Skript und keine Eingaben
+für die elf bekannten LCN-Luftfeuchtesensoren erforderlich.
 
-Der bestehende Plattenwaermetauscher sitzt im Ruecklauf der Fussbodenheizung:
-FBH -> Ruecklauf -> Platten-WT -> Heizungspumpe -> Mischventil -> FBH.
-Im Kuehlbetrieb ist die Pufferspeicher-Zufuhr geschlossen. Das nach dem
-Platten-WT gemessene FBH-Wasser ist daher naeherungsweise der Kuehlvorlauf.
+## Tatsächliche Hydraulik
 
-- Fühler **101**: Symcon-Variable **#20510**; FBH-Wasser nach Platten-WT;
-  einzige Wassertemperatur in der Pumpenschutzentscheidung.
-- Fühler **100**: **#12630**; Kaltwasser der EWT-Quelle; nur Anzeige,
-  kein Einfluss auf die Sicherheitsregel.
-- Shelly Plug M Gen3: **192.168.103.67**, Schaltausgang in Symcon **#30335**;
-  steckt in der physisch nur bei KUEHLEN versorgten Steckdose.
-- Raumtemperatur-/Luftfeuchtewerte: bestehende LCN-Variablen;
-  neu **HumidityVariable** pro Raum in der bestehenden Raumtabelle.
+FBH -> Ruecklauf -> Plattenwaermetauscher (Kuehlen) -> FBH-Wassersensor
+101 -> Heizungspumpe -> Mischventil (Puffer im Sommer zu) -> FBH.
 
-## Regel
+- **101 / #20510** = FBH-Wasser direkt nach dem Platten-WT, alleinige
+  Wassertemperatur des EWT-Pumpenschutzes.
+- **100 / #12630** = EWT-Quellwasser, nur Information und Anzeige.
+- **Shelly Plug M Gen3 / 192.168.103.67** = EWT-Umwaelzpumpe,
+  steckt in der physisch von der Betriebsart KUEHLEN geschalteten Steckdose.
+- FBH-Heizungspumpe wird **niemals** von dieser Funktion geschaltet.
 
-1. Alle aktivierten Raeume brauchen plausible, frische Temperatur- und
-   Luftfeuchtewerte (Vorgabe 900 s maximale Aktualisierungszeit).
-2. Berechne jeden Raumtaupunkt mit der Magnus-Formel und bilde das Maximum.
-3. Bei laufender EWT-Pumpe: **STOPP**, sobald
-   `T_FBH_101 - Taupunkt_max <= 1,5 K`.
-4. Bei abgestellter Pumpe: neuer Start erst oberhalb **2,0 K**
-   Abstand (0,5 K Hysterese), nach mindestens 30 Sekunden stabilen Werten
-   sowie mindestens 60 Sekunden Pumpenpause.
-5. Fehlende/ungültige/veraltete Sensorwerte: **STOPP**.
-6. Nur die **EWT-Pumpe** wird abgeschaltet; die normale FBH-Pumpe bleibt
-   unberührt. LCN-S1-/Ventilsteuerung wird durch diese Funktion nicht verändert.
+## Einfacher Entscheidungsweg (alle 10 Sekunden)
 
-Live-Steuerung benutzt **lokale Shelly-RPC** (keine Cloud).
-Während Freigabe erneuert Symcon alle **10 s** den Shelly-Ausgang
-mit `Switch.Set?id=0&on=true&toggle_after=40`. Ohne neue Freigabe
-stellt der Shelly den Ausgang nach 40 s lokal ab (Firmwarefunktion).
-Symcon prueft den Status mit `Switch.GetStatus`.
+1. Pruefe Fühler 101 und die vorhandenen LCN-Temperatur-/RH-Variablen.
+2. Berechne den Taupunkt jedes aktiven Climate-Raums (Magnus-Formel).
+3. Nimm den hoechsten Raumtaupunkt.
+4. Lies den **tatsaechlichen** Ausgang des Shelly Plug ab.
+5. Ist die Pumpe an und T101 <= max(Taupunkt)+**1,5 K**,
+   sende **AUS**. Andernfalls darf sie weiterlaufen.
+6. Ist die Pumpe aus und T101 > max(Taupunkt)+**2,0 K**,
+   sende **EIN**. Sonst AUS.
+7. Lies den Shelly-Schaltzustand erneut. Weicht er vom Befehl ab,
+   protokolliere einen Fehler statt Erfolg.
+8. Fehlender/veralteter/unplausibler Wert -> Befehl **AUS**;
+   nicht erreichbarer Shelly -> **NICHT BESTAETIGT** (kein falscher
+   Erfolgseintrag).
 
-**Wichtig:** Auch 40 Sekunden Restlauf bei Fehler sind moeglich. Ein
-ausgefallenes, falsch installiertes oder verzögertes Thermometer, ein
-klebendes Relais, eine manuelle Shelly-Schaltung oder zu lange
-Waermetransportzeiten sind damit NICHT unabhaengig abgedeckt. 1,5 K ist
-die Betreiber-Auslegung, keine nachgewiesene Kondensationsfreiheit.
-Beim Wiederstart kann der vorher erwaermte Fühler 101 den spaeteren
-Zustand nach erneut einsetzender EWT-Kuehlung nicht vorhersagen.
-Die Nachlauf-/Wiederanlauf-Funktion muss vor Ort unter realem Durchfluss
-getestet werden.
+Keine zusätzliche Wartezeit und keine manuelle Quittierung.
 
-## Installation und Inbetriebnahme
+Für eingeschaltete Ausgänge wird alle 10 s ein **lokaler
+Shelly-Auto-OFF nach 40 s** erneuert (`Switch.Set` mit
+`toggle_after=40`). So fällt eine ausbleibende Freigabe bei
+laufendem, erreichbarem Shelly nach Ablauf der Zeit ab.
 
-1. Shelly Plug **Power-on default OFF** setzen und manuelle
-   Schaltmoeglichkeiten bzw. Shelly-Zeitplaene gesondert absichern.
-   Die Socket-Betriebsart HEIZEN/KUEHLEN bleibt unveraendert.
-2. Moduleigenschaft `DewPointGuardEnabled`: anfangs **false**.
-3. In der bestehenden Raumtabelle in der neuen Spalte `Luftfeuchte %`
-   pro aktivem Raum die zugehörige LCN-Feuchtevariable eintragen.
-4. Fühler 101 `DewPointWaterVariable` (Standard #20510) prüfen;
-   Shelly-IP (Standard 192.168.103.67) kontrollieren.
-5. `DewPointGuardEnabled` aktivieren, aber
-   `DewPointGuardSimulation` **true** lassen:
-   Die Statusvariable `EWT-Taupunktwaechter` zeigt nur Messwerte
-   und die rechnerische Entscheidung, es werden KEINE Shelly-Befehle gesendet.
-6. Optional im Feld `DewPointPushWebFront` die WebFront-Konfiguratorinstanz
-   für Pushmeldungen bei Pumpenstopp, Wiederfreigabe oder Steuerungsfehler
-   auswählen (Standard 0 = keine Pushmeldungen).
-7. In Betrieb mit thermisch richtig montiertem 101er Fühler auf
-   Taupunkt- und Schwellwerte sowie Sensoralter achten.
-8. Vor einer Live-Freigabe Tests mit echter Steckdose und EWT-Pumpe
-   durchführen: Schaltausgang STOPP, fehlender Feuchtewert, abgezogener
-   101er Sensor, unterbrochenes WLAN, unterbrochenes Symcon und
-   automatischer Wiederanlauf. Die 40-s-Abschaltung des Shelly
-   muss am echten Gerät nachgewiesen werden.
-9. Erst nach positiver Inbetriebnahme `DewPointGuardSimulation=false`
-   setzen. Das erlaubt explizit das Schalten der EWT-Pumpe.
+## LCN-Sensorquellen: automatisch
 
-**Keine falsche Hardware-Abnahme:** Die bestehende
-`CoolingHardwareInterlockConfirmed`-Pflicht für die separate
-LCN-Direktkuehlung bleibt absichtlich unverändert.
-Der Software-Shelly-Guard darf dieses Häkchen nicht automatisch setzen
-oder als unabhängiger physischer Taupunktkontakt ausgegeben werden.
+Die echten GUS-Humidity-IDs wurden mit dem vorhandenen
+`johannes-veit/HeliosSmart/libs/LCNRoomSources.php` abgeglichen.
 
-Die EWT-Pumpenfunktion wird dadurch als eigener Teil des bestehenden
-Climate-Moduls installiert und kann ohne Änderungen an den LCN-A7/A8,
-S1TargetLock- oder Ventilkommandos verwendet werden.
+| Raum | LCN-Isttemperatur | LCN-RH |
+|---|---:|---:|
+| EG Bad | 12812 | 53361 |
+| EG Büro | 14055 | 19020 |
+| EG Gäste WC | 15825 | 16107 |
+| EG Küche | 21585 | 52026 |
+| EG Schlafen | 25557 | 58531 |
+| EG Wohnen | 29782 | 46360 |
+| OG Ankleide | 17837 | 43385 |
+| OG Bad | 36518 | 28802 |
+| OG Flur | 34232 | 13394 |
+| OG Schlafen 1 | 30970 | 37079 |
+| OG Schlafen 2 | 25330 | 22436 |
+
+EG Flur besitzt im bestehenden Back-up keine zugeordnete
+eigene Temperaturvariable im Climate-Modul. Bei abweichenden
+oder neuen IDs kann der Betreiber einzelne RH-IDs optional
+in der bereits vorhandenen Raumtabelle ueberschreiben.
+
+- Maximalalter des FBH-Wasserwerts: 15 Minuten.
+- Maximalalter der Raumtemperaturen: 2 Stunden.
+- Maximalalter unveraenderter LCN-Feuchtewerte: 12 Stunden.
+- Ungueltige oder aeltere Werte verhindern den Pumpenstart.
+- Der alte Standardwert von 900 Sekunden aus 0.5.6 wird
+  automatisch als 12 h interpretiert, passend zum bekannten
+  LCN-GUS-Verhalten, bei dem Werte teilweise nur bei Aenderung kommen.
+
+## Software-Installation
+
+Nach einem Update auf 0.5.7 laeuft die neue **EWT-Pumpenautomatik**
+mit den bereits bekannten IDs und der vorhandenen Shelly-IP,
+sofern der Plug erreichbar und seine Versorgung eingeschaltet ist.
+Die Option `DewPointAutoPumpEnabled` ist standardmaessig EIN.
+Die bisherigen alten Beobachtungs-/Aktivierungsfelder aus 0.5.6
+werden aus der Maske entfernt und haben auf die Automatik
+keinen Einfluss. Es wird nur die EWT-Pumpe geschaltet;
+die separate LCN-Direktkuehlungsfreigabe wird nicht umgangen.
+
+Das Modul hat die Statusvariable **EWT-Taupunktwaechter**
+mit Temperatur, kritischstem Raum und bestaetigtem Schaltstatus;
+zusaetzliche Meldungen koennen an eine WebFront-Instanz gehen.
+
+## Grenze der Aussage einer Simulation
+
+Die PHP-Simulation prueft die Entscheidung, Wertealter, Ein-/Aus-Befehle,
+Rückmeldungen, Verlust der Kommunikation, einen ignorierten
+Schaltbefehl und die automatische Wiederfreigabe. Sie kann
+**weder die tatsaechliche Schaltbewegung des Shelly noch den
+Wasserfluss oder die reale Kondensationsfreiheit nachweisen**.
+Auch ein gemeldeter Ausgangszustand beweist nicht, dass der
+230-V-Kontakt physikalisch offen ist. Der Software-Taupunktwaechter
+ist kein unabhaengiger Hardware-Taupunktkontakt.
+
+Die alte Pflicht `CoolingHardwareInterlockConfirmed` der
+**separaten LCN-Direktkuehlung** bleibt unveraendert;
+sie darf nicht wahrheitswidrig gesetzt werden.
