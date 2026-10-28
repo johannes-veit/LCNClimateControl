@@ -335,6 +335,14 @@ $removed = array_pop($sim->rooms);
 check($sim->snapshot()['ok'] === false, 'fewer than 11 rooms cannot authorize pump');
 $sim->rooms[] = $removed;
 check($sim->snapshot()['ok'] === true, 'full 11-room set restored');
+$oldTemp = $sim->rooms[3]['TemperatureVariable'];
+$sim->rooms[3]['TemperatureVariable'] = $sim->rooms[0]['TemperatureVariable'];
+check($sim->snapshot()['ok'] === false, 'duplicate room-temperature source blocks pump');
+$sim->rooms[3]['TemperatureVariable'] = $oldTemp;
+$sim->rooms[3]['HumidityVariable'] = 53361;
+check($sim->snapshot()['ok'] === false, 'duplicate room-humidity source blocks pump');
+$sim->rooms[3]['HumidityVariable'] = 0;
+check($sim->snapshot()['ok'] === true, 'unique room sensor sources restored');
 
 // It also works when a DIFFERENT room is the single cooling room.
 $sim->coolingStates = [50002=>true];
