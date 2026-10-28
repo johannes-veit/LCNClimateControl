@@ -48,8 +48,8 @@ vor den Verteilern, die unabhaengig vom einzelnen Raumventil abkuehlen koennen.
 Im KUEHLEN-Betrieb ist zusaetzlich **mindestens ein Kuehlventil offen**
 erforderlich. Die Software nutzt dafuer den vorhandenen bestaetigten
 CoolingState UND die zugehoerige native LCN-Relais-Rueckmeldung
-mit bekannter NC-Polaritaet. Bei unbekanntem oder widerspruechlichem
-Relaiszustand wird keine Pumpenfreigabe erteilt. Alle Ventile geschlossen
+mit bekannter NC-Polaritaet. Bei fehlender/unlesbarer Relaisrueckmeldung wird keine Pumpenfreigabe erteilt.
+Nur tatsaechlich als offen gemeldete Kreise zaehlen. Alle Ventile geschlossen
 bedeutet Pumpen AUS, ohne Alarmpush (normaler Leerlauf).
 
 Die Raum-Taupunktberechnung umfasst immer alle 11 konfigurierten
@@ -65,7 +65,7 @@ Auch das Shelly-Ausgangsfeedback beweist nicht den Wasserfluss.
 ## Einfacher Entscheidungsweg (alle 10 Sekunden)
 
 1. Pruefe Fühler 101 und die vorhandenen LCN-Temperatur-/RH-Variablen.
-2. Berechne den Taupunkt jedes aktiven Climate-Raums (Magnus-Formel).
+2. Berechne den Taupunkt aller 11 Climate-Raeume, auch Nicht kuehlen (Magnus-Formel).
 3. Nimm den hoechsten Raumtaupunkt.
 4. Pruefe, ob mindestens ein LCN-Kuehlventil laut gespeicherter Bestaetigung und Relais-Feedback offen ist. Wenn keines: EWT-Pumpe AUS.
 5. Lies den **tatsaechlichen** Ausgang des Shelly Plug ab.
