@@ -185,7 +185,7 @@
         },
         {
           "type": "Label",
-          "caption": "Die LCN-Feuchtewerte werden automatisch zugeordnet. Alle 10 s: hoechsten Taupunkt berechnen; bei Abstand <= 1,5 K sofort AUS; Wiederanlauf erst bei > 2,0 K und nach 120 s stabiler Freigabe. Bei fehlendem Wert AUS. Shelly-Schaltung pruefen, bei Fehler einmal wiederholen. Laufendes EIN wird am Shelly nur 40 s freigegeben."
+          "caption": "Im KUEHLBETRIEB werden immer alle 11 Raumtaupunkte geprueft, auch von Raeumen mit 'Nicht kuehlen' (Schutz gemeinsamer Rohrleitungen). Die EWT-Pumpe laeuft nur bei mindestens einem per LCN-Relais bestaetigt offenen Kuehlventil. Kein Ventil offen = Pumpe AUS. Ungueltige Sensor-/Relaisdaten = keine Freigabe. Abschaltung bei Abstand <= 1,5 K; Wiederanlauf bei > 2,0 K nach 120 s. Shelly-Rueckmeldung wird geprueft, einmaliger Retry, 40-s-Auto-OFF."
         },
         {
           "type": "Label",
