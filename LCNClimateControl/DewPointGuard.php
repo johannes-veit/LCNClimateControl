@@ -112,7 +112,10 @@ trait LCNClimateDewPointGuard
         $maximum = null;
         $criticalRoom = '';
         $count = 0;
-        $humidityMaxAge = max(900, min(43200, (int) $this->ReadPropertyInteger('DewPointMaxAgeSeconds')));
+        $ageSetting = (int) $this->ReadPropertyInteger('DewPointMaxAgeSeconds');
+        // v0.5.6 stored 900 as its default, which would stop the EWT pump after
+        // 15 minutes even though many verified LCN GUS sensors report on change.
+        $humidityMaxAge = $ageSetting <= 900 ? 43200 : min(43200, $ageSetting);
         foreach ($this->GetRooms() as $room) {
             if (!(bool) ($room['Enabled'] ?? true)) {
                 continue;
