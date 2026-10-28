@@ -181,17 +181,33 @@ trait LCNClimateDewPointGuard
 
     private function DewPointCommandAndVerify(bool $desired): void
     {
-        // Short local lease is renewed only after a fresh sensor decision.
-        $response = $this->DewPointPumpRpc('Switch.Set', [
-            'id' => 0, 'on' => $desired ? 'true' : 'false',
-            'toggle_after' => $desired ? 40 : 0
-        ]);
-        if (!isset($response['was_on']) || !is_bool($response['was_on'])) {
-            throw new RuntimeException('Shelly bestaetigt Schaltbefehl nicht');
+        // One retry for a transient RPC or mismatched readback. Each attempt
+        // checks the REAL Shelly output; a sent command alone is not success.
+        $lastError = null;
+        for ($attempt = 0; $attempt < 2; ++$attempt) {
+            try {
+                $response = $this->DewPointPumpRpc('Switch.Set', [
+                    'id' => 0, 'on' => $desired ? 'true' : 'false',
+                    // A running pump is only leased for 40 s. The 10 s
+                    // watchdog renews it; loss of Symcon leaves auto-OFF.
+                    'toggle_after' => $desired ? 40 : 0
+                ]);
+                if (!isset($response['was_on']) || !is_bool($response['was_on'])) {
+                    throw new RuntimeException('Shelly bestaetigt Schaltbefehl nicht');
+                }
+                if ($this->DewPointReadPumpState() !== $desired) {
+                    throw new RuntimeException('Shelly Rueckmeldung widerspricht Schaltbefehl');
+                }
+                return;
+            } catch (Throwable $e) {
+                $lastError = $e;
+            }
         }
-        if ($this->DewPointReadPumpState() !== $desired) {
-            throw new RuntimeException('Shelly Rueckmeldung widerspricht Schaltbefehl');
-        }
+        throw new RuntimeException(
+            'Shelly-Schaltung nach zwei Versuchen nicht bestaetigt: '
+            . ($lastError === null ? 'unbekannter Fehler' : $lastError->getMessage()),
+            0, $lastError
+        );
     }
 
     private function DewPointNotifyTransition(string $state, string $message): void
@@ -212,8 +228,9 @@ trait LCNClimateDewPointGuard
     }
 
     /**
-     * Fully automatic: fresh sensors -> compare -> switch -> read back output.
-     * No artificial 30-s delay, 60-s hold or manual approval in this function.
+     * Every 10 seconds: validate sensors, compare with the highest room dew
+     * point, switch the EWT pump, and verify the Shelly output.
+     * Stop immediately; permit a restart only after 120 s continuously safe.
      */
     public function DewPointGuardTick(): void
     {
@@ -226,30 +243,87 @@ trait LCNClimateDewPointGuard
         try {
             $snapshot = $this->DewPointGuardSnapshot();
             try {
-                // Actual hardware output, not a potentially stale Symcon cache.
-                $wasOn = $this->DewPointReadPumpState();
+                // If the initial status cannot be read, an unsafe sensor
+                // situation still gets an explicit OFF attempt.
+                try {
+                    $wasOn = $this->DewPointReadPumpState();
+                } catch (Throwable $e) {
+                    if ((bool) ($snapshot['ok'] ?? false)) {
+                        throw $e; // Never start without a trusted readback.
+                    }
+                    $this->DewPointCommandAndVerify(false);
+                    $wasOn = false;
+                }
+
+                $now = time();
+                $lastCheck = $this->ReadAttributeInteger('DewPointGuardLastRenew');
+                if ($lastCheck <= 0 || $now < $lastCheck || $now - $lastCheck > 35) {
+                    // After Symcon restart, a long scheduling gap or lost
+                    // communication, the 120-s stable period starts afresh.
+                    $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
+                }
+                $this->WriteAttributeInteger('DewPointGuardLastRenew', $now);
+
+                $valid = (bool) ($snapshot['ok'] ?? false);
                 $margin = max(0.5, min(5, (float) $this->ReadPropertyFloat('DewPointMarginK')));
                 $hysteresis = max(0, min(2, (float) $this->ReadPropertyFloat('DewPointHysteresisK')));
-                $desired = (bool) ($snapshot['ok'] ?? false)
-                    && LCNClimateDewPointLogic::allow(
-                        (float) $snapshot['water'], (float) $snapshot['dew'],
-                        $wasOn, $margin, $hysteresis
+                $water = $valid ? (float) $snapshot['water'] : null;
+                $dew = $valid ? (float) $snapshot['dew'] : null;
+                $waiting = false;
+                $secondsLeft = 0;
+
+                if ($wasOn) {
+                    // No stop delay: water too close to dew point -> OFF now.
+                    $desired = $valid && LCNClimateDewPointLogic::allow(
+                        $water, $dew, true, $margin, $hysteresis
                     );
-                $this->DewPointCommandAndVerify($desired);
+                    $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
+                } else {
+                    $safe = $valid && LCNClimateDewPointLogic::allow(
+                        $water, $dew, false, $margin, $hysteresis
+                    );
+                    if (!$safe) {
+                        $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
+                        $desired = false;
+                    } else {
+                        $since = $this->ReadAttributeInteger('DewPointGuardSafeSince');
+                        if ($since <= 0 || $since > $now) {
+                            $since = $now;
+                            $this->WriteAttributeInteger('DewPointGuardSafeSince', $since);
+                        }
+                        $secondsLeft = max(0, 120 - ($now - $since));
+                        $waiting = $secondsLeft > 0;
+                        $desired = !$waiting;
+                    }
+                }
+
+                if ($wasOn && !$desired) {
+                    $this->WriteAttributeInteger('DewPointGuardLastStop', $now);
+                }
+                // Avoid redundant OFF commands when the physical output
+                // is already OFF. Every ON tick renews the short auto-OFF lease.
+                if ($desired || $wasOn) {
+                    $this->DewPointCommandAndVerify($desired);
+                }
+
                 $this->WriteAttributeString('DewPointGuardState', $desired ? 'ON' : 'OFF');
                 $label = $desired ? 'EWT-PUMPE EIN' : 'EWT-PUMPE AUS';
-                $detail = ($snapshot['ok'] ?? false)
+                $detail = $valid
                     ? sprintf('FBH %.2f °C; Taupunkt %.2f °C (%s); Abstand %.2f K; %d Raeume',
                         $snapshot['water'], $snapshot['dew'], $snapshot['room'],
                         $snapshot['delta'], $snapshot['rooms'])
                     : (string) ($snapshot['reason'] ?? 'Messwerte ungueltig');
-                $this->SetValueIfChanged('DewPointGuardStatus', $label . ' – bestaetigt – ' . $detail);
+                $waitingText = $waiting ? (' – Wiederanlauf in ' . $secondsLeft . ' s') : '';
+                $this->SetValueIfChanged('DewPointGuardStatus',
+                    $label . ' – bestaetigt' . $waitingText . ' – ' . $detail);
                 $state = $desired ? 'RUNNING'
-                    : (($snapshot['ok'] ?? false) ? 'DEW_STOP' : 'SENSOR_STOP');
-                $this->DewPointNotifyTransition($state, $label . ': ' . $detail);
+                    : ($waiting ? 'WAIT'
+                        : ($valid ? 'DEW_STOP' : 'SENSOR_STOP'));
+                // One push per transition, not one per 10-second timer tick.
+                $this->DewPointNotifyTransition($state, $label . ': ' . $detail . $waitingText);
             } catch (Throwable $e) {
-                // If the plug has no power (HEIZEN outlet), the RPC is unreachable.
-                // Do not claim its output has actually been turned off.
+                $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
+                // A remote output can never be claimed OFF when readback fails.
                 $this->WriteAttributeString('DewPointGuardState', 'UNKNOWN');
                 $this->SetValueIfChanged('DewPointGuardStatus',
                     'NICHT BESTAETIGT – Shelly nicht erreichbar oder Rueckmeldung falsch: ' . $e->getMessage());
