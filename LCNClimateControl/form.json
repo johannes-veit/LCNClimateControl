@@ -56,6 +56,16 @@
           }
         },
         {
+          "caption": "Luftfeuchte %",
+          "name": "HumidityVariable",
+          "width": "155px",
+          "add": 0,
+          "edit": {
+            "type": "SelectVariable",
+            "validVariableTypes": [2]
+          }
+        },
+        {
           "caption": "S1Target Float",
           "name": "TargetVariable",
           "width": "210px",
@@ -115,6 +125,78 @@
             "minimum": 1,
             "maximum": 8
           }
+        }
+      ]
+    },
+    {
+      "type": "ExpansionPanel",
+      "caption": "EWT-Taupunktwaechter – Shelly Pumpen-Sicherheitsstopp",
+      "expanded": false,
+      "items": [
+        {
+          "type": "Label",
+          "caption": "Fühler 101 nach Platten-WT ist die einzige Wasser-Schutzmessung. Der EWT-Fuehler 100 bleibt rein lesend. Die höchste berechnete Raumtaupunkttemperatur bestimmt die Sperre. Zuerst nur Beobachtung, danach vor Ort testen und Live-Schalten bewusst freigeben."
+        },
+        {
+          "type": "CheckBox",
+          "name": "DewPointGuardEnabled",
+          "caption": "EWT-Taupunktwaechter aktivieren (zunächst nur Beobachtung)"
+        },
+        {
+          "type": "CheckBox",
+          "name": "DewPointGuardSimulation",
+          "caption": "BEOBACHTUNG – niemals Shelly schalten (erst nach Inbetriebnahme deaktivieren)"
+        },
+        {
+          "type": "SelectVariable",
+          "name": "DewPointWaterVariable",
+          "caption": "Fühler 101 – FBH-Wasser nach Platten-WT (Standard #20510)",
+          "validVariableTypes": [2]
+        },
+        {
+          "type": "ValidationTextBox",
+          "name": "DewPointPumpIP",
+          "caption": "Shelly Plug M Gen3 IPv4 (Standard 192.168.103.67)"
+        },
+        {
+          "type": "NumberSpinner",
+          "name": "DewPointMarginK",
+          "caption": "Sicherheitsabstand zum höchsten Raumtaupunkt in K (1,5)",
+          "minimum": 0.5,
+          "maximum": 5,
+          "digits": 1,
+          "increment": 0.1
+        },
+        {
+          "type": "NumberSpinner",
+          "name": "DewPointHysteresisK",
+          "caption": "Wiederanlauf-Hysterese in K (0,5)",
+          "minimum": 0.1,
+          "maximum": 2,
+          "digits": 1,
+          "increment": 0.1
+        },
+        {
+          "type": "NumberSpinner",
+          "name": "DewPointMaxAgeSeconds",
+          "caption": "Maximales Sensoralter in Sekunden (900)",
+          "minimum": 60,
+          "maximum": 7200
+        },
+        {
+          "type": "NumberSpinner",
+          "name": "DewPointMinOffSeconds",
+          "caption": "Mindestauszeit EWT-Pumpe in Sekunden (60)",
+          "minimum": 15,
+          "maximum": 180
+        },
+        {
+          "type": "Label",
+          "caption": "In der Raumtabelle die Feuchtevariable zu jedem aktiven Raum zuordnen. Wenn ein Wert fehlt, veraltet oder unplausibel ist, bleibt die EWT-Pumpe AUS. LIVE: Alle 10 s erneuert Symcon die auf 40 s begrenzte Shelly-EIN-Freigabe. Nach Verbindungsabbruch schaltet der Shelly lokal wieder AUS. Start nach 30 s stabilen Werten und Mindestpause. Vorher Shelly Startzustand AUS und Automatik/Handbedienung pruefen."
+        },
+        {
+          "type": "Label",
+          "caption": "Dies ist ein Software-Taupunktwaechter und KEIN unabhaengiger physischer Taupunktkontakt. Die gesonderte Hardware-Interlock-Freigabe fuer LCN-Direktkuehlung bleibt unveraendert bestehen."
         }
       ]
     },
