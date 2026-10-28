@@ -25,13 +25,19 @@ FBH -> Ruecklauf -> Plattenwaermetauscher (Kuehlen) -> FBH-Wassersensor
 5. Ist die Pumpe an und T101 <= max(Taupunkt)+**1,5 K**,
    sende **AUS**. Andernfalls darf sie weiterlaufen.
 6. Ist die Pumpe aus und T101 > max(Taupunkt)+**2,0 K**,
-   beginnt eine **120-Sekunden-Stabilitätszeit**. Nur wenn der Abstand\n   durchgehend ausreichend bleibt, sende **EIN**. Sonst AUS.
-7. Lies den Shelly-Schaltzustand erneut. Weicht er vom Befehl ab,\n   wiederhole ihn **einmal**, prüfe erneut und melde bei Fehlschlag\n   ausdrücklich **NICHT BESTAETIGT**.
+   beginnt eine **120-Sekunden-Stabilitätszeit**. Nur wenn der Abstand
+   durchgehend ausreichend bleibt, sende **EIN**. Sonst AUS.
+7. Lies den Shelly-Schaltzustand erneut. Weicht er vom Befehl ab,
+   wiederhole ihn **einmal**, prüfe erneut und melde bei Fehlschlag
+   ausdrücklich **NICHT BESTAETIGT**.
 8. Fehlender/veralteter/unplausibler Wert -> Befehl **AUS**;
    nicht erreichbarer Shelly -> **NICHT BESTAETIGT** (kein falscher
    Erfolgseintrag).
 
-Keine Wartezeit beim Abschalten, keine manuelle Quittierung. Beim\nWiederanlauf gilt eine 120-Sekunden-Stabilitätszeit, die bei einem\nGrenzwertunterschreiten, Sensorfehler, Kommunikationsausfall oder\nlängerer Timer-Unterbrechung neu beginnt.
+Keine Wartezeit beim Abschalten, keine manuelle Quittierung. Beim
+Wiederanlauf gilt eine 120-Sekunden-Stabilitätszeit, die bei einem
+Grenzwertunterschreiten, Sensorfehler, Kommunikationsausfall oder
+längerer Timer-Unterbrechung neu beginnt.
 
 Für eingeschaltete Ausgänge wird alle 10 s ein **lokaler
 Shelly-Auto-OFF nach 40 s** erneuert (`Switch.Set` mit
