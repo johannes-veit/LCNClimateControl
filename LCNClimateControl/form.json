@@ -135,17 +135,12 @@
       "items": [
         {
           "type": "Label",
-          "caption": "Fühler 101 nach Platten-WT ist die einzige Wasser-Schutzmessung. Der EWT-Fuehler 100 bleibt rein lesend. Die höchste berechnete Raumtaupunkttemperatur bestimmt die Sperre. Zuerst nur Beobachtung, danach vor Ort testen und Live-Schalten bewusst freigeben."
+          "caption": "Fühler 101 nach Platten-WT ist die einzige Wasser-Schutzmessung. Fühler 100 bleibt rein lesend. Die Regelung berechnet automatisch den höchsten Raumtaupunkt und schaltet die EWT-Pumpe direkt. Die LCN-Luftfeuchte-IDs sind bereits hinterlegt."
         },
         {
           "type": "CheckBox",
-          "name": "DewPointGuardEnabled",
-          "caption": "EWT-Taupunktwaechter aktivieren (zunächst nur Beobachtung)"
-        },
-        {
-          "type": "CheckBox",
-          "name": "DewPointGuardSimulation",
-          "caption": "BEOBACHTUNG – niemals Shelly schalten (erst nach Inbetriebnahme deaktivieren)"
+          "name": "DewPointAutoPumpEnabled",
+          "caption": "EWT-Pumpenautomatik EIN – direkt schalten und Shelly bestaetigen"
         },
         {
           "type": "SelectVariable",
@@ -179,16 +174,9 @@
         {
           "type": "NumberSpinner",
           "name": "DewPointMaxAgeSeconds",
-          "caption": "Maximales Sensoralter in Sekunden (900)",
-          "minimum": 60,
-          "maximum": 7200
-        },
-        {
-          "type": "NumberSpinner",
-          "name": "DewPointMinOffSeconds",
-          "caption": "Mindestauszeit EWT-Pumpe in Sekunden (60)",
-          "minimum": 15,
-          "maximum": 180
+          "caption": "Maximales LCN-Feuchtealter in Sekunden (43200 = 12 h)",
+          "minimum": 900,
+          "maximum": 43200
         },
         {
           "type": "SelectInstance",
@@ -197,7 +185,7 @@
         },
         {
           "type": "Label",
-          "caption": "In der Raumtabelle die Feuchtevariable zu jedem aktiven Raum zuordnen. Wenn ein Wert fehlt, veraltet oder unplausibel ist, bleibt die EWT-Pumpe AUS. LIVE: Alle 10 s erneuert Symcon die auf 40 s begrenzte Shelly-EIN-Freigabe. Nach Verbindungsabbruch schaltet der Shelly lokal wieder AUS. Start nach 30 s stabilen Werten und Mindestpause. Vorher Shelly Startzustand AUS und Automatik/Handbedienung pruefen."
+          "caption": "Die bekannten Original-LCN-Feuchtevariablen werden aus den Temperatur-IDs automatisch zugeordnet. Falls ein Raum abweicht, kann die Luftfeuchte-Variable in der Raumtabelle ueberschrieben werden. Alle 10 s: messen, Grenzwert 1,5 K (Wiederanlauf 2,0 K) pruefen, Shelly schalten, Rueckmeldung pruefen. Keine zusaetzliche Wartezeit. Bei fehlendem Wert AUS. Laufende EIN-Freigabe am Shelly auf 40 s begrenzt."
         },
         {
           "type": "Label",

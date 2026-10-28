@@ -2,147 +2,198 @@
 declare(strict_types=1);
 
 /**
- * EWT pump dewpoint guard. Separate from LCN valve/S1 control.
- * A Shelly Plug M Gen3 is powered ONLY by the physical KUEHLEN outlet.
+ * EWT pump stop based on the FBH temperature behind the plate heat exchanger
+ * and the highest dew point in the existing LCN rooms.
  *
- * This is software-only protection; it is NOT an independent hardware
- * condensation detector and must not be reported as one.
+ * Software-based protection only: a software command/readback cannot verify
+ * a welded power contact or guarantee condensation-free physical conditions.
  */
 final class LCNClimateDewPointLogic
 {
     public static function dewPoint(float $temperature, float $humidity): ?float
     {
-        if (!is_finite($temperature) || $temperature < -20.0 || $temperature > 60.0
-            || !is_finite($humidity) || $humidity < 1.0 || $humidity > 100.0) {
+        if (!is_finite($temperature) || $temperature < -20 || $temperature > 60
+            || !is_finite($humidity) || $humidity < 1 || $humidity > 100) {
             return null;
         }
-        // Magnus approximation, temperature in Celsius, RH in percent.
-        $gamma = log($humidity / 100.0) + (17.62 * $temperature) / (243.12 + $temperature);
-        $dew = 243.12 * $gamma / (17.62 - $gamma);
-        return is_finite($dew) ? $dew : null;
+        $gamma = log($humidity / 100) + 17.62 * $temperature / (243.12 + $temperature);
+        $result = 243.12 * $gamma / (17.62 - $gamma);
+        return is_finite($result) ? $result : null;
     }
 
-    /** No sensor or invalid sensor means STOP. ON needs 2 K to rearm;
-     * an already running pump can continue until the 1.5 K limit.
-     */
-    public static function allow(?float $water, ?float $maxDew, bool $wasOn, float $margin = 1.5, float $hysteresis = 0.5): bool
+    /** Exact boundary: running pump stops at <=1.5 K; stopped pump restarts above 2.0 K. */
+    public static function allow(?float $water, ?float $dew, bool $outputOn, float $margin = 1.5, float $hysteresis = 0.5): bool
     {
-        if ($water === null || $maxDew === null || !is_finite($water)
-            || !is_finite($maxDew) || $water < -10.0 || $water > 70.0
-            || $margin < 0.5 || $hysteresis < 0.0) {
+        if ($water === null || $dew === null || !is_finite($water) || !is_finite($dew)
+            || $water < -10 || $water > 70 || $margin < 0.5 || $hysteresis < 0) {
             return false;
         }
-        return ($water - $maxDew) > ($margin + ($wasOn ? 0.0 : $hysteresis));
+        return ($water - $dew) > $margin + ($outputOn ? 0 : $hysteresis);
     }
 }
 
 trait LCNClimateDewPointGuard
 {
-    private function DewPointGuardSnapshot(): array
-    {
-        $waterID = (int) $this->ReadPropertyInteger('DewPointWaterVariable');
-        $water = $this->DewPointReadFreshNumber($waterID, -10.0, 70.0);
-        if ($water === null) {
-            return ['ok' => false, 'reason' => 'Fühler 101 (#' . $waterID . ') fehlt, unplausibel oder veraltet'];
-        }
+    /**
+     * Native GUS/LCN ORIGINAL-variable IDs already verified in the SymBox
+     * backup and used by johannes-veit/HeliosSmart.
+     * Match on exact actual temperature variable ID, never on an Info link.
+     * A manual HumidityVariable override, when configured, takes precedence.
+     */
+    private const EWT_LCN_HUMIDITY_BY_TEMPERATURE = [
+        12812 => 53361, // EG Bad
+        14055 => 19020, // EG Buero
+        15825 => 16107, // EG Gaeste WC
+        21585 => 52026, // EG Kueche
+        25557 => 58531, // EG Schlafen
+        29782 => 46360, // EG Wohnen
+        17837 => 43385, // OG Ankleide
+        36518 => 28802, // OG Bad
+        34232 => 13394, // OG Flur
+        30970 => 37079, // OG Schlafen 1
+        25330 => 22436, // OG Schlafen 2
+    ];
 
-        $maxDew = null;
-        $critical = '';
-        $count = 0;
-        foreach ($this->GetRooms() as $room) {
-            if (!(bool) ($room['Enabled'] ?? false)) {
-                continue;
-            }
-            $name = (string) ($room['Name'] ?? 'Raum');
-            $tempID = (int) ($room['TemperatureVariable'] ?? 0);
-            $rhID = (int) ($room['HumidityVariable'] ?? 0);
-            if ($tempID <= 0 || $rhID <= 0) {
-                return ['ok' => false, 'reason' => $name . ': Raumtemperatur oder Feuchtevariable fehlt'];
-            }
-            $temp = $this->DewPointReadFreshNumber($tempID, -20.0, 60.0);
-            $rh = $this->DewPointReadFreshNumber($rhID, 1.0, 100.0);
-            if ($temp === null || $rh === null) {
-                return ['ok' => false, 'reason' => $name . ': Temperatur/Feuchte fehlt oder veraltet'];
-            }
-            $dew = LCNClimateDewPointLogic::dewPoint($temp, $rh);
-            if ($dew === null) {
-                return ['ok' => false, 'reason' => $name . ': Taupunkt nicht berechenbar'];
-            }
-            ++$count;
-            if ($maxDew === null || $dew > $maxDew) {
-                $maxDew = $dew;
-                $critical = $name;
-            }
+    /** Explicit name match only if existing room temperature ID was customized. */
+    private const EWT_LCN_HUMIDITY_BY_ROOM = [
+        'EG Bad' => 53361,
+        'EG Büro' => 19020,
+        'EG Gäste WC' => 16107,
+        'EG Küche' => 52026,
+        'EG Schlafen' => 58531,
+        'EG Wohnen' => 46360,
+        'OG Ankleide' => 43385,
+        'OG Bad' => 28802,
+        'OG Flur' => 13394,
+        'OG Schlafen 1' => 37079,
+        'OG Schlafen 2' => 22436,
+    ];
+
+    private function DewPointHumidityID(array $room): int
+    {
+        $explicit = (int) ($room['HumidityVariable'] ?? 0);
+        if ($explicit > 0) {
+            return $explicit;
         }
-        if ($count === 0) {
-            return ['ok' => false, 'reason' => 'Keine aktiven Räume mit Feuchtemessung'];
+        $temp = (int) ($room['TemperatureVariable'] ?? 0);
+        if (isset(self::EWT_LCN_HUMIDITY_BY_TEMPERATURE[$temp])) {
+            return self::EWT_LCN_HUMIDITY_BY_TEMPERATURE[$temp];
         }
-        return [
-            'ok' => true, 'water' => $water, 'dew' => $maxDew,
-            'room' => $critical, 'count' => $count, 'delta' => $water - $maxDew
-        ];
+        return self::EWT_LCN_HUMIDITY_BY_ROOM[trim((string) ($room['Name'] ?? ''))] ?? 0;
     }
 
-    private function DewPointReadFreshNumber(int $id, float $minimum, float $maximum): ?float
+    private function DewPointFreshValue(int $id, float $lower, float $upper, int $ageLimit): ?float
     {
         if ($id <= 0 || !IPS_VariableExists($id)) {
             return null;
         }
         try {
-            $var = IPS_GetVariable($id);
-            $kind = (int) ($var['VariableType'] ?? -1);
-            $updated = (int) ($var['VariableUpdated'] ?? 0);
-            $ageLimit = max(60, min(7200, (int) $this->ReadPropertyInteger('DewPointMaxAgeSeconds')));
-            if (!in_array($kind, [VARIABLETYPE_INTEGER, VARIABLETYPE_FLOAT], true)
+            $v = IPS_GetVariable($id);
+            $type = (int) ($v['VariableType'] ?? -1);
+            $updated = (int) ($v['VariableUpdated'] ?? 0);
+            if (!in_array($type, [VARIABLETYPE_INTEGER, VARIABLETYPE_FLOAT], true)
                 || $updated <= 0 || $updated > time() + 30 || time() - $updated > $ageLimit) {
                 return null;
             }
-            $value = (float) GetValue($id);
-            return is_finite($value) && $value >= $minimum && $value <= $maximum ? $value : null;
+            $number = (float) GetValue($id);
+            return is_finite($number) && $number >= $lower && $number <= $upper ? $number : null;
         } catch (Throwable) {
             return null;
         }
     }
 
-    private function DewPointPumpRpc(string $method, array $parameters = []): array
+    private function DewPointGuardSnapshot(): array
+    {
+        $waterID = (int) $this->ReadPropertyInteger('DewPointWaterVariable');
+        $water = $this->DewPointFreshValue($waterID, 0, 55, 900);
+        if ($water === null) {
+            return ['ok' => false, 'reason' => 'FBH-Fühler 101 (#' . $waterID . ') fehlt oder ist veraltet'];
+        }
+        $maximum = null;
+        $criticalRoom = '';
+        $count = 0;
+        $ageSetting = (int) $this->ReadPropertyInteger('DewPointMaxAgeSeconds');
+        // v0.5.6 stored 900 as its default, which would stop the EWT pump after
+        // 15 minutes even though many verified LCN GUS sensors report on change.
+        $humidityMaxAge = $ageSetting <= 900 ? 43200 : min(43200, $ageSetting);
+        foreach ($this->GetRooms() as $room) {
+            if (!(bool) ($room['Enabled'] ?? true)) {
+                continue;
+            }
+            $name = (string) ($room['Name'] ?? 'Unbekannter Raum');
+            $tempID = (int) ($room['TemperatureVariable'] ?? 0);
+            $rhID = $this->DewPointHumidityID($room);
+            $temperature = $this->DewPointFreshValue($tempID, -10, 45, 7200);
+            $humidity = $this->DewPointFreshValue($rhID, 1, 100, $humidityMaxAge);
+            if ($temperature === null || $humidity === null) {
+                return ['ok' => false, 'reason' => $name
+                    . ': Temperatur/Luftfeuchte ungueltig oder zu alt (T #' . $tempID . ', RH #' . $rhID . ')'];
+            }
+            $dew = LCNClimateDewPointLogic::dewPoint($temperature, $humidity);
+            if ($dew === null) {
+                return ['ok' => false, 'reason' => $name . ': Taupunkt nicht berechenbar'];
+            }
+            if ($maximum === null || $dew > $maximum) {
+                $maximum = $dew;
+                $criticalRoom = $name;
+            }
+            ++$count;
+        }
+        if ($count === 0) {
+            return ['ok' => false, 'reason' => 'Keine aktiven LCN-Raeume'];
+        }
+        return [
+            'ok' => true, 'water' => $water, 'dew' => $maximum,
+            'room' => $criticalRoom, 'delta' => $water - $maximum, 'rooms' => $count
+        ];
+    }
+
+    /** Protected for 100% offline mock RPC simulation. No cloud required. */
+    protected function DewPointPumpRpc(string $method, array $params = []): array
     {
         $ip = trim($this->ReadPropertyString('DewPointPumpIP'));
-        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false
-            || !preg_match('/^(10\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.)/', $ip)) {
-            throw new RuntimeException('Keine gültige private IPv4-Adresse für die EWT-Pumpe konfiguriert');
+        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
+            || !preg_match('/^(?:10\\.|192\\.168\\.|172\\.(?:1[6-9]|2[0-9]|3[01])\\.)/', $ip)) {
+            throw new RuntimeException('EWT Shelly: ungueltige lokale IPv4-Adresse');
         }
-        $query = http_build_query($parameters, '', '&', PHP_QUERY_RFC3986);
-        $url = 'http://' . $ip . '/rpc/' . $method . ($query !== '' ? '?' . $query : '');
-        $ctx = stream_context_create(['http' => ['timeout' => 2, 'method' => 'GET']]);
-        $answer = @file_get_contents($url, false, $ctx);
-        if (!is_string($answer)) {
-            throw new RuntimeException('Shelly Plug nicht per RPC erreichbar');
+        $url = 'http://' . $ip . '/rpc/' . $method
+            . '?' . http_build_query($params, '', '&', PHP_QUERY_RFC3986);
+        $context = stream_context_create(['http' => ['method' => 'GET', 'timeout' => 2]]);
+        $response = @file_get_contents($url, false, $context);
+        if (!is_string($response)) {
+            throw new RuntimeException('Shelly nicht erreichbar');
         }
-        $response = json_decode($answer, true);
-        if (!is_array($response) || isset($response['error']) || isset($response['code'])) {
-            throw new RuntimeException('Shelly RPC liefert keine gültige Antwort');
+        $json = json_decode($response, true);
+        if (!is_array($json) || isset($json['error']) || isset($json['code'])) {
+            throw new RuntimeException('Shelly liefert RPC-Fehler');
         }
-        return $response;
+        return $json;
     }
 
-    private function DewPointSetPump(bool $on): void
+    private function DewPointReadPumpState(): bool
     {
-        // Every ON is a short-lived lease. If Symcon, WLAN or timer fails,
-        // Shelly switches OFF locally after the timeout (firmware permitting).
-        $reply = $this->DewPointPumpRpc('Switch.Set', [
-            'id' => 0, 'on' => $on ? 'true' : 'false',
-            'toggle_after' => $on ? 40 : 0
-        ]);
-        if (!array_key_exists('was_on', $reply)) {
-            throw new RuntimeException('Shelly Switch.Set ohne Bestätigung');
+        $v = $this->DewPointPumpRpc('Switch.GetStatus', ['id' => 0]);
+        if (!isset($v['output']) || !is_bool($v['output'])) {
+            throw new RuntimeException('Shelly Ausgangsstatus fehlt');
         }
-        $status = $this->DewPointPumpRpc('Switch.GetStatus', ['id' => 0]);
-        if (!array_key_exists('output', $status) || (bool) $status['output'] !== $on) {
-            throw new RuntimeException('Shelly-Ausgang meldet nicht den angeforderten Zustand');
+        return $v['output'];
+    }
+
+    private function DewPointCommandAndVerify(bool $desired): void
+    {
+        // Short local lease is renewed only after a fresh sensor decision.
+        $response = $this->DewPointPumpRpc('Switch.Set', [
+            'id' => 0, 'on' => $desired ? 'true' : 'false',
+            'toggle_after' => $desired ? 40 : 0
+        ]);
+        if (!isset($response['was_on']) || !is_bool($response['was_on'])) {
+            throw new RuntimeException('Shelly bestaetigt Schaltbefehl nicht');
+        }
+        if ($this->DewPointReadPumpState() !== $desired) {
+            throw new RuntimeException('Shelly Rueckmeldung widerspricht Schaltbefehl');
         }
     }
 
-    /** Single notification for each state change; notification failure never authorizes cooling. */
     private function DewPointNotifyTransition(string $state, string $message): void
     {
         if ($this->ReadAttributeString('DewPointGuardNotifyState') === $state) {
@@ -160,77 +211,49 @@ trait LCNClimateDewPointGuard
         }
     }
 
-    /** 10-second scheduler, deliberately independent of LCN mode and valve tests. */
+    /**
+     * Fully automatic: fresh sensors -> compare -> switch -> read back output.
+     * No artificial 30-s delay, 60-s hold or manual approval in this function.
+     */
     public function DewPointGuardTick(): void
     {
-        if (!$this->ReadPropertyBoolean('DewPointGuardEnabled')) {
+        if (!$this->ReadPropertyBoolean('DewPointAutoPumpEnabled')) {
             return;
         }
         if (!IPS_SemaphoreEnter('LCNC_DEW_' . $this->InstanceID, 200)) {
-            return; // next tick; an ON lease will expire without renewal
+            return;
         }
         try {
             $snapshot = $this->DewPointGuardSnapshot();
-            $simulation = $this->ReadPropertyBoolean('DewPointGuardSimulation');
-            $previousOn = $this->ReadAttributeString('DewPointGuardState') === 'ON'
-                && $this->ReadAttributeInteger('DewPointGuardLastRenew') > time() - 25;
-            $margin = max(0.5, min(5.0, (float) $this->ReadPropertyFloat('DewPointMarginK')));
-            $hysteresis = max(0.1, min(2.0, (float) $this->ReadPropertyFloat('DewPointHysteresisK')));
-            $allowed = ($snapshot['ok'] ?? false)
-                && LCNClimateDewPointLogic::allow((float) $snapshot['water'], (float) $snapshot['dew'], $previousOn, $margin, $hysteresis);
-            if ($simulation) {
-                $this->WriteAttributeString('DewPointGuardState', 'UNKNOWN');
-                $this->WriteAttributeInteger('DewPointGuardLastRenew', 0);
-                $this->SetValueIfChanged('DewPointGuardStatus', 'BEOBACHTUNG – '
-                    . (($snapshot['ok'] ?? false)
-                        ? sprintf('Wasser %.2f °C; Taupunkt %.2f °C (%s); Abstand %.2f K; rechnerisch %s',
-                            $snapshot['water'], $snapshot['dew'], $snapshot['room'], $snapshot['delta'],
-                            $allowed ? 'FREI' : 'STOPP')
-                        : (string) $snapshot['reason']));
-                return;
-            }
-
-            $now = time();
-            $safeSince = $this->ReadAttributeInteger('DewPointGuardSafeSince');
-            if (!$allowed) {
-                $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
-                if ($previousOn) {
-                    $this->WriteAttributeInteger('DewPointGuardLastStop', $now);
-                }
-            } elseif ($safeSince === 0) {
-                $this->WriteAttributeInteger('DewPointGuardSafeSince', $now);
-            }
-            $minOff = max(15, min(180, (int) $this->ReadPropertyInteger('DewPointMinOffSeconds')));
-            $lastStop = $this->ReadAttributeInteger('DewPointGuardLastStop');
-            $canStart = $allowed && ($previousOn
-                || (($now - $this->ReadAttributeInteger('DewPointGuardSafeSince')) >= 30
-                    && ($lastStop <= 0 || $now - $lastStop >= $minOff)));
             try {
-                $this->DewPointSetPump($canStart);
-                $this->WriteAttributeString('DewPointGuardState', $canStart ? 'ON' : 'OFF');
-                $this->WriteAttributeInteger('DewPointGuardLastRenew', $canStart ? $now : 0);
-                $this->DewPointNotifyTransition(
-                    $canStart ? 'RUNNING' : (($snapshot['ok'] ?? false) && $allowed ? 'WAIT' : 'STOP'),
-                    $canStart ? 'EWT-Kuehlung wieder freigegeben.'
-                        : (($snapshot['ok'] ?? false)
-                            ? sprintf('EWT-Pumpe gestoppt. Abstand %.2f K zum Taupunkt.', $snapshot['delta'])
-                            : 'EWT-Pumpe gestoppt: ' . (string) ($snapshot['reason'] ?? 'Messung fehlt')));
-                $this->SetValueIfChanged('DewPointGuardStatus',
-                    ($canStart ? 'EWT-PUMPE EIN' : 'EWT-PUMPE AUS') . ' – '
-                    . (($snapshot['ok'] ?? false)
-                        ? sprintf('FBH %.2f °C; Taupunkt %.2f °C (%s); Abstand %.2f K',
-                            $snapshot['water'], $snapshot['dew'], $snapshot['room'], $snapshot['delta'])
-                        : (string) ($snapshot['reason'] ?? 'Sensor ungültig')));
+                // Actual hardware output, not a potentially stale Symcon cache.
+                $wasOn = $this->DewPointReadPumpState();
+                $margin = max(0.5, min(5, (float) $this->ReadPropertyFloat('DewPointMarginK')));
+                $hysteresis = max(0, min(2, (float) $this->ReadPropertyFloat('DewPointHysteresisK')));
+                $desired = (bool) ($snapshot['ok'] ?? false)
+                    && LCNClimateDewPointLogic::allow(
+                        (float) $snapshot['water'], (float) $snapshot['dew'],
+                        $wasOn, $margin, $hysteresis
+                    );
+                $this->DewPointCommandAndVerify($desired);
+                $this->WriteAttributeString('DewPointGuardState', $desired ? 'ON' : 'OFF');
+                $label = $desired ? 'EWT-PUMPE EIN' : 'EWT-PUMPE AUS';
+                $detail = ($snapshot['ok'] ?? false)
+                    ? sprintf('FBH %.2f °C; Taupunkt %.2f °C (%s); Abstand %.2f K; %d Raeume',
+                        $snapshot['water'], $snapshot['dew'], $snapshot['room'],
+                        $snapshot['delta'], $snapshot['rooms'])
+                    : (string) ($snapshot['reason'] ?? 'Messwerte ungueltig');
+                $this->SetValueIfChanged('DewPointGuardStatus', $label . ' – bestaetigt – ' . $detail);
+                $state = $desired ? 'RUNNING'
+                    : (($snapshot['ok'] ?? false) ? 'DEW_STOP' : 'SENSOR_STOP');
+                $this->DewPointNotifyTransition($state, $label . ': ' . $detail);
             } catch (Throwable $e) {
+                // If the plug has no power (HEIZEN outlet), the RPC is unreachable.
+                // Do not claim its output has actually been turned off.
                 $this->WriteAttributeString('DewPointGuardState', 'UNKNOWN');
-                $this->WriteAttributeInteger('DewPointGuardLastRenew', 0);
-                $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
-                $this->WriteAttributeInteger('DewPointGuardLastStop', $now);
                 $this->SetValueIfChanged('DewPointGuardStatus',
-                    'STÖRUNG / Pumpenfreigabe nicht bestätigt: ' . $e->getMessage()
-                    . '. Lokale Shelly-Zeitabschaltung erforderlich.');
-                $this->DewPointNotifyTransition('ERROR',
-                    'EWT-Pumpe: Steuerung oder Rueckmeldung gestoert. ' . $e->getMessage());
+                    'NICHT BESTAETIGT – Shelly nicht erreichbar oder Rueckmeldung falsch: ' . $e->getMessage());
+                $this->DewPointNotifyTransition('ERROR', 'EWT-Pumpe: ' . $e->getMessage());
                 $this->SendDebug('DewPointGuard', $e->getMessage(), 0);
             }
         } finally {
