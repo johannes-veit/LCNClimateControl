@@ -90,6 +90,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterPropertyFloat('DewPointHysteresisK', 0.5);
         $this->RegisterPropertyInteger('DewPointMaxAgeSeconds', 900);
         $this->RegisterPropertyInteger('DewPointMinOffSeconds', 60);
+        $this->RegisterPropertyInteger('DewPointPushWebFront', 0);
         // Explicit one-time opt-in: user handles plant HEIZEN/KUEHLEN manually.
         // The Symcon mode selection then authorizes cooling; no extra IPS variable.
         $this->RegisterPropertyBoolean('ManualCoolingApproval', false);
@@ -131,6 +132,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterAttributeInteger('DewPointGuardLastStop', 0);
         $this->RegisterAttributeInteger('DewPointGuardSafeSince', 0);
         $this->RegisterAttributeInteger('DewPointGuardLastRenew', 0);
+        $this->RegisterAttributeString('DewPointGuardNotifyState', '');
 
         $this->RegisterTimer('Worker', 0, 'LCNC_Worker($_IPS[\'TARGET\']);');
         $this->RegisterTimer('DirectCoolingGuard', 0, 'LCNC_DirectCoolingWatchdog($_IPS[\'TARGET\']);');
