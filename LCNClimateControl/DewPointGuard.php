@@ -142,6 +142,24 @@ trait LCNClimateDewPointGuard
         }
     }
 
+    /** Single notification for each state change; notification failure never authorizes cooling. */
+    private function DewPointNotifyTransition(string $state, string $message): void
+    {
+        if ($this->ReadAttributeString('DewPointGuardNotifyState') === $state) {
+            return;
+        }
+        $this->WriteAttributeString('DewPointGuardNotifyState', $state);
+        $webfront = (int) $this->ReadPropertyInteger('DewPointPushWebFront');
+        if ($webfront <= 0 || !function_exists('WFC_PushNotification')) {
+            return;
+        }
+        try {
+            WFC_PushNotification($webfront, 'EWT-Taupunktwaechter', $message, '', 0);
+        } catch (Throwable $e) {
+            $this->SendDebug('DewPointPush', $e->getMessage(), 0);
+        }
+    }
+
     /** 10-second scheduler, deliberately independent of LCN mode and valve tests. */
     public function DewPointGuardTick(): void
     {
@@ -191,6 +209,12 @@ trait LCNClimateDewPointGuard
                 $this->DewPointSetPump($canStart);
                 $this->WriteAttributeString('DewPointGuardState', $canStart ? 'ON' : 'OFF');
                 $this->WriteAttributeInteger('DewPointGuardLastRenew', $canStart ? $now : 0);
+                $this->DewPointNotifyTransition(
+                    $canStart ? 'RUNNING' : (($snapshot['ok'] ?? false) && $allowed ? 'WAIT' : 'STOP'),
+                    $canStart ? 'EWT-Kuehlung wieder freigegeben.'
+                        : (($snapshot['ok'] ?? false)
+                            ? sprintf('EWT-Pumpe gestoppt. Abstand %.2f K zum Taupunkt.', $snapshot['delta'])
+                            : 'EWT-Pumpe gestoppt: ' . (string) ($snapshot['reason'] ?? 'Messung fehlt')));
                 $this->SetValueIfChanged('DewPointGuardStatus',
                     ($canStart ? 'EWT-PUMPE EIN' : 'EWT-PUMPE AUS') . ' – '
                     . (($snapshot['ok'] ?? false)
@@ -205,6 +229,8 @@ trait LCNClimateDewPointGuard
                 $this->SetValueIfChanged('DewPointGuardStatus',
                     'STÖRUNG / Pumpenfreigabe nicht bestätigt: ' . $e->getMessage()
                     . '. Lokale Shelly-Zeitabschaltung erforderlich.');
+                $this->DewPointNotifyTransition('ERROR',
+                    'EWT-Pumpe: Steuerung oder Rueckmeldung gestoert. ' . $e->getMessage());
                 $this->SendDebug('DewPointGuard', $e->getMessage(), 0);
             }
         } finally {
