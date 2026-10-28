@@ -165,7 +165,7 @@
         {
           "type": "NumberSpinner",
           "name": "DewPointHysteresisK",
-          "caption": "Wiederanlauf-Hysterese in K (0,5)",
+          "caption": "Wiederanlauf-Hysterese in K (0,5; plus 120 s stabil)",
           "minimum": 0.1,
           "maximum": 2,
           "digits": 1,
@@ -185,7 +185,7 @@
         },
         {
           "type": "Label",
-          "caption": "Die bekannten Original-LCN-Feuchtevariablen werden aus den Temperatur-IDs automatisch zugeordnet. Falls ein Raum abweicht, kann die Luftfeuchte-Variable in der Raumtabelle ueberschrieben werden. Alle 10 s: messen, Grenzwert 1,5 K (Wiederanlauf 2,0 K) pruefen, Shelly schalten, Rueckmeldung pruefen. Keine zusaetzliche Wartezeit. Bei fehlendem Wert AUS. Laufende EIN-Freigabe am Shelly auf 40 s begrenzt."
+          "caption": "Die LCN-Feuchtewerte werden automatisch zugeordnet. Alle 10 s: hoechsten Taupunkt berechnen; bei Abstand <= 1,5 K sofort AUS; Wiederanlauf erst bei > 2,0 K und nach 120 s stabiler Freigabe. Bei fehlendem Wert AUS. Shelly-Schaltung pruefen, bei Fehler einmal wiederholen. Laufendes EIN wird am Shelly nur 40 s freigegeben."
         },
         {
           "type": "Label",

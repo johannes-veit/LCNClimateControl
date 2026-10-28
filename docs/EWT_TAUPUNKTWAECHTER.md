@@ -1,4 +1,4 @@
-# EWT-Taupunktwaechter – LCNClimateControl 0.5.7
+# EWT-Taupunktwaechter – LCNClimateControl 0.5.8
 
 Automatisch integriert in **bestehende Climate-Instanz #17597**.
 Keine separate Instanz, kein zusätzliches Skript und keine Eingaben
@@ -25,14 +25,19 @@ FBH -> Ruecklauf -> Plattenwaermetauscher (Kuehlen) -> FBH-Wassersensor
 5. Ist die Pumpe an und T101 <= max(Taupunkt)+**1,5 K**,
    sende **AUS**. Andernfalls darf sie weiterlaufen.
 6. Ist die Pumpe aus und T101 > max(Taupunkt)+**2,0 K**,
-   sende **EIN**. Sonst AUS.
+   beginnt eine **120-Sekunden-Stabilitätszeit**. Nur wenn der Abstand
+   durchgehend ausreichend bleibt, sende **EIN**. Sonst AUS.
 7. Lies den Shelly-Schaltzustand erneut. Weicht er vom Befehl ab,
-   protokolliere einen Fehler statt Erfolg.
+   wiederhole ihn **einmal**, prüfe erneut und melde bei Fehlschlag
+   ausdrücklich **NICHT BESTAETIGT**.
 8. Fehlender/veralteter/unplausibler Wert -> Befehl **AUS**;
    nicht erreichbarer Shelly -> **NICHT BESTAETIGT** (kein falscher
    Erfolgseintrag).
 
-Keine zusätzliche Wartezeit und keine manuelle Quittierung.
+Keine Wartezeit beim Abschalten, keine manuelle Quittierung. Beim
+Wiederanlauf gilt eine 120-Sekunden-Stabilitätszeit, die bei einem
+Grenzwertunterschreiten, Sensorfehler, Kommunikationsausfall oder
+längerer Timer-Unterbrechung neu beginnt.
 
 Für eingeschaltete Ausgänge wird alle 10 s ein **lokaler
 Shelly-Auto-OFF nach 40 s** erneuert (`Switch.Set` mit
@@ -73,7 +78,7 @@ in der bereits vorhandenen Raumtabelle ueberschreiben.
 
 ## Software-Installation
 
-Nach einem Update auf 0.5.7 laeuft die neue **EWT-Pumpenautomatik**
+Nach einem Update auf 0.5.8 laeuft die neue **EWT-Pumpenautomatik**
 mit den bereits bekannten IDs und der vorhandenen Shelly-IP,
 sofern der Plug erreichbar und seine Versorgung eingeschaltet ist.
 Die Option `DewPointAutoPumpEnabled` ist standardmaessig EIN.
@@ -88,7 +93,7 @@ zusaetzliche Meldungen koennen an eine WebFront-Instanz gehen.
 
 ## Grenze der Aussage einer Simulation
 
-Die PHP-Simulation prueft die Entscheidung, Wertealter, Ein-/Aus-Befehle,
+Die PHP-Simulation prueft die Entscheidung, 120-s-Stabilitaetszeit, Wertealter, Ein-/Aus-Befehle,
 Rückmeldungen, Verlust der Kommunikation, einen ignorierten
 Schaltbefehl und die automatische Wiederfreigabe. Sie kann
 **weder die tatsaechliche Schaltbewegung des Shelly noch den
