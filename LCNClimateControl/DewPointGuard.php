@@ -102,6 +102,59 @@ trait LCNClimateDewPointGuard
         }
     }
 
+    /**
+     * Cooling pump is useful only when at least one NC floor valve is
+     * electrically confirmed OPEN. A selected room alone is not proof:
+     * the native LCN relay feedback must agree with the stored cooling state.
+     * Unreadable feedback or unknown polarity never authorizes pump ON.
+     */
+    private function DewPointCoolingCircuits(): array
+    {
+        $wanted = 0;
+        $open = 0;
+        foreach ($this->GetRooms() as $room) {
+            if (!(bool) ($room['Enabled'] ?? true)) {
+                continue; // disabled for control, but still measured for dew point
+            }
+            $target = (int) ($room['TargetVariable'] ?? 0);
+            if ($target <= 0 || !$this->GetStoredCoolingState($target)) {
+                continue;
+            }
+            ++$wanted;
+            $name = (string) ($room['Name'] ?? 'Raum');
+            try {
+                $mapping = $this->DirectCoolingMapping($target);
+                if (!is_array($mapping)
+                    || !array_key_exists('OpenRelayOn', $mapping)
+                    || !(bool) ($mapping['PolarityConfirmed'] ?? false)) {
+                    return ['ok' => false, 'open' => 0, 'reason' =>
+                        $name . ': Kuehlrelais-Zuordnung/Polaritaet nicht bestaetigt'];
+                }
+                $statusID = (int) ($mapping['RelayStatusVariable'] ?? 0);
+                if ($statusID <= 0 || !IPS_VariableExists($statusID)) {
+                    return ['ok' => false, 'open' => 0, 'reason' =>
+                        $name . ': LCN-Relais-Rueckmeldung fehlt'];
+                }
+                $meta = IPS_GetVariable($statusID);
+                if ((int) ($meta['VariableType'] ?? -1) !== VARIABLETYPE_BOOLEAN
+                    || (int) ($meta['VariableUpdated'] ?? 0) <= 0
+                    || (int) ($meta['VariableUpdated'] ?? 0) > time() + 30) {
+                    return ['ok' => false, 'open' => 0, 'reason' =>
+                        $name . ': LCN-Relais-Rueckmeldung ungueltig'];
+                }
+                // LCN relay status may update only on CHANGE, hence no
+                // short age timeout on a legitimate unchanged status.
+                if ((bool) GetValue($statusID) === (bool) $mapping['OpenRelayOn']) {
+                    ++$open;
+                }
+            } catch (Throwable $e) {
+                return ['ok' => false, 'open' => 0, 'reason' =>
+                    $name . ': LCN-Relais nicht lesbar: ' . $e->getMessage()];
+            }
+        }
+        return ['ok' => true, 'open' => $open, 'wanted' => $wanted];
+    }
+
     private function DewPointGuardSnapshot(): array
     {
         $waterID = (int) $this->ReadPropertyInteger('DewPointWaterVariable');
@@ -116,10 +169,14 @@ trait LCNClimateDewPointGuard
         // v0.5.6 stored 900 as its default, which would stop the EWT pump after
         // 15 minutes even though many verified LCN GUS sensors report on change.
         $humidityMaxAge = $ageSetting <= 900 ? 43200 : min(43200, $ageSetting);
-        foreach ($this->GetRooms() as $room) {
-            if (!(bool) ($room['Enabled'] ?? true)) {
-                continue;
-            }
+        $rooms = $this->GetRooms();
+        if (count($rooms) !== 11) {
+            return ['ok' => false, 'reason' => '11 LCN-Raeume erforderlich (konfiguriert: '
+                . count($rooms) . ')'];
+        }
+        // Always include ALL 11 sensor locations (also "Nicht kuehlen"
+        // and controller-disabled rooms): exposed supply pipes can condense.
+        foreach ($rooms as $room) {
             $name = (string) ($room['Name'] ?? 'Unbekannter Raum');
             $tempID = (int) ($room['TemperatureVariable'] ?? 0);
             $rhID = $this->DewPointHumidityID($room);
@@ -254,13 +311,18 @@ trait LCNClimateDewPointGuard
                 return;
             }
             $snapshot = $this->DewPointGuardSnapshot();
+            $circuits = $this->DewPointCoolingCircuits();
+            $roomsMeasured = (bool) ($snapshot['ok'] ?? false);
+            $circuitsKnown = (bool) ($circuits['ok'] ?? false);
+            $openCircuits = (int) ($circuits['open'] ?? 0);
+            $coolingAllowed = $roomsMeasured && $circuitsKnown && $openCircuits > 0;
             try {
                 // If the initial status cannot be read, an unsafe sensor
                 // situation still gets an explicit OFF attempt.
                 try {
                     $wasOn = $this->DewPointReadPumpState();
                 } catch (Throwable $e) {
-                    if ((bool) ($snapshot['ok'] ?? false)) {
+                    if ($coolingAllowed) {
                         throw $e; // Never start without a trusted readback.
                     }
                     $this->DewPointCommandAndVerify(false);
@@ -276,7 +338,7 @@ trait LCNClimateDewPointGuard
                 }
                 $this->WriteAttributeInteger('DewPointGuardLastRenew', $now);
 
-                $valid = (bool) ($snapshot['ok'] ?? false);
+                $valid = $coolingAllowed;
                 $margin = max(0.5, min(5, (float) $this->ReadPropertyFloat('DewPointMarginK')));
                 $hysteresis = max(0, min(2, (float) $this->ReadPropertyFloat('DewPointHysteresisK')));
                 $water = $valid ? (float) $snapshot['water'] : null;
@@ -320,19 +382,32 @@ trait LCNClimateDewPointGuard
 
                 $this->WriteAttributeString('DewPointGuardState', $desired ? 'ON' : 'OFF');
                 $label = $desired ? 'EWT-PUMPE EIN' : 'EWT-PUMPE AUS';
-                $detail = $valid
+                $detail = $roomsMeasured
                     ? sprintf('FBH %.2f °C; Taupunkt %.2f °C (%s); Abstand %.2f K; %d Raeume',
                         $snapshot['water'], $snapshot['dew'], $snapshot['room'],
                         $snapshot['delta'], $snapshot['rooms'])
                     : (string) ($snapshot['reason'] ?? 'Messwerte ungueltig');
+                if (!$circuitsKnown) {
+                    $detail .= ' – ' . (string) ($circuits['reason'] ?? 'Kuehlkreise unklar');
+                } elseif ($openCircuits === 0) {
+                    $detail .= ' – kein Kuehlventil offen';
+                } else {
+                    $detail .= ' – ' . $openCircuits . ' Kuehlventil(e) offen';
+                }
                 $waitingText = $waiting ? (' – Wiederanlauf in ' . $secondsLeft . ' s') : '';
                 $this->SetValueIfChanged('DewPointGuardStatus',
                     $label . ' – bestaetigt' . $waitingText . ' – ' . $detail);
                 $state = $desired ? 'RUNNING'
                     : ($waiting ? 'WAIT'
-                        : ($valid ? 'DEW_STOP' : 'SENSOR_STOP'));
-                // One push per transition, not one per 10-second timer tick.
-                $this->DewPointNotifyTransition($state, $label . ': ' . $detail . $waitingText);
+                        : (!$circuitsKnown ? 'RELAY_STOP'
+                            : ($openCircuits === 0 ? 'NO_CIRCUIT'
+                                : ($roomsMeasured ? 'DEW_STOP' : 'SENSOR_STOP'))));
+                // No-circuit is normal, not a safety alarm. Avoid push noise.
+                if ($state === 'NO_CIRCUIT') {
+                    $this->WriteAttributeString('DewPointGuardNotifyState', $state);
+                } else {
+                    $this->DewPointNotifyTransition($state, $label . ': ' . $detail . $waitingText);
+                }
             } catch (Throwable $e) {
                 $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
                 // A remote output can never be claimed OFF when readback fails.
