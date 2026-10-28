@@ -81,8 +81,8 @@ class LCNClimateControl extends IPSModuleStrict
         // Opt-in: bestehender Kuehlbetrieb bleibt bei Updates unveraendert.
         $this->RegisterPropertyBoolean('DirectCoolingEnabled', true);
         $this->RegisterPropertyInteger('CoolingSafetyVariable', 0);
-        // EWT-Kuehlpumpen-Sicherheitsstopp. Default: AUS, nur beobachten nach Opt-in.
-        // User-authorized EWT pump controller: newly added property defaults to live.
+        // EWT pump: user-authorized automatic software guard (separate from LCN cooling).
+        // Stops immediately at the margin; restarts after 120 seconds safe.
         // Old GuardEnabled/Simulation flags remain only for backward compatibility.
         $this->RegisterPropertyBoolean('DewPointGuardEnabled', false);
         $this->RegisterPropertyBoolean('DewPointAutoPumpEnabled', true);
@@ -93,7 +93,6 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterPropertyFloat('DewPointHysteresisK', 0.5);
         // Original LCN humidity variables may only publish on actual change.
         $this->RegisterPropertyInteger('DewPointMaxAgeSeconds', 43200);
-        $this->RegisterPropertyInteger('DewPointMinOffSeconds', 60);
         $this->RegisterPropertyInteger('DewPointPushWebFront', 0);
         // Explicit one-time opt-in: user handles plant HEIZEN/KUEHLEN manually.
         // The Symcon mode selection then authorizes cooling; no extra IPS variable.
