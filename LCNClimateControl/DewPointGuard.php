@@ -166,6 +166,7 @@ trait LCNClimateDewPointGuard
         $criticalRoom = '';
         $count = 0;
         $seenTemperatureIDs = [];
+        $seenHumidityIDs = [];
         $ageSetting = (int) $this->ReadPropertyInteger('DewPointMaxAgeSeconds');
         // v0.5.6 stored 900 as its default, which would stop the EWT pump after
         // 15 minutes even though many verified LCN GUS sensors report on change.
@@ -185,6 +186,10 @@ trait LCNClimateDewPointGuard
             }
             $seenTemperatureIDs[$tempID] = true;
             $rhID = $this->DewPointHumidityID($room);
+            if ($rhID <= 0 || isset($seenHumidityIDs[$rhID])) {
+                return ['ok' => false, 'reason' => $name . ': Luftfeuchtesensor fehlt oder doppelt'];
+            }
+            $seenHumidityIDs[$rhID] = true;
             $temperature = $this->DewPointFreshValue($tempID, -10, 45, 7200);
             $humidity = $this->DewPointFreshValue($rhID, 1, 100, $humidityMaxAge);
             if ($temperature === null || $humidity === null) {
