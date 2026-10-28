@@ -1,4 +1,4 @@
-# EWT-Taupunktwaechter – LCNClimateControl 0.5.9
+# EWT-Taupunktwaechter – LCNClimateControl 0.5.10
 
 Automatisch integriert in **bestehende Climate-Instanz #17597**.
 Keine separate Instanz, kein zusätzliches Skript und keine Eingaben
@@ -39,21 +39,45 @@ nicht sicherstellen. Am Shelly ist `initial_state=off` (Power-on AUS)
 empfohlen, damit nach Wiederkehr der Netzspannung keine unkontrollierte
 Pumpe anlaeuft.
 
+## Wann die EWT-Pumpe laufen darf
+
+Auch ein Raum mit **Nicht kuehlen** (z. B. EG Gaeste WC) bleibt Teil
+der 11-Raum-Taupunktberechnung. Das schuetzt gemeinsame Kaltwasserleitungen
+vor den Verteilern, die unabhaengig vom einzelnen Raumventil abkuehlen koennen.
+
+Im KUEHLEN-Betrieb ist zusaetzlich **mindestens ein Kuehlventil offen**
+erforderlich. Die Software nutzt dafuer den vorhandenen bestaetigten
+CoolingState UND die zugehoerige native LCN-Relais-Rueckmeldung
+mit bekannter NC-Polaritaet. Bei unbekanntem oder widerspruechlichem
+Relaiszustand wird keine Pumpenfreigabe erteilt. Alle Ventile geschlossen
+bedeutet Pumpen AUS, ohne Alarmpush (normaler Leerlauf).
+
+Die Raum-Taupunktberechnung umfasst immer alle 11 konfigurierten
+Sensorpaare, selbst wenn ein Raum als 'Nicht kuehlen' oder
+steuerungstechnisch deaktiviert markiert ist. Bei fehlendem/dupliziertem
+Sensor oder weniger als 11 Raumzuordnungen erfolgt keine Freigabe.
+
+**Hinweis**: LCN-Relais-Rueckmeldungen koennen sich nur bei Zustandswechsel
+aktualisieren. Der vorhandene Bool-Status bestaetigt die elektrische
+Relaismeldung, aber nicht mechanisch die tatsaechliche Ventilstellung.
+Auch das Shelly-Ausgangsfeedback beweist nicht den Wasserfluss.
+
 ## Einfacher Entscheidungsweg (alle 10 Sekunden)
 
 1. Pruefe Fühler 101 und die vorhandenen LCN-Temperatur-/RH-Variablen.
 2. Berechne den Taupunkt jedes aktiven Climate-Raums (Magnus-Formel).
 3. Nimm den hoechsten Raumtaupunkt.
-4. Lies den **tatsaechlichen** Ausgang des Shelly Plug ab.
-5. Ist die Pumpe an und T101 <= max(Taupunkt)+**1,5 K**,
+4. Pruefe, ob mindestens ein LCN-Kuehlventil laut gespeicherter Bestaetigung und Relais-Feedback offen ist. Wenn keines: EWT-Pumpe AUS.
+5. Lies den **tatsaechlichen** Ausgang des Shelly Plug ab.
+7. Ist die Pumpe an und T101 <= max(Taupunkt)+**1,5 K**,
    sende **AUS**. Andernfalls darf sie weiterlaufen.
-6. Ist die Pumpe aus und T101 > max(Taupunkt)+**2,0 K**,
+7. Ist die Pumpe aus und T101 > max(Taupunkt)+**2,0 K**,
    beginnt eine **120-Sekunden-Stabilitätszeit**. Nur wenn der Abstand
    durchgehend ausreichend bleibt, sende **EIN**. Sonst AUS.
-7. Lies den Shelly-Schaltzustand erneut. Weicht er vom Befehl ab,
+8. Lies den Shelly-Schaltzustand erneut. Weicht er vom Befehl ab,
    wiederhole ihn **einmal**, prüfe erneut und melde bei Fehlschlag
    ausdrücklich **NICHT BESTAETIGT**.
-8. Fehlender/veralteter/unplausibler Wert -> Befehl **AUS**;
+9. Fehlender/veralteter/unplausibler Wert -> Befehl **AUS**;
    nicht erreichbarer Shelly -> **NICHT BESTAETIGT** (kein falscher
    Erfolgseintrag).
 
@@ -101,7 +125,7 @@ in der bereits vorhandenen Raumtabelle ueberschreiben.
 
 ## Software-Installation
 
-Nach einem Update auf 0.5.9 laeuft die neue **EWT-Pumpenautomatik**
+Nach einem Update auf 0.5.10 laeuft die neue **EWT-Pumpenautomatik**
 mit den bereits bekannten IDs und der vorhandenen Shelly-IP,
 sofern der Plug erreichbar und seine Versorgung eingeschaltet ist.
 Die Option `DewPointAutoPumpEnabled` ist standardmaessig EIN.
