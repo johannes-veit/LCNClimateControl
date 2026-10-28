@@ -130,6 +130,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterAttributeString('DewPointGuardState', 'UNKNOWN');
         $this->RegisterAttributeInteger('DewPointGuardLastStop', 0);
         $this->RegisterAttributeInteger('DewPointGuardSafeSince', 0);
+        $this->RegisterAttributeInteger('DewPointGuardLastRenew', 0);
 
         $this->RegisterTimer('Worker', 0, 'LCNC_Worker($_IPS[\'TARGET\']);');
         $this->RegisterTimer('DirectCoolingGuard', 0, 'LCNC_DirectCoolingWatchdog($_IPS[\'TARGET\']);');
