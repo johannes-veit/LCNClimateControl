@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require_once dirname(__DIR__) . '/LCNClimateControl/DewPointGuard.php';
 if (!defined('VARIABLETYPE_FLOAT')) define('VARIABLETYPE_FLOAT', 2);
+if (!defined('VARIABLETYPE_BOOLEAN')) define('VARIABLETYPE_BOOLEAN', 0);
 if (!defined('VARIABLETYPE_INTEGER')) define('VARIABLETYPE_INTEGER', 1);
 
 function check(bool $condition, string $message): void
@@ -29,6 +30,17 @@ $GLOBALS['ewt_data'] = [
     36518 => ['v'=>22.0,'at'=>time(),'t'=>VARIABLETYPE_FLOAT], // OG Bad T
     28802 => ['v'=>50.0,'at'=>time(),'t'=>VARIABLETYPE_FLOAT], // OG Bad RH
 ];
+// Remaining nine known LCN room sensors: tests use full 11-room coverage.
+foreach ([
+    [14055, 19020], [15825, 16107], [21585, 52026],
+    [25557, 58531], [29782, 46360], [17837, 43385],
+    [34232, 13394], [30970, 37079], [25330, 22436]
+] as [$temp, $rh]) {
+    $GLOBALS['ewt_data'][$temp] = ['v'=>22.0, 'at'=>time(), 't'=>VARIABLETYPE_FLOAT];
+    $GLOBALS['ewt_data'][$rh] = ['v'=>40.0, 'at'=>time(), 't'=>VARIABLETYPE_FLOAT];
+}
+$GLOBALS['ewt_data'][6001] = ['v'=>true, 'at'=>time(), 't'=>VARIABLETYPE_BOOLEAN];
+$GLOBALS['ewt_data'][6002] = ['v'=>false, 'at'=>time(), 't'=>VARIABLETYPE_BOOLEAN];
 function IPS_VariableExists(int $id): bool { return isset($GLOBALS['ewt_data'][$id]); }
 function IPS_GetVariable(int $id): array
 {
@@ -58,8 +70,22 @@ final class EwtSimulation
         'DewPointPushWebFront'=>0
     ];
     public array $rooms = [
-        ['Enabled'=>true,'Name'=>'EG Bad','TemperatureVariable'=>12812,'HumidityVariable'=>0],
-        ['Enabled'=>true,'Name'=>'OG Bad','TemperatureVariable'=>36518,'HumidityVariable'=>0],
+        ['Enabled'=>true,'Name'=>'EG Bad','TargetVariable'=>50001,'TemperatureVariable'=>12812,'HumidityVariable'=>0],
+        ['Enabled'=>true,'Name'=>'OG Bad','TargetVariable'=>50002,'TemperatureVariable'=>36518,'HumidityVariable'=>0],
+        ['Enabled'=>true,'Name'=>'EG Gäste WC','TargetVariable'=>50003,'TemperatureVariable'=>15825,'HumidityVariable'=>0],
+        ['Enabled'=>true,'Name'=>'EG Büro','TargetVariable'=>50004,'TemperatureVariable'=>14055,'HumidityVariable'=>0],
+        ['Enabled'=>true,'Name'=>'EG Küche','TargetVariable'=>50005,'TemperatureVariable'=>21585,'HumidityVariable'=>0],
+        ['Enabled'=>true,'Name'=>'EG Schlafen','TargetVariable'=>50006,'TemperatureVariable'=>25557,'HumidityVariable'=>0],
+        ['Enabled'=>true,'Name'=>'EG Wohnen','TargetVariable'=>50007,'TemperatureVariable'=>29782,'HumidityVariable'=>0],
+        ['Enabled'=>true,'Name'=>'OG Ankleide','TargetVariable'=>50008,'TemperatureVariable'=>17837,'HumidityVariable'=>0],
+        ['Enabled'=>true,'Name'=>'OG Flur','TargetVariable'=>50009,'TemperatureVariable'=>34232,'HumidityVariable'=>0],
+        ['Enabled'=>true,'Name'=>'OG Schlafen 1','TargetVariable'=>50010,'TemperatureVariable'=>30970,'HumidityVariable'=>0],
+        ['Enabled'=>true,'Name'=>'OG Schlafen 2','TargetVariable'=>50011,'TemperatureVariable'=>25330,'HumidityVariable'=>0]
+    ];
+    public array $coolingStates = [50001 => true]; // only EG Bad is cooling
+    public array $relayMappings = [
+        50001 => ['RelayStatusVariable'=>6001,'OpenRelayOn'=>true,'PolarityConfirmed'=>true],
+        50002 => ['RelayStatusVariable'=>6002,'OpenRelayOn'=>true,'PolarityConfirmed'=>true]
     ];
     public array $attr = ['DewPointGuardNotifyState'=>''];
     public array $values=[];
@@ -79,6 +105,12 @@ final class EwtSimulation
     public function WriteAttributeInteger(string $key, int $value): void { $this->attr[$key] = $value; }
     public function SetValueIfChanged(string $key, mixed $v): void { $this->values[$key] = $v; }
     public function GetRooms(): array { return $this->rooms; }
+    private function GetStoredCoolingState(int $target): bool {
+        return (bool) ($this->coolingStates[$target] ?? false);
+    }
+    private function DirectCoolingMapping(int $target): ?array {
+        return $this->relayMappings[$target] ?? null;
+    }
     public function SendDebug(string $kind, string $message, int $level): void {}
     public function snapshot(): array { return $this->DewPointGuardSnapshot(); }
 
@@ -242,6 +274,79 @@ check($sim->attr['DewPointGuardSafeSince'] > 0 && !$sim->remoteOn,
 $sim->remoteOnline = false;
 $sim->DewPointGuardTick();
 check($sim->attr['DewPointGuardState'] === 'UNKNOWN', 'cooling unreachable Shelly is still a fault');
+
+
+ // Gate pump ON by CONFIRMED active cooling relay, never by a room UI preference alone.
+$sim->remoteOnline = true;
+$sim->remoteOn = true;
+$GLOBALS['ewt_data'][20510]['v'] = 19.0;
+$sim->coolingStates = [];
+$sim->rpcCalls = [];
+$sim->DewPointGuardTick();
+check(!$sim->remoteOn, 'all room cooling toggles OFF stop running EWT pump');
+check(str_contains($sim->values['DewPointGuardStatus'], 'kein Kuehlventil offen'),
+    'status identifies idle EWT pump when all valves closed');
+check($sim->attr['DewPointGuardState'] === 'OFF', 'all-closed state confirmed OFF');
+$sim->rpcCalls = [];
+$sim->DewPointGuardTick();
+check(count(array_filter($sim->rpcCalls, fn($x) => $x[0] === 'Switch.Set')) === 0,
+    'all-closed pump does not receive redundant OFF command');
+
+$sim->coolingStates = [50001=>true];
+$GLOBALS['ewt_data'][6001]['v'] = false;
+$sim->attr['DewPointGuardSafeSince'] = time() - 121;
+$sim->DewPointGuardTick();
+check(!$sim->remoteOn && $sim->attr['DewPointGuardSafeSince'] === 0,
+    'UI cooling ON without relay-open feedback cannot start pump');
+$GLOBALS['ewt_data'][6001]['v'] = true;
+unset($GLOBALS['ewt_data'][6001]);
+$sim->DewPointGuardTick();
+check(!$sim->remoteOn && str_contains($sim->values['DewPointGuardStatus'], 'Rueckmeldung fehlt'),
+    'unavailable active relay feedback blocks pump');
+$GLOBALS['ewt_data'][6001] = ['v'=>true,'at'=>time(),'t'=>VARIABLETYPE_FLOAT];
+$sim->DewPointGuardTick();
+check(!$sim->remoteOn, 'non-boolean relay status blocks pump');
+$GLOBALS['ewt_data'][6001] = ['v'=>true,'at'=>time(),'t'=>VARIABLETYPE_BOOLEAN];
+
+$sim->relayMappings[50001]['PolarityConfirmed'] = false;
+$sim->DewPointGuardTick();
+check(!$sim->remoteOn, 'unknown relay polarity cannot release pump');
+$sim->relayMappings[50001]['PolarityConfirmed'] = true;
+$sim->DewPointGuardTick();
+check(!$sim->remoteOn && $sim->attr['DewPointGuardSafeSince'] > 0,
+    'restored active relay enters fresh 120-second safety wait');
+$sim->attr['DewPointGuardSafeSince'] = time() - 121;
+$sim->DewPointGuardTick();
+check($sim->remoteOn, 'one confirmed open NC valve can authorize EWT after stable delay');
+
+// Another selected room is not cooling but has the highest humidity.
+// It still limits pump operation because shared supply pipes can condense.
+$sim->rooms[2]['Enabled'] = false; // even module-disabled rooms count for dew
+$GLOBALS['ewt_data'][15825]['v'] = 23.0;
+$GLOBALS['ewt_data'][16107]['v'] = 90.0;
+check($sim->snapshot()['room'] === 'EG Gäste WC' && $sim->snapshot()['rooms'] === 11,
+    'highest dewpoint includes inactive and disabled EG Gäste WC');
+$sim->DewPointGuardTick();
+check(!$sim->remoteOn, 'humid NON-COOLING guest WC protects shared pipes');
+$GLOBALS['ewt_data'][16107]['v'] = 40.0;
+
+// Sensor completeness: 10 of 11 is not sufficient for the shared pipes.
+$removed = array_pop($sim->rooms);
+check($sim->snapshot()['ok'] === false, 'fewer than 11 rooms cannot authorize pump');
+$sim->rooms[] = $removed;
+check($sim->snapshot()['ok'] === true, 'full 11-room set restored');
+
+// It also works when a DIFFERENT room is the single cooling room.
+$sim->coolingStates = [50002=>true];
+$GLOBALS['ewt_data'][6002]['v'] = true;
+$sim->DewPointGuardTick();
+check(!$sim->remoteOn, 'changing active cooling zone restarts safety delay');
+$sim->attr['DewPointGuardSafeSince'] = time()-121;
+$sim->DewPointGuardTick();
+check($sim->remoteOn, 'second active cooling room confirmed by relay feedback');
+$GLOBALS['ewt_data'][6002]['v'] = false;
+$sim->DewPointGuardTick();
+check(!$sim->remoteOn, 'last physical cooling valve closing immediately stops EWT pump');
 
 // Disabled automatic controller never touches the pump.
 $sim->remoteOnline = true;
