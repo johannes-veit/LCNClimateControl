@@ -60,14 +60,17 @@ getestet werden.
    `DewPointGuardSimulation` **true** lassen:
    Die Statusvariable `EWT-Taupunktwaechter` zeigt nur Messwerte
    und die rechnerische Entscheidung, es werden KEINE Shelly-Befehle gesendet.
-6. In Betrieb mit thermisch richtig montiertem 101er Fühler auf
+6. Optional im Feld `DewPointPushWebFront` die WebFront-Konfiguratorinstanz
+   für Pushmeldungen bei Pumpenstopp, Wiederfreigabe oder Steuerungsfehler
+   auswählen (Standard 0 = keine Pushmeldungen).
+7. In Betrieb mit thermisch richtig montiertem 101er Fühler auf
    Taupunkt- und Schwellwerte sowie Sensoralter achten.
-7. Vor einer Live-Freigabe Tests mit echter Steckdose und EWT-Pumpe
+8. Vor einer Live-Freigabe Tests mit echter Steckdose und EWT-Pumpe
    durchführen: Schaltausgang STOPP, fehlender Feuchtewert, abgezogener
    101er Sensor, unterbrochenes WLAN, unterbrochenes Symcon und
    automatischer Wiederanlauf. Die 40-s-Abschaltung des Shelly
    muss am echten Gerät nachgewiesen werden.
-8. Erst nach positiver Inbetriebnahme `DewPointGuardSimulation=false`
+9. Erst nach positiver Inbetriebnahme `DewPointGuardSimulation=false`
    setzen. Das erlaubt explizit das Schalten der EWT-Pumpe.
 
 **Keine falsche Hardware-Abnahme:** Die bestehende
