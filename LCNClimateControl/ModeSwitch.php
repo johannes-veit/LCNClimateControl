@@ -18,18 +18,24 @@ trait LCNClimateModeSwitch
         return $this->ReadPropertyInteger('ModeSwitchSource') === 1;
     }
 
-    /** Protected so the real RPC can be tested completely offline. */
-    protected function ModeSwitchRpc(string $method, array $params = []): array
+    /** Check IP in production AND offline simulations, before every RPC. */
+    private function ModeSwitchTargetIP(): string
     {
         $ip = trim($this->ReadPropertyString('ModeSwitchShellyIP'));
         if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
             || !preg_match('/^(?:10\\.|192\\.168\\.|172\\.(?:1[6-9]|2[0-9]|3[01])\\.)/', $ip)) {
             throw new RuntimeException('Betriebsart-Shelly: lokale IPv4-Adresse fehlt oder ist ungueltig');
         }
-        // Do not silently target the EWT-PUMP plug with operating-mode commands.
         if ($ip === trim($this->ReadPropertyString('DewPointPumpIP'))) {
             throw new RuntimeException('Betriebsart-Shelly muss ein ANDERES Geraet als der EWT-Pumpen-Plug sein');
         }
+        return $ip;
+    }
+
+    /** Protected so the real RPC can be tested completely offline. */
+    protected function ModeSwitchRpc(string $method, array $params = []): array
+    {
+        $ip = $this->ModeSwitchTargetIP();
         $url = 'http://' . $ip . '/rpc/' . $method
             . '?' . http_build_query($params, '', '&', PHP_QUERY_RFC3986);
         $response = @file_get_contents($url, false, stream_context_create([
@@ -52,6 +58,7 @@ trait LCNClimateModeSwitch
 
     private function ModeSwitchVerifyConfig(): void
     {
+        $this->ModeSwitchTargetIP();
         if (!$this->ReadPropertyBoolean('ModeSwitchWiringConfirmed')) {
             throw new RuntimeException('Betriebsart-Shelly: elektrische Zuordnung noch nicht bestaetigt');
         }
@@ -61,15 +68,17 @@ trait LCNClimateModeSwitch
         $cfg = $this->ModeSwitchRpc('Switch.GetConfig', ['id' => 0]);
         if (($cfg['initial_state'] ?? null) !== 'off'
             || ($cfg['in_mode'] ?? null) !== 'detached'
-            || ($cfg['auto_on'] ?? false) !== false) {
+            || ($cfg['auto_on'] ?? false) !== false
+            || ($cfg['auto_off'] ?? false) !== false) {
             throw new RuntimeException(
-                'Shelly-Konfiguration: Einschaltzustand AUS, Eingang DETACHED und Auto-ON AUS erforderlich'
+                'Shelly-Konfiguration: Einschaltzustand AUS, Eingang DETACHED, Auto-ON und Auto-OFF AUS erforderlich'
             );
         }
     }
 
     private function ModeSwitchReadOutput(): bool
     {
+        $this->ModeSwitchTargetIP();
         $v = $this->ModeSwitchRpc('Switch.GetStatus', ['id' => 0]);
         if (!isset($v['output']) || !is_bool($v['output'])) {
             throw new RuntimeException('Betriebsart-Shelly: Ausgangsrueckmeldung fehlt');
@@ -79,6 +88,7 @@ trait LCNClimateModeSwitch
 
     private function ModeSwitchSetAndVerify(bool $on): void
     {
+        $this->ModeSwitchTargetIP();
         $last = null;
         for ($n = 0; $n < 2; ++$n) {
             try {
