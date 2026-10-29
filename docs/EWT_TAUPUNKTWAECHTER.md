@@ -1,4 +1,4 @@
-# EWT-Taupunktwaechter – LCNClimateControl 0.5.13
+# EWT-Taupunktwaechter – LCNClimateControl 0.5.14
 
 Automatisch integriert in **bestehende Climate-Instanz #17597**.
 Keine separate Instanz, kein zusätzliches Skript und keine Eingaben
@@ -138,6 +138,25 @@ Wassertemperaturen allein belegen keine Durchflussmenge.
 Diese Funktion erteilt niemals selbst eine Taupunktfreigabe
 und aendert keine LCN- oder Heizungsregelbefehle.
 
+## Zusaetzliche Fehlerhaertung (0.5.14)
+
+Ein fehlender Shelly-Ausgangsstatus ist auch bei gueltigem Taupunkt
+**keine Freigabe**. Das Modul versucht nun immer ein ausdrueckliches
+AUS mit Ruecklesebestaetigung, setzt die alte 120-s-Freigabe zurueck
+und prueft erst danach einen neuen Anlauf. Wenn der Shelly nicht
+erreichbar ist oder AUS nicht bestaetigt, wird der Ausgang aus
+Sicherheitsgruenden als **UNKNOWN / NICHT BESTAETIGT** angezeigt.
+Der 40-s-Shelly-Auto-OFF bleibt die lokale Software-Rueckfallebene.
+
+Wenn die optionale Zusatzsteuerung wegen eines zu kalten FBH-Vorlaufs
+T102 abschaltet, heisst die Benachrichtigung jetzt **SUPPLY_STOP**
+mit der Ursache `T102 nahe Taupunkt`. Sie wird nicht mehr als
+normale Effizienzpause oder nur als T101-Taupunktstopp bezeichnet.
+T102 bleibt nur bei eingeschalteter Zusatzsteuerung wirksam.
+
+Das sind Verbesserungen der Software-Fehlerbehandlung, kein
+Nachweis der Pumpenabschaltung im realen Hydraulikkreis.
+
 ## Wann die EWT-Pumpe laufen darf
 
 Auch ein Raum mit **Nicht kuehlen** (z. B. EG Gaeste WC) bleibt Teil
@@ -224,7 +243,7 @@ in der bereits vorhandenen Raumtabelle ueberschreiben.
 
 ## Software-Installation
 
-Nach einem Update auf 0.5.13 laeuft die neue **EWT-Pumpenautomatik**
+Nach einem Update auf 0.5.14 laeuft die neue **EWT-Pumpenautomatik**
 mit den bereits bekannten IDs und der vorhandenen Shelly-IP,
 sofern der Plug erreichbar und seine Versorgung eingeschaltet ist.
 Die Option `DewPointAutoPumpEnabled` ist standardmaessig EIN.
