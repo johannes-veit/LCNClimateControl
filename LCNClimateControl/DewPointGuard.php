@@ -568,6 +568,9 @@ trait LCNClimateDewPointGuard
                     }
                 }
 
+                // Preserve the true safety reason in notifications even
+                // when a prior efficiency pause happens to be active.
+                $coreSafetyStop = !$desired && !$waiting;
                 $efficiency = $this->DewPointEfficiencyDecision(
                     $wasOn, $desired, $snapshot, $now, $margin, $hysteresis
                 );
@@ -605,7 +608,7 @@ trait LCNClimateDewPointGuard
                     $label . ' – bestaetigt' . $waitingText . ' – ' . $detail
                         . $this->DewPointThermalDiagnostic()
                         . ($efficiency['detail'] !== '' ? ' | ' . $efficiency['detail'] : ''));
-                $state = ($efficiency['pause'] && !$desired) ? 'EFFICIENCY_PAUSE'
+                $state = ($efficiency['pause'] && !$desired && !$coreSafetyStop) ? 'EFFICIENCY_PAUSE'
                     : ($desired ? 'RUNNING'
                     : ($waiting ? 'WAIT'
                         : (!$circuitsKnown ? 'RELAY_STOP'
