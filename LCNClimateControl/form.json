@@ -149,7 +149,47 @@
         },
         {
           "type": "Label",
-          "caption": "AUS = bisherige Taupunktsteuerung unveraendert. EIN = zusaetzlich T102-Vorlauftemperatur gegen Taupunkt pruefen und die EWT-Pumpe bei nachweisbar geringer Kuehlwirkung zeitweise pausieren (10 min Anlauf + 5 min Messung, 15 min Pause). Nur frische, zeitlich passende Fühlerwerte werden genutzt; sonst Standardbetrieb. Die 11 Raumtaupunkte, Fühler 101, LCN-Ventilfreigabe und Shelly-Bestaetigung gelten IMMER."
+          "caption": "AUS = bisherige Taupunktsteuerung unveraendert. EIN = zusaetzlich T102 gegen Taupunkt pruefen und EWT-Pumpenpausen nach den unten einstellbaren Grenzen T100 und T104-T100 erlauben. T100 muss im erlaubten Temperaturbereich liegen und das EWT-Delta im erlaubten Differenzbereich. Die 11 Raumtaupunkte, Fuehler 101, LCN-Ventilfreigabe und Shelly-Bestaetigung gelten IMMER."
+        },
+        {
+          "type": "NumberSpinner",
+          "name": "DewPointEwtVLMinC",
+          "caption": "Zusatz EIN: EWT-Vorlauf T100 MIN (°C)",
+          "minimum": 0,
+          "maximum": 39,
+          "digits": 1,
+          "increment": 0.1
+        },
+        {
+          "type": "NumberSpinner",
+          "name": "DewPointEwtVLMaxC",
+          "caption": "Zusatz EIN: EWT-Vorlauf T100 MAX (°C)",
+          "minimum": 1,
+          "maximum": 40,
+          "digits": 1,
+          "increment": 0.1
+        },
+        {
+          "type": "NumberSpinner",
+          "name": "DewPointEwtDeltaMinK",
+          "caption": "Zusatz EIN: EWT-Differenz (T104 minus T100) MIN (K)",
+          "minimum": 0,
+          "maximum": 19.9,
+          "digits": 1,
+          "increment": 0.1
+        },
+        {
+          "type": "NumberSpinner",
+          "name": "DewPointEwtDeltaMaxK",
+          "caption": "Zusatz EIN: EWT-Differenz (T104 minus T100) MAX (K)",
+          "minimum": 0.1,
+          "maximum": 20,
+          "digits": 1,
+          "increment": 0.1
+        },
+        {
+          "type": "Label",
+          "caption": "Grenzen gelten nur bei Zusatzsteuerung EIN: T100-Messwert nach 3 min Pumpenlauf pruefen (60 s ausserhalb des Bereichs -> 15 min Pause). EWT-Differenz T104-T100 nach 10 min Laufzeit pruefen (5 min ausserhalb des Bereichs -> 15 min Pause). Nur frische, ausreichend zeitgleiche Werte zaehlen. Nach Pause erneute Startprobe mit Taupunktschutz; ohne Messdaten Standardsteuerung. Mindestwerte muessen kleiner als die Maximalwerte sein."
         },
         {
           "type": "SelectVariable",
