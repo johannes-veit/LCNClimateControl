@@ -13,7 +13,14 @@ einen zweistufigen Schieberegler `Betriebsarten-Schalter`:
   HEIZEN sendet einen bestaetigten OFF-Befehl. **Keine weitere
   manuelle Umschaltung**.
 
-**Bereits vorhandene Geraete-Zuordnung:** Der Shelly 1 Gen3 **192.168.103.71**\nmisst weiterhin die fuenf Wassertemperaturen T100–T104 ueber seinen\nSensor-Add-on und schaltet zusaetzlich mit dem eingebauten Relais I/O\nden bisherigen Kontakt des Wandschalters. Es wird **kein zweiter Shelly**\nfuer den Wandschalter benoetigt. Die fuehrenden Symcon-Temperaturvariablen\nund ihre bestehenden MQTT-Datenquellen werden nicht veraendert.\n\nDas ist eine Auswahl der physischen Schaltmethode, **kein zweiter
+**Bereits vorhandene Geraete-Zuordnung:** Der Shelly 1 Gen3 **192.168.103.71**
+misst weiterhin die fuenf Wassertemperaturen T100–T104 ueber seinen
+Sensor-Add-on und schaltet zusaetzlich mit dem eingebauten Relais I/O
+den bisherigen Kontakt des Wandschalters. Es wird **kein zweiter Shelly**
+fuer den Wandschalter benoetigt. Die fuehrenden Symcon-Temperaturvariablen
+und ihre bestehenden MQTT-Datenquellen werden nicht veraendert.
+
+Das ist eine Auswahl der physischen Schaltmethode, **kein zweiter
 Betriebsart-Schalter**. Der bisherige Shelly Plug der EWT-Pumpe
 (192.168.103.67) bleibt ausschliesslich der Taupunktsteuerung vorbehalten.
 
@@ -52,12 +59,17 @@ Netzspannung.
 
 ## Shelly 1 Gen3 Weboberflaeche konfigurieren
 
-1. Shelly dauerhaft ins Heimnetz integrieren; feste IPv4-Adresse per
-   DHCP-Reservierung vergeben. IP in `ModeSwitchShellyIP` eintragen.
-   **Nicht** die IP des EWT-Pumpen-Shelly eintragen.
+1. Bereits vorhandenen Fuehler-/Relais-Shelly unter **192.168.103.71**
+   weiterverwenden. Diese Adresse ist im Modul voreingestellt.
+   Auch wenn in der bestehenden Modulinstanz noch ein leeres IP-Feld
+   aus 0.5.15 gespeichert ist, wird beim Schalten automatisch .71
+   verwendet. Die Fuehler T100–T104, ihre Add-on-Anschluesse und
+   die MQTT-Datenquelle werden NICHT veraendert. Der EWT-Pumpen-Plug
+   bleibt weiterhin unter **192.168.103.67**.
 2. **Input/Output Settings**: Eingangsmodus/Schaltertyp
    **Detached / Entkoppelt**. Der frei bleibende SW-Eingang schaltet
-   den Ausgang damit nicht.
+   den Ausgang damit nicht. Add-on und Temperatur-Einstellungen
+   nicht veraendern.
 3. **Power-on default / Einschaltzustand**: **OFF / AUS**
    (nicht ON, Restore Last oder Match Input).
 4. **Auto-ON: AUS** und **Auto-OFF: AUS**. Das Modul setzt
@@ -72,7 +84,8 @@ Netzspannung.
 
 Der technische Check `Switch.GetConfig?id=0` prueft
 `initial_state=off`, `in_mode=detached`, `auto_on=false`
-und `auto_off=false`. Bei fehlenden oder widerspruechlichen Feldern\nwird KUEHLEN gesperrt.
+und `auto_off=false`. Bei fehlenden oder widerspruechlichen Feldern
+wird KUEHLEN gesperrt.
 `Switch.Set?id=0&on=true&toggle_after=35` und
 `Switch.GetStatus?id=0` werden verwendet, um das Relais EIN
 und bestaetigt zu halten.
@@ -89,7 +102,11 @@ und bestaetigt zu halten.
 - Bei Kommunikations-/Konfigurations-/Sicherheitsfehlern im aktiven
   KUEHLEN sperrt der Watchdog weitere ON-Verlaengerungen und
   fordert OFF an. Bei ausbleibender Quittung erscheint eine
-  Fehlermeldung. Die elektrische Stellung der angeschlossenen
+  Fehlermeldung. Der Taupunktwaechter unterlaesst dann weitere
+  Zugriffe auf den moeglicherweise stromlosen EWT-Pumpen-Plug,
+  zeigt **KUEHLEN GESPERRT** statt eines irrefuehrenden
+  Kommunikationsfehlers und verlaengert dessen Pumpen-Watchdog
+  nicht mehr. Die elektrische Stellung der angeschlossenen
   Steckdose wird damit **nicht unabhaengig gemessen**.
 - Nach Modulupdate oder Kernelneustart bleibt KUEHLEN
   **vorsorglich gesperrt**, bis es in der Visualisierung
