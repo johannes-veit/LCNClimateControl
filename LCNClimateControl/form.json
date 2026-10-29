@@ -5,6 +5,53 @@
       "caption": "HEIZEN bleibt unveraendert (LCN-Regler / GT8 A7/A8). KUEHLEN wird erst nach 11 bestandenen S1-Tests, 11 Ventilrelaistests und nachgewiesenem Hardware-Taupunktschutz freigegeben. Kein ungepruefter A7/A8-Kuehlrueckfall."
     },
     {
+      "type": "ExpansionPanel",
+      "caption": "HEIZEN/KUEHLEN – Wandschalter oder Shelly 1 Gen3 (Betriebsartenschalter)",
+      "expanded": true,
+      "items": [
+        {
+          "type": "Label",
+          "caption": "Schieberegler: LINKS (0) = vorhandener Wandschalter; RECHTS (1) = Shelly 1 Gen3 schaltet den bisherigen Kontakt. Standard 0 = bisherige Anlage unveraendert. Einstellung aendert keine Elektroverdrahtung."
+        },
+        {
+          "type": "HorizontalSlider",
+          "name": "ModeSwitchSource",
+          "caption": "Betriebsarten-Schalter: 0 = WAND / 1 = SHELLY",
+          "minimum": 0,
+          "maximum": 1,
+          "stepSize": 1,
+          "displayValue": true,
+          "width": "350px"
+        },
+        {
+          "type": "Label",
+          "caption": "STELLUNG 0 – WANDSCHALTER: Alter HEIZEN/KUEHLEN-Schalter bleibt unveraendert angeschlossen; 230-V-Steckdose wird weiterhin von Hand geschaltet. Shelly I/O unbenutzt. Eine eventuell bereits vorhandene Messleitung am Shelly SW ist NUR Eingang, sie schaltet den Kontakt nicht. Vor Symcon KUEHLEN zuerst den physischen Schalter umlegen."
+        },
+        {
+          "type": "Label",
+          "caption": "STELLUNG 1 – SHELLY: Nur nach fachlicher Pruefung, dass der bisherige Schalter EINEN einpoligen Schliesserkontakt schaltet: Die beiden Leitungen dieses Kontakts werden durch die Elektrofachkraft statt an den Wandschalter an Shelly I und O angeschlossen. Shelly L/N bleiben dauerhaft versorgt, unabhaengig von der geschalteten Steckdose. Die alte SW-Messleitung wird vom Eingang entfernt und sicher stillgelegt; SW bleibt frei. PE und N der Steckdose bleiben durchgehend. Keine pauschale Bruecke L-I: Eingangsstromkreis zuerst bestimmen! Bei Wechsler/mehrpoliger Schaltung reicht Shelly 1 Gen3 allein nicht."
+        },
+        {
+          "type": "ValidationTextBox",
+          "name": "ModeSwitchShellyIP",
+          "caption": "Nur Stellung 1: IPv4 des Shelly 1 Gen3 (NICHT EWT-Pumpen-Plug)"
+        },
+        {
+          "type": "CheckBox",
+          "name": "ModeSwitchWiringConfirmed",
+          "caption": "Nur Stellung 1: elektrischer Kontakt, Last, SW-Rueckbau und sichere Zuordnung durch Elektrofachkraft geprueft"
+        },
+        {
+          "type": "Label",
+          "caption": "Shelly-Webinterface (nur Stellung 1): Schalter-Eingang DETACHED/entkoppelt; Einschaltzustand nach Stromausfall AUS (OFF, nicht Restore last); Auto-ON AUS; normale Auto-OFF-Zeitsteuerung AUS; keine weiteren Zeitplaene, Szenen, Skripte oder Cloud-Befehle fuer dieses Relais. Feste IP im Heimnetz, lokale HTTP-RPC-Steuerung ohne aktivierte HTTP-Authentifizierung. Das Modul prueft OFF/DETACHED/Auto-ON und den Ausgang; KUEHLEN wird bei Fehler gesperrt."
+        },
+        {
+          "type": "Label",
+          "caption": "Sicherheitsablauf nur bei Stellung 1: Symcon KUEHLEN -> Shelly-Kontakt I/O EIN bestaetigen -> erst dann LCN-Kuehlung freigeben. HEIZEN -> Shelly I/O AUS bestaetigen. Im Kuehlbetrieb wird der Shelly alle 10 s mit einem lokalen 35-s-Auto-AUS-Vertrag nachgeschaltet: Wenn Symcon ausfaellt, schaltet der Shelly danach eigenstaendig AUS. Bei Fehler keine weitere Verlaengerung; Status als eigene Diagnosevariable. Physische Rueckmeldung der Steckdosenspannung ist dies NICHT. Nach einem Modul-Update/Neustart ist erneut eine ausdrueckliche KUEHLEN-Wahl erforderlich."
+        }
+      ]
+    },
+    {
       "type": "List",
       "name": "Rooms",
       "caption": "Räume",
@@ -62,7 +109,9 @@
           "add": 0,
           "edit": {
             "type": "SelectVariable",
-            "validVariableTypes": [2]
+            "validVariableTypes": [
+              2
+            ]
           }
         },
         {
@@ -195,7 +244,9 @@
           "type": "SelectVariable",
           "name": "DewPointWaterVariable",
           "caption": "Fühler 101 – FBH-Wasser nach Platten-WT (Standard #20510)",
-          "validVariableTypes": [2]
+          "validVariableTypes": [
+            2
+          ]
         },
         {
           "type": "ValidationTextBox",

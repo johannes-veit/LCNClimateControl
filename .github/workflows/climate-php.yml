@@ -21,6 +21,8 @@ jobs:
       - name: PHP syntax checks
         run: |
           find LCNClimateControl tests -name '*.php' -print0 | xargs -0 -n1 php -l
+      - name: Shelly 1 Gen3 physical HEIZEN/KUEHLEN mode and fault simulation
+        run: php tests/test_mode_switch.php
       - name: EWT dewpoint safety logic and stale-sensor simulation
         run: php tests/test_dewpoint_guard.php
       - name: SMART-FBH passive learning simulation

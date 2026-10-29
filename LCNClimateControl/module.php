@@ -11,6 +11,7 @@ require_once __DIR__ . '/TrafficPacing.php';
 require_once __DIR__ . '/CoolingCommission.php';
 require_once __DIR__ . '/ThermalLearning.php';
 require_once __DIR__ . '/DewPointGuard.php';
+require_once __DIR__ . '/ModeSwitch.php';
 
 /**
  * LCN Heizung / Kühlung für IP-Symcon 9
@@ -38,6 +39,7 @@ class LCNClimateControl extends IPSModuleStrict
     use LCNClimateCoolingCommission;
     use LCNClimateThermalLearning;
     use LCNClimateDewPointGuard;
+    use LCNClimateModeSwitch;
 
     private const STATUS_ACTIVE = 102;
     private const STATUS_INACTIVE = 104;
@@ -105,6 +107,10 @@ class LCNClimateControl extends IPSModuleStrict
         // Explicit one-time opt-in: user handles plant HEIZEN/KUEHLEN manually.
         // The Symcon mode selection then authorizes cooling; no extra IPS variable.
         $this->RegisterPropertyBoolean('ManualCoolingApproval', false);
+        // 0 = legacy physical wall switch (default); 1 = Shelly 1 Gen3 I/O relay.
+        $this->RegisterPropertyInteger('ModeSwitchSource', 0);
+        $this->RegisterPropertyString('ModeSwitchShellyIP', '');
+        $this->RegisterPropertyBoolean('ModeSwitchWiringConfirmed', false);
         $this->RegisterPropertyBoolean('CoolingHardwareInterlockConfirmed', false);
         $this->RegisterPropertyBoolean('CoolingHeatingResumeConfirmed', false);
         $this->RegisterPropertyString('CoolingRelays', '[]');
@@ -140,6 +146,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterAttributeString('CoolingCommissionRelays', '{}');
         $this->RegisterAttributeString('ThermalLearningState', '{}');
         $this->RegisterAttributeString('DewPointGuardState', 'UNKNOWN');
+        $this->RegisterAttributeBoolean('ModeSwitchBlocked', true);
         $this->RegisterAttributeInteger('DewPointGuardLastStop', 0);
         $this->RegisterAttributeInteger('DewPointGuardSafeSince', 0);
         $this->RegisterAttributeInteger('DewPointGuardLastRenew', 0);
@@ -157,6 +164,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterTimer('ThermalLearningTimer', 0, 'LCNC_ThermalLearningTick($_IPS[\'TARGET\']);');
         $this->RegisterTimer('ThermalLearningDiagnosticTimer', 0, 'LCNC_UpdateThermalLearningDiagnostic($_IPS[\'TARGET\']);');
         $this->RegisterTimer('DewPointGuardTimer', 0, 'LCNC_DewPointGuardTick($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('ModeSwitchTimer', 0, 'LCNC_ModeSwitchTick($_IPS[\'TARGET\']);');
 
         $this->EnsureProfiles();
 
@@ -213,6 +221,13 @@ class LCNClimateControl extends IPSModuleStrict
         $this->DewPointEfficiencyReset();
         $this->SetTimerInterval('DewPointGuardTimer',
             $this->ReadPropertyBoolean('DewPointAutoPumpEnabled') ? 10000 : 0);
+        // Existing installations stay on the manual wall switch.
+        // On a mode-source/configuration change never silently retain an
+        // earlier cooling authorization; a new explicit KUEHLEN request
+        // is required before Shelly may switch ON.
+        $this->WriteAttributeBoolean('ModeSwitchBlocked', true);
+        $this->SetTimerInterval('ModeSwitchTimer',
+            $this->ModeSwitchIsShelly() ? 10000 : 0);
         // Same two existing timers for passive learning OR isolated read-only
         // source acceptance; both opt-ins default OFF. No extra IPS objects.
         $thermalPassiveEnabled = $this->ReadPropertyBoolean('ThermalLearningEnabled')
@@ -282,6 +297,11 @@ class LCNClimateControl extends IPSModuleStrict
         // Ein einziger kopierbarer Bericht statt elf Raumdiagnosen oder vieler Buttons.
         $this->MaintainVariable('ChatGPTDiagnostic', 'Senden an ChatGPT', VARIABLETYPE_STRING, '', 900, true);
         $this->MaintainVariable('DewPointGuardStatus', 'EWT-Taupunktwaechter', VARIABLETYPE_STRING, '', 905, true);
+        $this->MaintainVariable('ModeSwitchStatus', 'HEIZEN/KUEHLEN – Schaltaktor',
+            VARIABLETYPE_STRING, '', 906, $this->ModeSwitchIsShelly());
+        if ($this->ModeSwitchIsShelly()) {
+            $this->ModeSwitchReport('Schaltaktor eingerichtet – KUEHLEN nur nach ausdruecklicher Freigabe; Relaisabgleich folgt');
+        }
         $this->SetValueIfChanged('DewPointGuardStatus',
             !$this->ReadPropertyBoolean('DewPointAutoPumpEnabled')
                 ? 'EWT-Automatik AUS – keine Pumpenbefehle'
@@ -715,6 +735,11 @@ class LCNClimateControl extends IPSModuleStrict
         $pendingMode = $this->GetPendingMode();
 
         if ($Mode === $currentMode) {
+            if ($this->ModeSwitchIsShelly()) {
+                // A repeated explicit mode selection can recover a blocked
+                // watchdog after a confirmed wiring/configuration correction.
+                $this->ModeSwitchSelect($Mode);
+            }
             if ($pendingMode !== null) {
                 $this->ClearPendingMode();
                 $this->PushVisualizationMeta();
@@ -744,6 +769,10 @@ class LCNClimateControl extends IPSModuleStrict
             return;
         }
 
+        // Switch the REAL plant contact first. Do not advertise KUEHLEN in
+        // Symcon or issue LCN cooling jobs without a verified Shelly ON.
+        // A failed HEIZEN/OFF similarly keeps the old mode until resolved.
+        $this->ModeSwitchSelect($Mode);
         $rooms = $this->GetRuntimeRooms();
         $this->ClearPendingMode();
         $this->SetBuffer('CoolingPendingRequests', '{}');

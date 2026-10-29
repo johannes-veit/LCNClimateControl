@@ -129,7 +129,7 @@ trait LCNDirectCooling
             // after switching the plant in the heating room. This explicit
             // installation opt-in replaces ONLY the missing software Boolean.
             // A user selection is not automatic feedback from the plant.
-            return $this->ReadPropertyBoolean('ManualCoolingApproval');
+            return $this->ReadPropertyBoolean('ManualCoolingApproval') || ($this->ReadPropertyInteger('ModeSwitchSource') === 1);
         }
         // If configured, an external Boolean must always be respected:
         // the manual option can NEVER override an explicit safety veto.
@@ -149,7 +149,7 @@ trait LCNDirectCooling
         $errors = [];
         $safetyID = $this->ReadPropertyInteger('CoolingSafetyVariable');
         if ($safetyID <= 0) {
-            if (!$this->ReadPropertyBoolean('ManualCoolingApproval')) {
+            if (!$this->ReadPropertyBoolean('ManualCoolingApproval') && !($this->ReadPropertyInteger('ModeSwitchSource') === 1)) {
                 $errors[] = 'Weder manuelle Freigabe noch externe Kuehlfreigabe eingerichtet.';
             }
         } elseif (!IPS_VariableExists($safetyID)) {
