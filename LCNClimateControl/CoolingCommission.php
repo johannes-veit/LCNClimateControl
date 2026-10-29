@@ -557,7 +557,7 @@ trait LCNClimateCoolingCommission
         }
         $rows[] = 'Reglerpruefung: nur S1 sperren/freigeben; Relaispruefung: S1 sperren, Einzelrelais EIN/AUS, S1 freigeben.';
         $safetyID = (int) $this->ReadPropertyInteger('CoolingSafetyVariable');
-        $manual = $this->ReadPropertyBoolean('ManualCoolingApproval');
+        $manual = $this->ReadPropertyBoolean('ManualCoolingApproval') || $this->ModeSwitchIsShelly();
         $rows[] = $safetyID > 0
             ? ('Kuehlfreigabe Boolean: #' . $safetyID
                 . ' / ' . ($this->DirectCoolingSafe() ? 'TRUE' : 'FALSE/FEHLT')
@@ -598,7 +598,7 @@ trait LCNClimateCoolingCommission
             $errors[] = 'Noch offene/ungewisse Reglersperrung';
         }
         $safetyID = (int) $this->ReadPropertyInteger('CoolingSafetyVariable');
-        $manual = $this->ReadPropertyBoolean('ManualCoolingApproval');
+        $manual = $this->ReadPropertyBoolean('ManualCoolingApproval') || $this->ModeSwitchIsShelly();
         if ($safetyID <= 0 && !$manual) {
             $errors[] = 'Kuehlfreigabe fehlt (manuelle Freigabe nicht aktiviert, externe Boolean fehlt)';
         } elseif ($safetyID > 0 && !$this->DirectCoolingSafe()) {
