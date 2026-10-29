@@ -1,4 +1,4 @@
-# EWT-Taupunktwaechter – LCNClimateControl 0.5.10
+# EWT-Taupunktwaechter – LCNClimateControl 0.5.11
 
 Automatisch integriert in **bestehende Climate-Instanz #17597**.
 Keine separate Instanz, kein zusätzliches Skript und keine Eingaben
@@ -38,6 +38,38 @@ Anlagenstellung uebereinstimmen; sonst kann Software die Pumpensicherheit
 nicht sicherstellen. Am Shelly ist `initial_state=off` (Power-on AUS)
 empfohlen, damit nach Wiederkehr der Netzspannung keine unkontrollierte
 Pumpe anlaeuft.
+
+## Fuenf eingebaute Wasser-Temperaturfuehler (Stand 29.10.2026)
+
+Alle Messstellen sind als Variablen der bestehenden Shelly-Fuehler-Instanz
+#38067 vorhanden; die Werte werden nur gelesen, ohne die Quellen zu
+konfigurieren. Die bestehenden IP-Symcon-IDs sind:
+
+| Kennung | IPS-ID | Bedeutung | Verwendung |
+|---|---:|---|---|
+| T100 | 12630 | EWT-Vorlauf vor Kuehlen-WT | Diagnose |
+| T101 | 20510 | FBH-Ruecklauf nach Kuehlen-WT | **alleiniger Wassersensor fuer den Taupunktschutz** |
+| T102 | 21409 | Heizungs-/FBH-Vorlauf | Diagnose |
+| T103 | 14561 | FBH-Ruecklauf vor Kuehlen-WT | Diagnose |
+| T104 | 23904 | EWT-Ruecklauf nach Kuehlen-WT | Diagnose |
+
+Die vorhandene Statusvariable `EWT-Taupunktwaechter` zeigt im
+KUEHLEN-Betrieb alle fuenf Temperaturen an. Wenn sowohl Zeitpunkt als
+auch Gueltigkeit passen (Alter maximal 15 min, Unterschied der
+beiden Aenderungszeitpunkte hoechstens 120 s), wird daneben die
+Temperaturveraenderung am Plattenwaermetauscher angezeigt:
+`FBH-WT=T101-T103` und `EWT-WT=T104-T100`.
+Ohne ausreichend zeitgleiche Werte steht `nicht synchron`
+oder `--` anstelle einer irrefuehrenden Differenz. Vorzeichen
+und geringe Deltas alleine beweisen weder Durchfluss noch
+Waermetauscherleistung.
+
+**Wichtig:** T100, T102, T103 und T104 sind reine Diagnosesensoren.
+Ein fehlender, veralteter oder unplausibler Zusatzwert veraendert
+die EWT-Sicherheitsfreigabe **nicht**. Diese haengt weiterhin
+von T101, elf Raumtaupunkten und bestaetigten Kuehlrelais ab.
+Die physische Anlagenstellung wird durch diese Fuenf-Fuehler-Anzeige
+nicht erkannt oder bestaetigt.
 
 ## Wann die EWT-Pumpe laufen darf
 
@@ -125,7 +157,7 @@ in der bereits vorhandenen Raumtabelle ueberschreiben.
 
 ## Software-Installation
 
-Nach einem Update auf 0.5.10 laeuft die neue **EWT-Pumpenautomatik**
+Nach einem Update auf 0.5.11 laeuft die neue **EWT-Pumpenautomatik**
 mit den bereits bekannten IDs und der vorhandenen Shelly-IP,
 sofern der Plug erreichbar und seine Versorgung eingeschaltet ist.
 Die Option `DewPointAutoPumpEnabled` ist standardmaessig EIN.

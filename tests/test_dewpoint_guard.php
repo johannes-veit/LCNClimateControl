@@ -24,7 +24,11 @@ check(LCNClimateDewPointLogic::allow(18.01, 16.0, false), 'restart above 2.0 K')
 check(!LCNClimateDewPointLogic::allow(null, 16.0, true), 'missing water stops');
 
 $GLOBALS['ewt_data'] = [
+    12630 => ['v'=>14.0,'at'=>time(),'t'=>VARIABLETYPE_FLOAT],
     20510 => ['v'=>19.0,'at'=>time(),'t'=>VARIABLETYPE_FLOAT],
+    21409 => ['v'=>22.0,'at'=>time(),'t'=>VARIABLETYPE_FLOAT],
+    14561 => ['v'=>20.0,'at'=>time(),'t'=>VARIABLETYPE_FLOAT],
+    23904 => ['v'=>15.0,'at'=>time(),'t'=>VARIABLETYPE_FLOAT],
     12812 => ['v'=>24.0,'at'=>time(),'t'=>VARIABLETYPE_FLOAT], // EG Bad T
     53361 => ['v'=>60.0,'at'=>time(),'t'=>VARIABLETYPE_FLOAT], // EG Bad RH
     36518 => ['v'=>22.0,'at'=>time(),'t'=>VARIABLETYPE_FLOAT], // OG Bad T
@@ -139,6 +143,22 @@ $sim->DewPointGuardTick();
 check(!$sim->remoteOn, 'no immediate initial start');
 check($sim->attr['DewPointGuardSafeSince'] > 0, 'safe interval started');
 check(str_contains($sim->values['DewPointGuardStatus'], 'Wiederanlauf in'), 'wait visible');
+
+check(str_contains($sim->values['DewPointGuardStatus'], 'T100 14.00'), 'sensor 100 display');
+check(str_contains($sim->values['DewPointGuardStatus'], 'T101 19.00'), 'sensor 101 display');
+check(str_contains($sim->values['DewPointGuardStatus'], 'T102 22.00'), 'sensor 102 display');
+check(str_contains($sim->values['DewPointGuardStatus'], 'T103 20.00'), 'sensor 103 display');
+check(str_contains($sim->values['DewPointGuardStatus'], 'T104 15.00'), 'sensor 104 display');
+check(str_contains($sim->values['DewPointGuardStatus'], 'FBH-WT -1.00 K'), 'FBH delta');
+check(str_contains($sim->values['DewPointGuardStatus'], 'EWT-WT +1.00 K'), 'EWT delta');
+$GLOBALS['ewt_data'][23904]['at'] = time() - 600;
+$sim->DewPointGuardTick();
+check(str_contains($sim->values['DewPointGuardStatus'], 'EWT-WT nicht synchron'), 'no unsynced delta');
+$GLOBALS['ewt_data'][23904]['at'] = time() - 901;
+$sim->DewPointGuardTick();
+check(str_contains($sim->values['DewPointGuardStatus'], 'T104 --'), 'old sensor omitted');
+$GLOBALS['ewt_data'][23904]['at'] = time();
+
 check(count(array_filter($sim->rpcCalls, fn($x) => $x[0] === 'Switch.Set')) === 0,
     'no unnecessary OFF command when already OFF');
 
