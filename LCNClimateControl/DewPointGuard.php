@@ -263,7 +263,7 @@ trait LCNClimateDewPointGuard
     private function DewPointEfficiencyReset(): void
     {
         foreach (['DewPointEfficiencyRunSince', 'DewPointEfficiencyWeakSince',
-                  'DewPointEfficiencyPauseUntil'] as $name) {
+                  'DewPointEfficiencyPauseUntil', 'DewPointEfficiencySourceBadSince'] as $name) {
             if ($this->ReadAttributeInteger($name) !== 0) {
                 $this->WriteAttributeInteger($name, 0);
             }
@@ -293,15 +293,9 @@ trait LCNClimateDewPointGuard
     }
 
     /**
-     * Optional efficiency veto ONLY. It can switch the EWT pump OFF, but
-     * cannot authorize ON unless the original 11-room dewpoint protection,
-     * the LCN relay feedback and the Shelly watchdog all authorize it.
-     *
-     * Weak useful cooling requires 10 min running + 5 min sustained evidence:
-     * source advantage <=0.5 K, FBH cooling <=0.3 K and EWT heat gain
-     * <=0.3 K. Then pause for 15 min and try again using the legacy
-     * 120-s safe-temperature restart. Missing/asynchronous data never
-     * cause an efficiency pause.
+     * Optional efficiency control. Source band T100 is checked only after a
+     * short pump flushing phase; T104-T100 needs actual circulating water.
+     * Both restrictions ONLY veto the original safety authorization.
      */
     private function DewPointEfficiencyDecision(
         bool $wasOn, bool $coreAllows, array $snapshot,
@@ -311,10 +305,40 @@ trait LCNClimateDewPointGuard
             $this->DewPointEfficiencyReset();
             return ['allow' => true, 'pause' => false, 'detail' => ''];
         }
+        $minVL = $this->ReadPropertyFloat('DewPointEwtVLMinC');
+        $maxVL = $this->ReadPropertyFloat('DewPointEwtVLMaxC');
+        $minDelta = $this->ReadPropertyFloat('DewPointEwtDeltaMinK');
+        $maxDelta = $this->ReadPropertyFloat('DewPointEwtDeltaMaxK');
+        if (!is_finite($minVL) || !is_finite($maxVL)
+            || !is_finite($minDelta) || !is_finite($maxDelta)
+            || $minVL < 0 || $maxVL > 40 || $minVL >= $maxVL
+            || $minDelta < 0 || $maxDelta > 20 || $minDelta >= $maxDelta) {
+            $this->DewPointEfficiencyReset();
+            return ['allow' => true, 'pause' => false,
+                'detail' => 'Zusatzregelung: ungueltige EWT-Grenzen, Standardbetrieb'];
+        }
+        $limits = sprintf('T100 %.1f-%.1f °C; EWT-Delta %.1f-%.1f K',
+            $minVL, $maxVL, $minDelta, $maxDelta);
+        // T102 remains an additional safety veto when its reading is fresh.
+        // The original T101 and all 11 room dewpoints always remain mandatory.
+        if ((bool) ($snapshot['ok'] ?? false)) {
+            $supply = $this->DewPointEfficiencyReading(21409, $now);
+            if ($supply !== null && !LCNClimateDewPointLogic::allow(
+                $supply['v'], (float) $snapshot['dew'], $wasOn,
+                $margin, $hysteresis
+            )) {
+                $this->WriteAttributeInteger('DewPointEfficiencyRunSince', 0);
+                $this->WriteAttributeInteger('DewPointEfficiencyWeakSince', 0);
+                $this->WriteAttributeInteger('DewPointEfficiencySourceBadSince', 0);
+                return ['allow' => false, 'pause' => false,
+                    'detail' => 'Zusatzregelung: T102 nahe Taupunkt'];
+            }
+        }
         $pauseUntil = $this->ReadAttributeInteger('DewPointEfficiencyPauseUntil');
         if ($pauseUntil > $now) {
             return ['allow' => false, 'pause' => true,
-                'detail' => 'Zusatzregelung EIN: Effizienzpause ' . ($pauseUntil - $now) . ' s'];
+                'detail' => 'Zusatzregelung: Effizienzpause '
+                    . ($pauseUntil - $now) . ' s (' . $limits . ')'];
         }
         if ($pauseUntil !== 0) {
             $this->WriteAttributeInteger('DewPointEfficiencyPauseUntil', 0);
@@ -322,81 +346,102 @@ trait LCNClimateDewPointGuard
         if (!$coreAllows || !(bool) ($snapshot['ok'] ?? false)) {
             $this->WriteAttributeInteger('DewPointEfficiencyRunSince', 0);
             $this->WriteAttributeInteger('DewPointEfficiencyWeakSince', 0);
+            $this->WriteAttributeInteger('DewPointEfficiencySourceBadSince', 0);
             return ['allow' => true, 'pause' => false,
-                'detail' => 'Zusatzregelung EIN: Grundfreigabe abwarten'];
-        }
-        // T102 is the actual FBH supply: if fresh, it also needs
-        // the original dewpoint margin. Its absence has no effect on
-        // the original sensor 101 safety logic.
-        $supply = $this->DewPointEfficiencyReading(21409, $now);
-        if ($supply !== null && !LCNClimateDewPointLogic::allow(
-            $supply['v'], (float) $snapshot['dew'], $wasOn,
-            $margin, $hysteresis
-        )) {
-            $this->WriteAttributeInteger('DewPointEfficiencyRunSince', 0);
-            $this->WriteAttributeInteger('DewPointEfficiencyWeakSince', 0);
-            return ['allow' => false, 'pause' => false,
-                'detail' => 'Zusatzregelung EIN: FBH-Vorlauf T102 nahe Taupunkt'];
+                'detail' => 'Zusatzregelung: Grundfreigabe abwarten (' . $limits . ')'];
         }
         if (!$wasOn) {
-            // Remember a fresh pump start but never shorten the existing
-            // 120-second mandatory temperature-stability period.
-            $this->WriteAttributeInteger('DewPointEfficiencyRunSince', $now);
+            // No stale standing-water temperature can prevent a new trial.
+            // The core controller still enforces its 120-second restart.
+            $this->WriteAttributeInteger('DewPointEfficiencyRunSince', 0);
             $this->WriteAttributeInteger('DewPointEfficiencyWeakSince', 0);
+            $this->WriteAttributeInteger('DewPointEfficiencySourceBadSince', 0);
             return ['allow' => true, 'pause' => false,
-                'detail' => 'Zusatzregelung EIN: Anlauf/Pruefphase'];
+                'detail' => 'Zusatzregelung: Startprobe (' . $limits . ')'];
         }
         $runSince = $this->ReadAttributeInteger('DewPointEfficiencyRunSince');
         if ($runSince <= 0 || $runSince > $now) {
             $runSince = $now;
-            $this->WriteAttributeInteger('DewPointEfficiencyRunSince', $runSince);
+            $this->WriteAttributeInteger('DewPointEfficiencyRunSince', $now);
         }
+        // First 3 minutes are needed to flush stagnant water through T100.
+        if ($now - $runSince < 180) {
+            $this->WriteAttributeInteger('DewPointEfficiencySourceBadSince', 0);
+            $this->WriteAttributeInteger('DewPointEfficiencyWeakSince', 0);
+            return ['allow' => true, 'pause' => false,
+                'detail' => 'Zusatzregelung: EWT-Spuelphase (' . $limits . ')'];
+        }
+        $vl = $this->DewPointEfficiencyReading(12630, $now);
+        if ($vl === null) {
+            $this->WriteAttributeInteger('DewPointEfficiencySourceBadSince', 0);
+            $this->WriteAttributeInteger('DewPointEfficiencyWeakSince', 0);
+            return ['allow' => true, 'pause' => false,
+                'detail' => 'Zusatzregelung: T100 fehlt, Standardbetrieb'];
+        }
+        // A temperature outside the configured band for 60 consecutive
+        // seconds causes a timed pause, but never a permanent start lock.
+        $outsideVL = $vl['v'] < $minVL - 0.00001 || $vl['v'] > $maxVL + 0.00001;
+        if ($outsideVL) {
+            $this->WriteAttributeInteger('DewPointEfficiencyWeakSince', 0);
+            $since = $this->ReadAttributeInteger('DewPointEfficiencySourceBadSince');
+            if ($since <= 0 || $since > $now) {
+                $since = $now;
+                $this->WriteAttributeInteger('DewPointEfficiencySourceBadSince', $now);
+            }
+            if ($now - $since >= 60) {
+                return $this->DewPointEfficiencyStartPause($now,
+                    sprintf('T100 %.2f °C ausserhalb %.1f-%.1f °C',
+                        $vl['v'], $minVL, $maxVL));
+            }
+            return ['allow' => true, 'pause' => false,
+                'detail' => sprintf('Zusatzregelung: T100 %.2f °C ausserhalb Band, beobachten',
+                    $vl['v'])];
+        }
+        $this->WriteAttributeInteger('DewPointEfficiencySourceBadSince', 0);
         if ($now - $runSince < 600) {
             $this->WriteAttributeInteger('DewPointEfficiencyWeakSince', 0);
             return ['allow' => true, 'pause' => false,
-                'detail' => 'Zusatzregelung EIN: Messphase'];
+                'detail' => sprintf('Zusatzregelung: T100 %.2f °C im Band, EWT-Messphase',
+                    $vl['v'])];
         }
-        $values = [];
-        foreach ([100 => 12630,
-                  101 => (int) $this->ReadPropertyInteger('DewPointWaterVariable'),
-                  103 => 14561, 104 => 23904] as $number => $id) {
-            $v = $this->DewPointEfficiencyReading($id, $now);
-            if ($v === null) {
-                $this->WriteAttributeInteger('DewPointEfficiencyWeakSince', 0);
-                return ['allow' => true, 'pause' => false,
-                    'detail' => 'Zusatzregelung EIN: Daten fehlen, Standardbetrieb'];
-            }
-            $values[$number] = $v;
-        }
-        $times = array_column($values, 'at');
-        if (max($times) - min($times) > 120) {
+        $rl = $this->DewPointEfficiencyReading(23904, $now);
+        if ($rl === null || abs($rl['at'] - $vl['at']) > 120) {
             $this->WriteAttributeInteger('DewPointEfficiencyWeakSince', 0);
             return ['allow' => true, 'pause' => false,
-                'detail' => 'Zusatzregelung EIN: nicht synchron, Standardbetrieb'];
+                'detail' => 'Zusatzregelung: EWT-Delta nicht messbar, Standardbetrieb'];
         }
-        $source = $values[103]['v'] - $values[100]['v'];
-        $fbh = $values[103]['v'] - $values[101]['v'];
-        $ewt = $values[104]['v'] - $values[100]['v'];
-        $weak = $source <= 0.5 && $fbh <= 0.3 && $ewt <= 0.3;
-        if (!$weak) {
+        $delta = $rl['v'] - $vl['v'];
+        $outsideDelta = $delta < $minDelta - 0.00001
+            || $delta > $maxDelta + 0.00001;
+        if (!$outsideDelta) {
             $this->WriteAttributeInteger('DewPointEfficiencyWeakSince', 0);
             return ['allow' => true, 'pause' => false,
-                'detail' => 'Zusatzregelung EIN: Kuehlwirkung vorhanden'];
+                'detail' => sprintf('Zusatzregelung: T100 %.2f °C, Delta %.2f K im Band',
+                    $vl['v'], $delta)];
         }
         $weakSince = $this->ReadAttributeInteger('DewPointEfficiencyWeakSince');
         if ($weakSince <= 0 || $weakSince > $now) {
             $weakSince = $now;
-            $this->WriteAttributeInteger('DewPointEfficiencyWeakSince', $weakSince);
+            $this->WriteAttributeInteger('DewPointEfficiencyWeakSince', $now);
         }
         if ($now - $weakSince < 300) {
             return ['allow' => true, 'pause' => false,
-                'detail' => 'Zusatzregelung EIN: geringe Wirkung, beobachten'];
+                'detail' => sprintf('Zusatzregelung: Delta %.2f K ausserhalb %.1f-%.1f K, beobachten',
+                    $delta, $minDelta, $maxDelta)];
         }
+        return $this->DewPointEfficiencyStartPause($now,
+            sprintf('Delta %.2f K ausserhalb %.1f-%.1f K',
+                $delta, $minDelta, $maxDelta));
+    }
+
+    private function DewPointEfficiencyStartPause(int $now, string $reason): array
+    {
         $this->WriteAttributeInteger('DewPointEfficiencyPauseUntil', $now + 900);
         $this->WriteAttributeInteger('DewPointEfficiencyRunSince', 0);
         $this->WriteAttributeInteger('DewPointEfficiencyWeakSince', 0);
+        $this->WriteAttributeInteger('DewPointEfficiencySourceBadSince', 0);
         return ['allow' => false, 'pause' => true,
-            'detail' => 'Zusatzregelung EIN: geringe Kuehlwirkung, 15 min Effizienzpause'];
+            'detail' => 'Zusatzregelung: ' . $reason . ' – 15 min Effizienzpause'];
     }
 
     /** Protected for 100% offline mock RPC simulation. No cloud required. */
@@ -532,6 +577,7 @@ trait LCNClimateDewPointGuard
                     $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
                     $this->WriteAttributeInteger('DewPointEfficiencyRunSince', 0);
                     $this->WriteAttributeInteger('DewPointEfficiencyWeakSince', 0);
+                    $this->WriteAttributeInteger('DewPointEfficiencySourceBadSince', 0);
                 }
                 $this->WriteAttributeInteger('DewPointGuardLastRenew', $now);
 
@@ -624,6 +670,7 @@ trait LCNClimateDewPointGuard
                 $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
                 $this->WriteAttributeInteger('DewPointEfficiencyRunSince', 0);
                 $this->WriteAttributeInteger('DewPointEfficiencyWeakSince', 0);
+                $this->WriteAttributeInteger('DewPointEfficiencySourceBadSince', 0);
                 // A remote output can never be claimed OFF when readback fails.
                 $this->WriteAttributeString('DewPointGuardState', 'UNKNOWN');
                 $this->SetValueIfChanged('DewPointGuardStatus',

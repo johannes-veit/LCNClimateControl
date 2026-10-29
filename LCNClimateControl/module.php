@@ -88,6 +88,12 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterPropertyBoolean('DewPointAutoPumpEnabled', true);
         // Optional efficiency mode: disabled by default, keeps original guard unchanged.
         $this->RegisterPropertyBoolean('DewPointEfficiencyEnabled', false);
+        // Configurable source-water temperature and heat pickup range.
+        // Read ONLY if optional efficiency controller is switched ON.
+        $this->RegisterPropertyFloat('DewPointEwtVLMinC', 5.0);
+        $this->RegisterPropertyFloat('DewPointEwtVLMaxC', 25.0);
+        $this->RegisterPropertyFloat('DewPointEwtDeltaMinK', 0.3);
+        $this->RegisterPropertyFloat('DewPointEwtDeltaMaxK', 10.0);
         $this->RegisterPropertyBoolean('DewPointGuardSimulation', true);
         $this->RegisterPropertyInteger('DewPointWaterVariable', 20510);
         $this->RegisterPropertyString('DewPointPumpIP', '192.168.103.67');
@@ -141,6 +147,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterAttributeInteger('DewPointEfficiencyRunSince', 0);
         $this->RegisterAttributeInteger('DewPointEfficiencyWeakSince', 0);
         $this->RegisterAttributeInteger('DewPointEfficiencyPauseUntil', 0);
+        $this->RegisterAttributeInteger('DewPointEfficiencySourceBadSince', 0);
 
         $this->RegisterTimer('Worker', 0, 'LCNC_Worker($_IPS[\'TARGET\']);');
         $this->RegisterTimer('DirectCoolingGuard', 0, 'LCNC_DirectCoolingWatchdog($_IPS[\'TARGET\']);');
@@ -201,6 +208,9 @@ class LCNClimateControl extends IPSModuleStrict
         $this->SetTimerInterval('Worker', 0);
         $this->SetTimerInterval('DirectCoolingGuard', $this->UsesDirectCooling() ? 15000 : 0);
         $this->SetTimerInterval('ChatGPTDiagnosticTimer', 60000);
+        // Re-read edited limits immediately; no old 15-minute pause or
+        // temperature observation survives a module configuration change.
+        $this->DewPointEfficiencyReset();
         $this->SetTimerInterval('DewPointGuardTimer',
             $this->ReadPropertyBoolean('DewPointAutoPumpEnabled') ? 10000 : 0);
         // Same two existing timers for passive learning OR isolated read-only
