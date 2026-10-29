@@ -103,6 +103,7 @@ final class EwtSimulation
     public bool $remoteOnline = true;
     public bool $ignoreCommands = false;
     public bool $ignoreNextCommand = false;
+    public bool $failNextStatusRead = false;
 
     public function ReadPropertyBoolean(string $key): bool { return (bool) ($this->p[$key] ?? false); }
     public function ReadPropertyInteger(string $key): int { return (int) ($this->p[$key] ?? 0); }
@@ -127,7 +128,13 @@ final class EwtSimulation
     {
         $this->rpcCalls[] = [$method,$params];
         if (!$this->remoteOnline) throw new RuntimeException('simuliert: Shelly ohne Strom/WLAN');
-        if ($method === 'Switch.GetStatus') return ['output'=>$this->remoteOn];
+        if ($method === 'Switch.GetStatus') {
+            if ($this->failNextStatusRead) {
+                $this->failNextStatusRead = false;
+                throw new RuntimeException('simuliert: Switch.GetStatus voruebergehend nicht lesbar');
+            }
+            return ['output'=>$this->remoteOn];
+        }
         if ($method === 'Switch.Set') {
             $before = $this->remoteOn;
             if ($this->ignoreNextCommand) $this->ignoreNextCommand = false;
@@ -398,6 +405,8 @@ $opt->DewPointGuardTick();
 check(!$opt->remoteOn, 'selected extra controller stops on cold FBH supply T102');
 check(str_contains($opt->values['DewPointGuardStatus'], 'T102 nahe Taupunkt'),
     'extra supply protection identified in existing status');
+check($opt->attr['DewPointGuardNotifyState'] === 'SUPPLY_STOP',
+    'T102 safety stop has its own notification classification');
 
 $GLOBALS['ewt_data'][21409]['v'] = 22.0;
 $opt->DewPointGuardTick();
@@ -591,6 +600,51 @@ $GLOBALS['ewt_data'][12630]['v'] = 38.0;
 $GLOBALS['ewt_data'][23904]['v'] = 38.0;
 $invalid->DewPointGuardTick();
 check($invalid->remoteOn, 'legacy option OFF entirely ignores all EWT optimization bands');
+
+// A transient unreadable initial Shelly status is NOT safe to ignore.
+// A verified OFF is issued, and prior restart approval is invalidated.
+$readError = new EwtSimulation();
+$readError->remoteOn = true;
+$readError->attr['DewPointGuardLastRenew'] = time();
+$readError->attr['DewPointGuardSafeSince'] = time()-250;
+$readError->failNextStatusRead = true;
+$GLOBALS['ewt_data'][20510]['v'] = 20.0;
+$GLOBALS['ewt_data'][12630]['v'] = 18.0;
+$GLOBALS['ewt_data'][21409]['v'] = 22.0;
+$readError->DewPointGuardTick();
+check(!$readError->remoteOn, 'unreadable initial Shelly status forces confirmed OFF');
+check($readError->attr['DewPointGuardState'] === 'OFF',
+    'verified OFF is reported only after real Shelly readback');
+check($readError->attr['DewPointGuardSafeSince'] >= time()-1,
+    'status loss cancels stale 120s authorization');
+check(count(array_filter($readError->rpcCalls,
+    fn($item) => $item[0] === 'Switch.Set' && $item[1]['on'] === 'false')) === 1,
+    'transient read failure issues exactly one successful OFF command');
+$readError->DewPointGuardTick();
+check(!$readError->remoteOn, 'pump remains off during fresh restart interval');
+
+// A failed attempt to confirm OFF stays UNKNOWN; no invented status.
+$readError->remoteOn = true;
+$readError->remoteOnline = false;
+$readError->DewPointGuardTick();
+check($readError->attr['DewPointGuardState'] === 'UNKNOWN',
+    'unreachable Shelly never claims pump OFF');
+check(str_contains($readError->values['DewPointGuardStatus'], 'NICHT BESTAETIGT'),
+    'unreachable Shelly keeps a visible fault');
+
+// T102 must override a previous efficiency pause as an explicit safety stop.
+$tsupply = new EwtSimulation();
+$tsupply->p['DewPointEfficiencyEnabled'] = true;
+$tsupply->remoteOn = true;
+$tsupply->attr['DewPointEfficiencyPauseUntil'] = time()+600;
+$GLOBALS['ewt_data'][21409]['v'] = 12.0;
+$tsupply->DewPointGuardTick();
+check(!$tsupply->remoteOn, 'T102 near dewpoint immediately stops even in pause');
+check($tsupply->attr['DewPointGuardNotifyState'] === 'SUPPLY_STOP',
+    'T102 stop is not hidden as efficiency pause');
+check(str_contains($tsupply->values['DewPointGuardStatus'], 'T102 nahe Taupunkt'),
+    'T102 reason preserved in status');
+$GLOBALS['ewt_data'][21409]['v'] = 22.0;
 
 // Disabled automatic controller never touches the pump.
 $sim->remoteOnline = true;
