@@ -135,12 +135,21 @@
       "items": [
         {
           "type": "Label",
-          "caption": "Fühler 101 nach Platten-WT ist die einzige Wasser-Schutzmessung. Fühler 100 bleibt rein lesend. Die Regelung berechnet automatisch den höchsten Raumtaupunkt und schaltet die EWT-Pumpe direkt. Die LCN-Luftfeuchte-IDs sind bereits hinterlegt."
+          "caption": "Im Standardbetrieb ist Fühler 101 nach dem Platten-WT die entscheidende Wasser-Schutzmessung. Die optionale Zusatzsteuerung nutzt T100, T102, T103 und T104 nur nach Aktivierung. Die 11 Raumtaupunkte und die Shelly-Ueberwachung bleiben immer erhalten."
         },
         {
           "type": "CheckBox",
           "name": "DewPointAutoPumpEnabled",
           "caption": "EWT-Pumpenautomatik EIN – direkt schalten und Shelly bestaetigen"
+        },
+        {
+          "type": "CheckBox",
+          "name": "DewPointEfficiencyEnabled",
+          "caption": "Zusatzsteuerung mit den fuenf Wasserfuehlern verwenden (Standard: AUS)"
+        },
+        {
+          "type": "Label",
+          "caption": "AUS = bisherige Taupunktsteuerung unveraendert. EIN = zusaetzlich T102-Vorlauftemperatur gegen Taupunkt pruefen und die EWT-Pumpe bei nachweisbar geringer Kuehlwirkung zeitweise pausieren (10 min Anlauf + 5 min Messung, 15 min Pause). Nur frische, zeitlich passende Fühlerwerte werden genutzt; sonst Standardbetrieb. Die 11 Raumtaupunkte, Fühler 101, LCN-Ventilfreigabe und Shelly-Bestaetigung gelten IMMER."
         },
         {
           "type": "SelectVariable",

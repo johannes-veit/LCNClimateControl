@@ -86,6 +86,8 @@ class LCNClimateControl extends IPSModuleStrict
         // Old GuardEnabled/Simulation flags remain only for backward compatibility.
         $this->RegisterPropertyBoolean('DewPointGuardEnabled', false);
         $this->RegisterPropertyBoolean('DewPointAutoPumpEnabled', true);
+        // Optional efficiency mode: disabled by default, keeps original guard unchanged.
+        $this->RegisterPropertyBoolean('DewPointEfficiencyEnabled', false);
         $this->RegisterPropertyBoolean('DewPointGuardSimulation', true);
         $this->RegisterPropertyInteger('DewPointWaterVariable', 20510);
         $this->RegisterPropertyString('DewPointPumpIP', '192.168.103.67');
@@ -136,6 +138,9 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterAttributeInteger('DewPointGuardSafeSince', 0);
         $this->RegisterAttributeInteger('DewPointGuardLastRenew', 0);
         $this->RegisterAttributeString('DewPointGuardNotifyState', '');
+        $this->RegisterAttributeInteger('DewPointEfficiencyRunSince', 0);
+        $this->RegisterAttributeInteger('DewPointEfficiencyWeakSince', 0);
+        $this->RegisterAttributeInteger('DewPointEfficiencyPauseUntil', 0);
 
         $this->RegisterTimer('Worker', 0, 'LCNC_Worker($_IPS[\'TARGET\']);');
         $this->RegisterTimer('DirectCoolingGuard', 0, 'LCNC_DirectCoolingWatchdog($_IPS[\'TARGET\']);');

@@ -66,6 +66,7 @@ final class EwtSimulation
     public int $InstanceID = 200;
     public array $p = [
         'DewPointAutoPumpEnabled'=>true,
+        'DewPointEfficiencyEnabled'=>false,
         'DewPointWaterVariable'=>20510,
         'DewPointMaxAgeSeconds'=>900, // old 0.5.6 legacy default auto-migration
         'DewPointMarginK'=>1.5,
@@ -375,6 +376,108 @@ check($sim->remoteOn, 'second active cooling room confirmed by relay feedback');
 $GLOBALS['ewt_data'][6002]['v'] = false;
 $sim->DewPointGuardTick();
 check(!$sim->remoteOn, 'last physical cooling valve closing immediately stops EWT pump');
+
+// Opt-in additional-water-sensor controller: OFF must preserve old logic.
+$GLOBALS['ewt_data'][12630] = ['v'=>14.0, 'at'=>time(), 't'=>VARIABLETYPE_FLOAT];
+$GLOBALS['ewt_data'][20510] = ['v'=>19.0, 'at'=>time(), 't'=>VARIABLETYPE_FLOAT];
+$GLOBALS['ewt_data'][21409] = ['v'=>14.0, 'at'=>time(), 't'=>VARIABLETYPE_FLOAT];
+$GLOBALS['ewt_data'][14561] = ['v'=>20.0, 'at'=>time(), 't'=>VARIABLETYPE_FLOAT];
+$GLOBALS['ewt_data'][23904] = ['v'=>15.0, 'at'=>time(), 't'=>VARIABLETYPE_FLOAT];
+$opt = new EwtSimulation();
+$opt->remoteOn = true;
+$opt->DewPointGuardTick();
+check($opt->remoteOn, 'default OFF keeps original controller even if T102 is cold');
+check(!str_contains($opt->values['DewPointGuardStatus'], 'Zusatzregelung EIN'),
+    'default OFF does not advertise advanced control');
+$opt->p['DewPointEfficiencyEnabled'] = true;
+$opt->DewPointGuardTick();
+check(!$opt->remoteOn, 'selected extra controller stops on cold FBH supply T102');
+check(str_contains($opt->values['DewPointGuardStatus'], 'T102 nahe Taupunkt'),
+    'extra supply protection identified in existing status');
+
+$GLOBALS['ewt_data'][21409]['v'] = 22.0;
+$opt->DewPointGuardTick();
+check(!$opt->remoteOn, 'extra guard still requires original 120 s stability');
+$opt->attr['DewPointGuardSafeSince'] = time()-121;
+$opt->DewPointGuardTick();
+check($opt->remoteOn, 'advanced mode restarts only with original guard approval');
+$opt->attr['DewPointEfficiencyRunSince'] = time()-1000;
+$opt->attr['DewPointEfficiencyWeakSince'] = time()-310;
+$opt->DewPointGuardTick();
+check($opt->remoteOn, 'healthy measured cooling does not enter an efficiency pause');
+check($opt->attr['DewPointEfficiencyWeakSince'] === 0,
+    'good cooling resets accumulated weak-effect interval');
+
+// Weak exchanger measurements require BOTH 10min running and 5min evidence.
+$GLOBALS['ewt_data'][12630]['v'] = 20.0;
+$GLOBALS['ewt_data'][20510]['v'] = 20.0;
+$GLOBALS['ewt_data'][14561]['v'] = 20.0;
+$GLOBALS['ewt_data'][23904]['v'] = 20.0;
+$opt->attr['DewPointEfficiencyRunSince'] = time()-601;
+$opt->attr['DewPointEfficiencyWeakSince'] = 0;
+$opt->DewPointGuardTick();
+check($opt->remoteOn, 'single weak sample is insufficient to stop pump');
+check($opt->attr['DewPointEfficiencyWeakSince'] > 0, 'weak cooling evidence timer begins');
+$opt->attr['DewPointEfficiencyWeakSince'] = time()-301;
+$opt->DewPointGuardTick();
+check(!$opt->remoteOn, 'sustained low exchanger effect triggers efficiency pause');
+check($opt->attr['DewPointEfficiencyPauseUntil'] >= time()+899,
+    'efficiency pause lasts 15 min');
+check(str_contains($opt->values['DewPointGuardStatus'], 'Effizienzpause'),
+    'pause visible in existing status');
+$opt->DewPointGuardTick();
+check(!$opt->remoteOn, 'still OFF during efficiency pause');
+check($opt->attr['DewPointGuardSafeSince'] === 0,
+    'efficiency pause cannot count toward 120-second safety approval');
+
+// A real dewpoint fault during an efficiency pause is still a safety stop,
+// not a quiet optimization pause.
+$GLOBALS['ewt_data'][20510]['v'] = $dew + 1.5;
+$opt->DewPointGuardTick();
+check($opt->attr['DewPointGuardNotifyState'] === 'DEW_STOP',
+    'dewpoint safety stop takes priority over efficiency pause notification');
+$GLOBALS['ewt_data'][20510]['v'] = 20.0;
+
+// OFF returns immediately to original control after normal stabilization.
+$opt->p['DewPointEfficiencyEnabled'] = false;
+$GLOBALS['ewt_data'][21409]['v'] = 14.0;
+$opt->DewPointGuardTick();
+check($opt->attr['DewPointEfficiencyPauseUntil'] === 0,
+    'disabling advanced mode cancels its pause and counters');
+check(!$opt->remoteOn, 'legacy guard still enforces restart wait');
+$opt->attr['DewPointGuardSafeSince'] = time()-121;
+$opt->DewPointGuardTick();
+check($opt->remoteOn, 'legacy mode ignores optional T102 and resumes normally');
+
+// Missing or asynchronous optional data never produce a false efficiency stop.
+$opt->p['DewPointEfficiencyEnabled'] = true;
+$GLOBALS['ewt_data'][21409]['v'] = 22.0;
+$opt->attr['DewPointEfficiencyRunSince'] = time()-1000;
+$opt->attr['DewPointEfficiencyWeakSince'] = time()-310;
+$GLOBALS['ewt_data'][12630]['at'] = time()-301;
+$opt->DewPointGuardTick();
+check($opt->remoteOn, 'stale T100 never forces an efficiency pause');
+check($opt->attr['DewPointEfficiencyWeakSince'] === 0,
+    'stale efficiency data clear weak-effect evidence');
+$GLOBALS['ewt_data'][12630]['at'] = time();
+$GLOBALS['ewt_data'][23904]['at'] = time()-150;
+$opt->attr['DewPointEfficiencyRunSince'] = time()-1000;
+$opt->attr['DewPointEfficiencyWeakSince'] = time()-310;
+$opt->DewPointGuardTick();
+check($opt->remoteOn, 'time-asynchronous optional sensors cannot force pause');
+$GLOBALS['ewt_data'][23904]['at'] = time();
+
+// Original dewpoint safety wins even when efficiency mode is active.
+$GLOBALS['ewt_data'][20510]['v'] = $dew + 1.5;
+$opt->DewPointGuardTick();
+check(!$opt->remoteOn, 'main dewpoint stop always wins over optional efficiency');
+$GLOBALS['ewt_data'][20510]['v'] = 19.0;
+$opt->symconMode = 0;
+$opt->remoteOnline = false;
+$opt->DewPointGuardTick();
+check($opt->attr['DewPointEfficiencyPauseUntil'] === 0
+    && $opt->attr['DewPointEfficiencyRunSince'] === 0,
+    'HEIZEN clears optional efficiency control without Shelly communication');
 
 // Disabled automatic controller never touches the pump.
 $sim->remoteOnline = true;
