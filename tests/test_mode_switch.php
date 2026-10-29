@@ -37,7 +37,7 @@ class ModeSwitchMock
     public bool $badReadOnce = false;
     public bool $readiness = true;
     public array $config = [
-        'initial_state'=>'off', 'in_mode'=>'detached', 'auto_on'=>false
+        'initial_state'=>'off', 'in_mode'=>'detached', 'auto_on'=>false, 'auto_off'=>false
     ];
 
     public function ReadPropertyInteger(string $k): int { return (int) ($this->props[$k] ?? 0); }
