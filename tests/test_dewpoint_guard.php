@@ -430,6 +430,14 @@ check(!$opt->remoteOn, 'still OFF during efficiency pause');
 check($opt->attr['DewPointGuardSafeSince'] === 0,
     'efficiency pause cannot count toward 120-second safety approval');
 
+// A real dewpoint fault during an efficiency pause is still a safety stop,
+// not a quiet optimization pause.
+$GLOBALS['ewt_data'][20510]['v'] = $dew + 1.5;
+$opt->DewPointGuardTick();
+check($opt->attr['DewPointGuardNotifyState'] === 'DEW_STOP',
+    'dewpoint safety stop takes priority over efficiency pause notification');
+$GLOBALS['ewt_data'][20510]['v'] = 20.0;
+
 // OFF returns immediately to original control after normal stabilization.
 $opt->p['DewPointEfficiencyEnabled'] = false;
 $GLOBALS['ewt_data'][21409]['v'] = 14.0;
