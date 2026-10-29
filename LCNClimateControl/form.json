@@ -29,12 +29,12 @@
         },
         {
           "type": "Label",
-          "caption": "STELLUNG 1 – SHELLY: Nur nach fachlicher Pruefung, dass der bisherige Schalter EINEN einpoligen Schliesserkontakt schaltet: Die beiden Leitungen dieses Kontakts werden durch die Elektrofachkraft statt an den Wandschalter an Shelly I und O angeschlossen. Shelly L/N bleiben dauerhaft versorgt, unabhaengig von der geschalteten Steckdose. Die alte SW-Messleitung wird vom Eingang entfernt und sicher stillgelegt; SW bleibt frei. PE und N der Steckdose bleiben durchgehend. Keine pauschale Bruecke L-I: Eingangsstromkreis zuerst bestimmen! Bei Wechsler/mehrpoliger Schaltung reicht Shelly 1 Gen3 allein nicht."
+          "caption": "STELLUNG 1 – SHELLY: Nur nach fachlicher Pruefung, dass der bisherige Schalter EINEN einpoligen Schliesserkontakt schaltet: Die beiden Leitungen dieses Kontakts werden durch die Elektrofachkraft statt an den Wandschalter an Shelly I und O angeschlossen. Shelly 1 Gen3 ist bereits der fuehlerfuehrende Shelly (T100–T104): nur I/O uebernehmen den ehemaligen Schalter, Sensoranschluesse/Addon und MQTT unveraendert. Shelly L/N bleiben dauerhaft versorgt, unabhaengig von der geschalteten Steckdose. Die alte SW-Messleitung wird vom Eingang entfernt und sicher stillgelegt; SW bleibt frei. PE und N der Steckdose bleiben durchgehend. Keine pauschale Bruecke L-I: Eingangsstromkreis zuerst bestimmen! Bei Wechsler/mehrpoliger Schaltung reicht Shelly 1 Gen3 allein nicht."
         },
         {
           "type": "ValidationTextBox",
           "name": "ModeSwitchShellyIP",
-          "caption": "Nur Stellung 1: IPv4 des Shelly 1 Gen3 (NICHT EWT-Pumpen-Plug)"
+          "caption": "Nur Stellung 1: Shelly 1 Gen3 192.168.103.71 (gleiches Geraet wie T100–T104; nicht EWT-Pumpen-Plug 192.168.103.67)"
         },
         {
           "type": "CheckBox",
@@ -43,7 +43,7 @@
         },
         {
           "type": "Label",
-          "caption": "Shelly-Webinterface (nur Stellung 1): Schalter-Eingang DETACHED/entkoppelt; Einschaltzustand nach Stromausfall AUS (OFF, nicht Restore last); Auto-ON AUS; normale Auto-OFF-Zeitsteuerung AUS; keine weiteren Zeitplaene, Szenen, Skripte oder Cloud-Befehle fuer dieses Relais. Feste IP im Heimnetz, lokale HTTP-RPC-Steuerung ohne aktivierte HTTP-Authentifizierung. Das Modul prueft OFF/DETACHED/Auto-ON und den Ausgang; KUEHLEN wird bei Fehler gesperrt."
+          "caption": "Shelly-Webinterface (nur Stellung 1): Schalter-Eingang DETACHED/entkoppelt; Einschaltzustand nach Stromausfall AUS (OFF, nicht Restore last); Auto-ON AUS; normale Auto-OFF-Zeitsteuerung AUS; keine weiteren Zeitplaene, Szenen, Skripte oder Cloud-Befehle fuer dieses Relais. Bereits vorhandener Fuehler-Shelly 192.168.103.71 bleibt dauerhaft am Netz, seine fuenf Fuehler und MQTT bleiben UNVERAENDERT; feste IP im Heimnetz, lokale HTTP-RPC-Steuerung ohne aktivierte HTTP-Authentifizierung. Das Modul prueft OFF/DETACHED/Auto-ON und den Ausgang; KUEHLEN wird bei Fehler gesperrt."
         },
         {
           "type": "Label",
