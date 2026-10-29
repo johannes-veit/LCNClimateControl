@@ -240,7 +240,7 @@ trait LCNClimateDewPointGuard
                     throw new RuntimeException('range');
                 }
                 $valid[$number] = ['v' => $v, 'at' => $stamp];
-                $parts[] = sprintf('T%d %.2f', $number, $v);
+                $parts[] = sprintf('T%d %.2f °C', $number, $v);
             } catch (Throwable) {
                 $parts[] = 'T' . $number . ' --';
             }
@@ -255,7 +255,7 @@ trait LCNClimateDewPointGuard
                 $deltas[] = sprintf('%s %+.2f K', $label, $valid[$b]['v'] - $valid[$a]['v']);
             }
         }
-        return ' | WT [' . implode('; ', $parts) . '] °C | ' . implode('; ', $deltas);
+        return ' | WT ' . implode('; ', $parts) . ' | ' . implode('; ', $deltas);
     }
 
     /** Protected for 100% offline mock RPC simulation. No cloud required. */
