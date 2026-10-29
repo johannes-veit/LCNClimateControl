@@ -1,4 +1,4 @@
-# EWT-Taupunktwaechter – LCNClimateControl 0.5.12
+# EWT-Taupunktwaechter – LCNClimateControl 0.5.13
 
 Automatisch integriert in **bestehende Climate-Instanz #17597**.
 Keine separate Instanz, kein zusätzliches Skript und keine Eingaben
@@ -71,54 +71,72 @@ von T101, elf Raumtaupunkten und bestaetigten Kuehlrelais ab.
 Die physische Anlagenstellung wird durch diese Fuenf-Fuehler-Anzeige
 nicht erkannt oder bestaetigt.
 
-## Optionale Zusatzsteuerung mit T100-T104 (standardmaessig AUS)
+## Optionale Zusatzsteuerung mit frei einstellbaren Temperaturbereichen
 
-Unter der vorhandenen Modulauswahl "EWT-Taupunktwaechter" gibt es
-**genau einen** Schalter:
-`Zusatzsteuerung mit den fuenf Wasserfuehlern verwenden`
-(IP-Symcon Eigenschaft `DewPointEfficiencyEnabled`).
-Der Standardwert ist **AUS**. Damit bleibt die Pumpensteuerung aus
-0.5.11 unveraendert: T101, alle elf Raumtaupunkte, bestaetigte
-LCN-Kuehlrelais, Shelly-Schaltbestaetigung, 1,5/2,0-K-Grenzen,
-120 s Startfreigabe und 40 s Shelly-Auto-OFF.
+Im vorhandenen Modulkonfigurations-Panel `EWT-Taupunktwaechter`
+legt **Zusatzsteuerung mit den fuenf Wasserfuehlern verwenden**
+fest, ob die neue Effizienzlogik wirkt. Standard ist **AUS**:
+die bisherige Sicherheits-/Pumpensteuerung laeuft unveraendert.
+Die Zusatzfuehler werden nur angezeigt, nicht als Betriebsbedingung
+verwendet.
 
-**Nur bei EIN** prueft die Zusatzregelung:
-- Fühler **T102**, falls aktuell (maximal drei Minuten alt), als
-  zweite FBH-Vorlauftemperatur gegen dieselbe Raumtaupunktgrenze.
-  Eine zu kalte gemessene FBH-Vorlauftemperatur sperrt die Pumpe
-  zusaetzlich. Wenn T102 nicht frisch ist, bleibt die bestehende
-  T101-Schutzfunktion erhalten.
-- Die vier Messstellen **T100, T101, T103 und T104** zur
-  *Effizienzbewertung* waehrend laufender EWT-Pumpe, nur bei
-  gueltigen Werten (maximal drei Minuten alt) und zusammen
-  hoechstens 120 Sekunden auseinanderliegenden Zeitstempeln.
+Bei **EIN** sind folgende vier Grenzen frei einstellbar:
 
-Eine Effizienzpause darf erst entstehen, wenn die Pumpe bereits
-**10 Minuten** lief und waehrend weiterer **5 Minuten** durchgehend
-alle drei Kriterien erfuellt sind:
-`T103-T100 <=0,5 K` (kaum EWT-Temperaturvorteil),
-`T103-T101 <=0,3 K` (kaum FBH-Abkuehlung) und
-`T104-T100 <=0,3 K` (kaum EWT-Waermeaufnahme).
+| Eigenschaft | Physikalische Groesse | Standard | Zulaessiger Bereich |
+|---|---|---:|---|
+| `DewPointEwtVLMinC` | T100 EWT-Vorlauf MIN | 5,0 °C | 0–39 °C |
+| `DewPointEwtVLMaxC` | T100 EWT-Vorlauf MAX | 25,0 °C | 1–40 °C |
+| `DewPointEwtDeltaMinK` | T104−T100 EWT-Delta MIN | 0,3 K | 0–19,9 K |
+| `DewPointEwtDeltaMaxK` | T104−T100 EWT-Delta MAX | 10,0 K | 0,1–20 K |
 
-Dann wird der Shelly **AUS** geschaltet und 15 Minuten pausiert.
-Nach der Pause darf die Pumpe nur mit erneutem
-**120-Sekunden-Taupunkt-Sicherheitsfenster** anlaufen. Die
-Zusatzfunktion darf eine fehlende Grundfreigabe niemals ersetzen.
-Fehlende, veraltete oder ungleichzeitige Zusatzergebnisse
-verhindern **keine** Pumpenfreigabe durch die bisherige Steuerung.
-Im HEIZEN-Betrieb ist auch diese Funktion inaktiv.
+Beide Mindestwerte muessen **kleiner** als ihre Hoechstwerte sein.
+Ungueltige Grenzpaare werden als Konfigurationsfehler im Status
+angezeigt; die bisherige Sicherheitssteuerung bleibt wirksam.
 
-Das Umschalten auf **AUS** verwirft laufende Effizienzpausen und
-setzt alle Zusatzsteuerungs-Zaehler zurueck. Die bestehende
-Taupunktfreigabe laeuft weiter, einschließlich ihrer separaten
-120-Sekunden-Stabilitaetszeit.
+**Physikalische Bedeutung:** T100 bezeichnet die EWT-Zulauftemperatur
+zum Platten-WT. Die positive Differenz **T104 minus T100** ist die
+Temperaturerhoehung des EWT-Wassers ueber den Waermetauscher, kein
+FBH-Taupunktabstand. Die EWT-Differenz ist nur **bei laufender Pumpe**
+und aktuellen, zeitlich passenden Messungen aussagekraeftig.
 
-Die Grenzwerte fuer die Effizienzpause sind **konservative
-Startwerte fuer die Erprobung**, keine kalibrierte
-Waermetauscher- oder Durchflussmessung. Es gibt keine
-zusaetzliche Einstellung, Visualisierungsvariable,
-LCN-Relais- oder Heizungssteuerung. Der physische Betriebsart-
-Schalter bleibt getrennt von der Symcon-Betriebsart.
+Die neue Betriebslogik prueft die eingestellten Grenzen so:
+
+1. **Sicherheitsfreigabe wie bisher:** Symcon KUEHLEN, alle 11
+   Raumtaupunkte, T101, mindestens ein bestaetigtes Kuehlventil,
+   1,5/2,0-K-Grenzen, 120 s Wiederanlauf, 40 s Shelly-Auto-OFF.
+2. Die Pumpe darf nach sicherem Wiederanlauf zuerst eine kurze
+   **3-minuetige Spuel-/Messphase** ausfuehren. Sonst wuerden
+   stagnierende Temperaturen den Pumpenstart dauerhaft blockieren.
+3. Nach dieser Phase wird das T100-Temperaturband geprueft.
+   **60 s durchgehend ausserhalb** -> EWT-Pumpe AUS fuer 15 min.
+4. Nach **10 min Laufzeit** wird T104−T100 geprueft.
+   **5 min durchgehend ausserhalb** des eingestellten Delta-Bandes
+   -> EWT-Pumpe AUS fuer 15 min.
+5. Nach der 15-minuetigen Pause beginnt eine erneute Messfahrt,
+   ausschliesslich bei gueltiger 120-s-Taupunktsicherheitsfreigabe.
+6. Fehlende/veraltete Werte (ueber 3 min) oder ueber 120 s
+   auseinanderliegende Messzeitstempel fuehren zur bisherigen
+   Grundsteuerung, nicht zu einer geratenen Abschaltung durch
+   die Zusatzregelung.
+
+T102 wird bei **EIN** zusaetzlich und nur bei gueltiger Messung
+mit den bestehenden Taupunktgrenzen verglichen. Ein zu kalter
+T102-Wert sperrt die EWT-Pumpe zusaetzlich. T103 bleibt als
+Mess- und Diagnosewert sichtbar und ist kein eigenstaendiger
+Start-/Abschaltgrund.
+
+Ein Abschalten der Zusatzoption **AUS** verwirft die laufende
+15-minuetige Effizienzpause sowie ihre Messzeitschalter. Der
+urspruengliche Taupunktwaechter uebernimmt sofort die Logik,
+aber eine neue Freigabe benoetigt weiterhin die bekannten
+120 s sichere Bedingungen.
+
+Die Standardwerte sind **Ausgangswerte fuer den praktischen
+Vergleich, nicht an der Anlage kalibriert**. Eine elektrische
+Relaisrueckmeldung beweist nicht den Ventilhub, und die
+Wassertemperaturen allein belegen keine Durchflussmenge.
+Diese Funktion erteilt niemals selbst eine Taupunktfreigabe
+und aendert keine LCN- oder Heizungsregelbefehle.
 
 ## Wann die EWT-Pumpe laufen darf
 
@@ -206,7 +224,7 @@ in der bereits vorhandenen Raumtabelle ueberschreiben.
 
 ## Software-Installation
 
-Nach einem Update auf 0.5.12 laeuft die neue **EWT-Pumpenautomatik**
+Nach einem Update auf 0.5.13 laeuft die neue **EWT-Pumpenautomatik**
 mit den bereits bekannten IDs und der vorhandenen Shelly-IP,
 sofern der Plug erreichbar und seine Versorgung eingeschaltet ist.
 Die Option `DewPointAutoPumpEnabled` ist standardmaessig EIN.
