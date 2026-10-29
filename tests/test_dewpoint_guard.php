@@ -67,6 +67,10 @@ final class EwtSimulation
     public array $p = [
         'DewPointAutoPumpEnabled'=>true,
         'DewPointEfficiencyEnabled'=>false,
+        'DewPointEwtVLMinC'=>5.0,
+        'DewPointEwtVLMaxC'=>25.0,
+        'DewPointEwtDeltaMinK'=>0.3,
+        'DewPointEwtDeltaMaxK'=>10.0,
         'DewPointWaterVariable'=>20510,
         'DewPointMaxAgeSeconds'=>900, // old 0.5.6 legacy default auto-migration
         'DewPointMarginK'=>1.5,
@@ -478,6 +482,113 @@ $opt->DewPointGuardTick();
 check($opt->attr['DewPointEfficiencyPauseUntil'] === 0
     && $opt->attr['DewPointEfficiencyRunSince'] === 0,
     'HEIZEN clears optional efficiency control without Shelly communication');
+
+// User-configurable source-water range T100 and return-minus-supply delta.
+// A standing-water reading cannot permanently block a safe startup trial.
+$GLOBALS['ewt_data'][12630] = ['v'=>18.0,'at'=>time(),'t'=>VARIABLETYPE_FLOAT];
+$GLOBALS['ewt_data'][20510] = ['v'=>20.0,'at'=>time(),'t'=>VARIABLETYPE_FLOAT];
+$GLOBALS['ewt_data'][21409] = ['v'=>22.0,'at'=>time(),'t'=>VARIABLETYPE_FLOAT];
+$GLOBALS['ewt_data'][14561] = ['v'=>21.0,'at'=>time(),'t'=>VARIABLETYPE_FLOAT];
+$GLOBALS['ewt_data'][23904] = ['v'=>19.0,'at'=>time(),'t'=>VARIABLETYPE_FLOAT];
+$cfg = new EwtSimulation();
+$cfg->p['DewPointEfficiencyEnabled'] = true;
+$cfg->p['DewPointEwtVLMinC'] = 19.0;
+$cfg->p['DewPointEwtVLMaxC'] = 24.0;
+$cfg->p['DewPointEwtDeltaMinK'] = 0.5;
+$cfg->p['DewPointEwtDeltaMaxK'] = 3.0;
+$cfg->DewPointGuardTick();
+check(!$cfg->remoteOn && $cfg->attr['DewPointGuardSafeSince'] > 0,
+    'standing EWT temperature never bypasses the core 120s startup');
+$cfg->attr['DewPointGuardSafeSince'] = time()-121;
+$cfg->DewPointGuardTick();
+check($cfg->remoteOn, 'cold standing T100 is measured by a short ON trial');
+$cfg->attr['DewPointEfficiencyRunSince'] = time()-181;
+$cfg->DewPointGuardTick();
+check($cfg->remoteOn && $cfg->attr['DewPointEfficiencySourceBadSince'] > 0,
+    'T100 below configured minimum starts 60-second temperature evidence');
+$cfg->attr['DewPointEfficiencySourceBadSince'] = time()-61;
+$cfg->DewPointGuardTick();
+check(!$cfg->remoteOn, 'T100 under minimum leads to 15-minute pump pause');
+check(str_contains($cfg->values['DewPointGuardStatus'], 'T100 18.00'),
+    'status displays violated T100 band and actual value');
+
+// While paused, even a corrected sensor must not circumvent the pause.
+$GLOBALS['ewt_data'][12630]['v'] = 21.0;
+$cfg->DewPointGuardTick();
+check(!$cfg->remoteOn, 'valid T100 alone never cancels active pause');
+$cfg->attr['DewPointEfficiencyPauseUntil'] = time()-1;
+$cfg->DewPointGuardTick();
+check(!$cfg->remoteOn && $cfg->attr['DewPointGuardSafeSince'] > 0,
+    'expired pause restarts 120s basic taupoint interval');
+$cfg->attr['DewPointGuardSafeSince'] = time()-121;
+$cfg->DewPointGuardTick();
+check($cfg->remoteOn, 'trial resumes automatically after pause with safe base values');
+
+// T100 above the selected maximum also forces a pause.
+$GLOBALS['ewt_data'][12630]['v'] = 25.0;
+$cfg->attr['DewPointEfficiencyRunSince'] = time()-181;
+$cfg->attr['DewPointEfficiencySourceBadSince'] = time()-61;
+$cfg->DewPointGuardTick();
+check(!$cfg->remoteOn, 'T100 above user-selected maximum stops pump');
+
+// A delta INSIDE the chosen interval permits continued operation.
+$deltaOk = new EwtSimulation();
+$deltaOk->p['DewPointEfficiencyEnabled'] = true;
+$deltaOk->p['DewPointEwtVLMinC'] = 16.0;
+$deltaOk->p['DewPointEwtVLMaxC'] = 22.0;
+$deltaOk->p['DewPointEwtDeltaMinK'] = 0.5;
+$deltaOk->p['DewPointEwtDeltaMaxK'] = 2.0;
+$GLOBALS['ewt_data'][12630]['v'] = 18.0;
+$GLOBALS['ewt_data'][23904]['v'] = 19.0;
+$deltaOk->remoteOn = true;
+$deltaOk->attr['DewPointEfficiencyRunSince'] = time()-1000;
+$deltaOk->DewPointGuardTick();
+check($deltaOk->remoteOn, 'delta within configured 0.5-2 K keeps pump ON');
+check(str_contains($deltaOk->values['DewPointGuardStatus'], 'Delta 1.00 K im Band'),
+    'status displays current EWT delta');
+
+// Raising minimum delta causes stop after sustained out-of-range difference.
+$deltaOk->p['DewPointEwtDeltaMinK'] = 1.5;
+$deltaOk->DewPointGuardTick();
+check($deltaOk->remoteOn && $deltaOk->attr['DewPointEfficiencyWeakSince'] > 0,
+    'delta below configured min first begins confirmation period');
+$deltaOk->attr['DewPointEfficiencyWeakSince'] = time()-301;
+$deltaOk->DewPointGuardTick();
+check(!$deltaOk->remoteOn, 'delta below user-selected minimum eventually pauses pump');
+
+// Delta above maximum is also user-configurable.
+$deltaHigh = new EwtSimulation();
+$deltaHigh->p['DewPointEfficiencyEnabled'] = true;
+$deltaHigh->p['DewPointEwtDeltaMinK'] = 0.2;
+$deltaHigh->p['DewPointEwtDeltaMaxK'] = 0.8;
+$deltaHigh->remoteOn = true;
+$deltaHigh->attr['DewPointEfficiencyRunSince'] = time()-1000;
+$deltaHigh->attr['DewPointEfficiencyWeakSince'] = time()-301;
+$deltaHigh->DewPointGuardTick();
+check(!$deltaHigh->remoteOn, 'delta above configured maximum pauses pump');
+
+// Invalid crossed minimum/maximum values must not weaken or break the
+// existing core protection; output stays under original supervision.
+$invalid = new EwtSimulation();
+$invalid->p['DewPointEfficiencyEnabled'] = true;
+$invalid->p['DewPointEwtVLMinC'] = 25.0;
+$invalid->p['DewPointEwtVLMaxC'] = 15.0;
+$invalid->remoteOn = true;
+$invalid->DewPointGuardTick();
+check($invalid->remoteOn && str_contains($invalid->values['DewPointGuardStatus'], 'ungueltige'),
+    'invalid source band reports configuration error, original controller continues');
+$invalid->p['DewPointEwtVLMinC'] = 5.0;
+$invalid->p['DewPointEwtDeltaMinK'] = 9.0;
+$invalid->p['DewPointEwtDeltaMaxK'] = 3.0;
+$invalid->DewPointGuardTick();
+check($invalid->remoteOn, 'invalid delta band does not override original safety');
+
+// With option OFF, forbidden source temperature and delta have zero effect.
+$invalid->p['DewPointEfficiencyEnabled'] = false;
+$GLOBALS['ewt_data'][12630]['v'] = 38.0;
+$GLOBALS['ewt_data'][23904]['v'] = 38.0;
+$invalid->DewPointGuardTick();
+check($invalid->remoteOn, 'legacy option OFF entirely ignores all EWT optimization bands');
 
 // Disabled automatic controller never touches the pump.
 $sim->remoteOnline = true;
