@@ -215,6 +215,49 @@ trait LCNClimateDewPointGuard
         ];
     }
 
+    /** Read-only display of the installed 100-104 sensors. */
+    private function DewPointThermalDiagnostic(): string
+    {
+        $ids = [100 => 12630, 101 => (int) $this->ReadPropertyInteger('DewPointWaterVariable'),
+            102 => 21409, 103 => 14561, 104 => 23904];
+        $valid = [];
+        $parts = [];
+        $now = time();
+        foreach ($ids as $number => $id) {
+            try {
+                if ($id <= 0 || !IPS_VariableExists($id)) {
+                    throw new RuntimeException('missing');
+                }
+                $meta = IPS_GetVariable($id);
+                $stamp = (int) ($meta['VariableUpdated'] ?? 0);
+                if (!in_array((int) ($meta['VariableType'] ?? -1),
+                    [VARIABLETYPE_INTEGER, VARIABLETYPE_FLOAT], true)
+                    || $stamp <= 0 || $stamp > $now + 30 || $now - $stamp > 900) {
+                    throw new RuntimeException('stale');
+                }
+                $v = (float) GetValue($id);
+                if (!is_finite($v) || $v < 0 || $v > 55) {
+                    throw new RuntimeException('range');
+                }
+                $valid[$number] = ['v' => $v, 'at' => $stamp];
+                $parts[] = sprintf('T%d %.2f', $number, $v);
+            } catch (Throwable) {
+                $parts[] = 'T' . $number . ' --';
+            }
+        }
+        $deltas = [];
+        foreach ([[103, 101, 'FBH-WT'], [100, 104, 'EWT-WT']] as [$a, $b, $label]) {
+            if (!isset($valid[$a], $valid[$b])) {
+                $deltas[] = $label . ' --';
+            } elseif (abs($valid[$a]['at'] - $valid[$b]['at']) > 120) {
+                $deltas[] = $label . ' nicht synchron';
+            } else {
+                $deltas[] = sprintf('%s %+.2f K', $label, $valid[$b]['v'] - $valid[$a]['v']);
+            }
+        }
+        return ' | WT [' . implode('; ', $parts) . '] °C | ' . implode('; ', $deltas);
+    }
+
     /** Protected for 100% offline mock RPC simulation. No cloud required. */
     protected function DewPointPumpRpc(string $method, array $params = []): array
     {
@@ -406,7 +449,8 @@ trait LCNClimateDewPointGuard
                 }
                 $waitingText = $waiting ? (' – Wiederanlauf in ' . $secondsLeft . ' s') : '';
                 $this->SetValueIfChanged('DewPointGuardStatus',
-                    $label . ' – bestaetigt' . $waitingText . ' – ' . $detail);
+                    $label . ' – bestaetigt' . $waitingText . ' – ' . $detail
+                        . $this->DewPointThermalDiagnostic());
                 $state = $desired ? 'RUNNING'
                     : ($waiting ? 'WAIT'
                         : (!$circuitsKnown ? 'RELAY_STOP'
