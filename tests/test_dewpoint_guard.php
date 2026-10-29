@@ -112,6 +112,7 @@ final class EwtSimulation
     public function ReadAttributeString(string $key): string { return (string) ($this->attr[$key] ?? ''); }
     public function WriteAttributeString(string $key, string $value): void { $this->attr[$key] = $value; }
     public function ReadAttributeInteger(string $key): int { return (int) ($this->attr[$key] ?? 0); }
+    public function ReadAttributeBoolean(string $key): bool { return (bool) ($this->attr[$key] ?? false); }
     public function WriteAttributeInteger(string $key, int $value): void { $this->attr[$key] = $value; }
     public function SetValueIfChanged(string $key, mixed $v): void { $this->values[$key] = $v; }
     public function GetRooms(): array { return $this->rooms; }
@@ -645,6 +646,27 @@ check($tsupply->attr['DewPointGuardNotifyState'] === 'SUPPLY_STOP',
 check(str_contains($tsupply->values['DewPointGuardStatus'], 'T102 nahe Taupunkt'),
     'T102 reason preserved in status');
 $GLOBALS['ewt_data'][21409]['v'] = 22.0;
+
+// The real operating-mode contact is on the SAME Shelly that reads T100-T104,
+ // but the pump plug has a different IP and is unpowered while the mode relay
+ // is blocked. No unnecessary RPC or false 'offline' alarm is allowed.
+$interlock = new EwtSimulation();
+$interlock->p['ModeSwitchSource'] = 1;
+$interlock->attr['ModeSwitchBlocked'] = true;
+$interlock->remoteOn = false;
+$interlock->remoteOnline = false;
+$interlock->rpcCalls = [];
+$interlock->DewPointGuardTick();
+check(count($interlock->rpcCalls) === 0, 'blocked mode relay must not poll unpowered EWT pump plug');
+check($interlock->attr['DewPointGuardState'] === 'COOLING_INTERLOCK',
+    'blocked external cooling authorization has separate state');
+check(str_contains($interlock->values['DewPointGuardStatus'], 'KUEHLEN GESPERRT'),
+    'blocked cooling mode displays correct warning without pretending pump OFF');
+$interlock->remoteOnline = true;
+$interlock->attr['ModeSwitchBlocked'] = false;
+$interlock->DewPointGuardTick();
+check(count($interlock->rpcCalls) > 0,
+    'after explicit mode authorization ordinary pump guard resumes');
 
 // Disabled automatic controller never touches the pump.
 $sim->remoteOnline = true;

@@ -550,6 +550,23 @@ trait LCNClimateDewPointGuard
                     'HEIZEN – EWT-Taupunktwaechter inaktiv (Shelly stromlos erwartet)');
                 return;
             }
+            // In the optional Shelly-contact mode, the Symcon mode may
+            // still display KUEHLEN after a physical I/O or WLAN fault.
+            // The 230-V socket feeding the pump plug is then unpowered;
+            // do not issue ON/RPC commands or misreport it as a pump fault.
+            // The independent 40-s pump lease expires without renewal.
+            if ($this->ReadPropertyInteger('ModeSwitchSource') === 1
+                && $this->ReadAttributeBoolean('ModeSwitchBlocked')) {
+                $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
+                $this->WriteAttributeInteger('DewPointGuardLastRenew', 0);
+                $this->DewPointEfficiencyReset();
+                $this->WriteAttributeString('DewPointGuardState', 'COOLING_INTERLOCK');
+                $this->WriteAttributeString('DewPointGuardNotifyState', 'COOLING_INTERLOCK');
+                $this->SetValueIfChanged('DewPointGuardStatus',
+                    'KUEHLEN GESPERRT – Betriebsarten-Shelly ohne bestaetigte Freigabe'
+                    . ' (EWT-Pumpen-Plug stromlos erwartet; Ausgang NICHT bestaetigt).');
+                return;
+            }
             $snapshot = $this->DewPointGuardSnapshot();
             $circuits = $this->DewPointCoolingCircuits();
             $roomsMeasured = (bool) ($snapshot['ok'] ?? false);

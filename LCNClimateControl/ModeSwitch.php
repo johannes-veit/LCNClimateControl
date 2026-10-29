@@ -21,7 +21,12 @@ trait LCNClimateModeSwitch
     /** Check IP in production AND offline simulations, before every RPC. */
     private function ModeSwitchTargetIP(): string
     {
+        // Existing instances may have stored an empty value from 0.5.15:
+        // resolve that legacy blank to the verified temperature-sensor Shelly.
         $ip = trim($this->ReadPropertyString('ModeSwitchShellyIP'));
+        if ($ip === '') {
+            $ip = '192.168.103.71';
+        }
         if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
             || !preg_match('/^(?:10\\.|192\\.168\\.|172\\.(?:1[6-9]|2[0-9]|3[01])\\.)/', $ip)) {
             throw new RuntimeException('Betriebsart-Shelly: lokale IPv4-Adresse fehlt oder ist ungueltig');
@@ -68,8 +73,8 @@ trait LCNClimateModeSwitch
         $cfg = $this->ModeSwitchRpc('Switch.GetConfig', ['id' => 0]);
         if (($cfg['initial_state'] ?? null) !== 'off'
             || ($cfg['in_mode'] ?? null) !== 'detached'
-            || ($cfg['auto_on'] ?? false) !== false
-            || ($cfg['auto_off'] ?? false) !== false) {
+            || !array_key_exists('auto_on', $cfg) || $cfg['auto_on'] !== false
+            || !array_key_exists('auto_off', $cfg) || $cfg['auto_off'] !== false) {
             throw new RuntimeException(
                 'Shelly-Konfiguration: Einschaltzustand AUS, Eingang DETACHED, Auto-ON und Auto-OFF AUS erforderlich'
             );

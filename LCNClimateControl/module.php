@@ -109,7 +109,7 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterPropertyBoolean('ManualCoolingApproval', false);
         // 0 = legacy physical wall switch (default); 1 = Shelly 1 Gen3 I/O relay.
         $this->RegisterPropertyInteger('ModeSwitchSource', 0);
-        $this->RegisterPropertyString('ModeSwitchShellyIP', '');
+        $this->RegisterPropertyString('ModeSwitchShellyIP', '192.168.103.71');
         $this->RegisterPropertyBoolean('ModeSwitchWiringConfirmed', false);
         $this->RegisterPropertyBoolean('CoolingHardwareInterlockConfirmed', false);
         $this->RegisterPropertyBoolean('CoolingHeatingResumeConfirmed', false);
