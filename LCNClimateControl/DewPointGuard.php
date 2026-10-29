@@ -557,14 +557,15 @@ trait LCNClimateDewPointGuard
             $openCircuits = (int) ($circuits['open'] ?? 0);
             $coolingAllowed = $roomsMeasured && $circuitsKnown && $openCircuits > 0;
             try {
-                // If the initial status cannot be read, an unsafe sensor
-                // situation still gets an explicit OFF attempt.
+                // If the initial status cannot be read, always attempt a
+                // verified OFF, even when the temperatures are currently safe.
+                // Never allow a stale 120-second approval to re-energize the
+                // pump after a communication fault.
                 try {
                     $wasOn = $this->DewPointReadPumpState();
                 } catch (Throwable $e) {
-                    if ($coolingAllowed) {
-                        throw $e; // Never start without a trusted readback.
-                    }
+                    $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
+                    $this->DewPointEfficiencyReset();
                     $this->DewPointCommandAndVerify(false);
                     $wasOn = false;
                 }
@@ -654,17 +655,21 @@ trait LCNClimateDewPointGuard
                     $label . ' – bestaetigt' . $waitingText . ' – ' . $detail
                         . $this->DewPointThermalDiagnostic()
                         . ($efficiency['detail'] !== '' ? ' | ' . $efficiency['detail'] : ''));
-                $state = ($efficiency['pause'] && !$desired && !$coreSafetyStop) ? 'EFFICIENCY_PAUSE'
+                $supplyStop = !$desired && !$coreSafetyStop
+                    && str_contains((string) $efficiency['detail'], 'T102 nahe Taupunkt');
+                $state = $supplyStop ? 'SUPPLY_STOP'
+                    : (($efficiency['pause'] && !$desired && !$coreSafetyStop) ? 'EFFICIENCY_PAUSE'
                     : ($desired ? 'RUNNING'
                     : ($waiting ? 'WAIT'
                         : (!$circuitsKnown ? 'RELAY_STOP'
                             : ($openCircuits === 0 ? 'NO_CIRCUIT'
-                                : ($roomsMeasured ? 'DEW_STOP' : 'SENSOR_STOP')))));
+                                : ($roomsMeasured ? 'DEW_STOP' : 'SENSOR_STOP'))))));
                 // No-circuit and efficiency pause are normal, not safety alarms.
                 if (in_array($state, ['NO_CIRCUIT', 'EFFICIENCY_PAUSE'], true)) {
                     $this->WriteAttributeString('DewPointGuardNotifyState', $state);
                 } else {
-                    $this->DewPointNotifyTransition($state, $label . ': ' . $detail . $waitingText);
+                    $this->DewPointNotifyTransition($state, $label . ': ' . $detail
+                        . $waitingText . ($supplyStop ? ' | ' . $efficiency['detail'] : ''));
                 }
             } catch (Throwable $e) {
                 $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
