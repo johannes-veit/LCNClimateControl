@@ -23,7 +23,7 @@ class ModeSwitchMock
     public int $mode = 0;
     public array $props = [
         'ModeSwitchSource'=>0,
-        'ModeSwitchShellyIP'=>'192.168.103.88',
+        'ModeSwitchShellyIP'=>'192.168.103.71',
         'DewPointPumpIP'=>'192.168.103.67',
         'ModeSwitchWiringConfirmed'=>true,
         'DewPointAutoPumpEnabled'=>true
@@ -100,6 +100,23 @@ $before = count($m->rpcCalls);
 $m->ModeSwitchTick();
 ok(count($m->rpcCalls)===$before+1, 'heating poll checks status without unnecessary OFF writes');
 
+// The operating-mode relay and all five water thermometers are the same
+// already installed Shelly 1 Gen3 (192.168.103.71). The existing pump
+// plug .67 MUST remain a separate device.
+$target = new ReflectionMethod(ModeSwitchMock::class, 'ModeSwitchTargetIP');
+ok($target->invoke($m) === '192.168.103.71',
+    'real installed sensor/Shelly relay IP is 192.168.103.71');
+$m->props['ModeSwitchShellyIP'] = ''; // persisted empty from version 0.5.15
+ok($target->invoke($m) === '192.168.103.71',
+    'existing 0.5.15 instance with blank IP uses safe default .71');
+$m->props['ModeSwitchShellyIP'] = '192.168.103.99';
+ok($target->invoke($m) === '192.168.103.99',
+    'a deliberately set different valid relay IP remains configurable');
+$m->props['ModeSwitchShellyIP'] = 'invalid-ip';
+try { $target->invoke($m); ok(false, 'invalid IP must be rejected'); }
+catch (RuntimeException $e) {}
+$m->props['ModeSwitchShellyIP'] = '192.168.103.71';
+
 $bad = new ModeSwitchMock();
 $bad->props['ModeSwitchSource']=1;
 $bad->config['initial_state']='restore_last';
@@ -108,6 +125,16 @@ catch (RuntimeException $e) {}
 ok(!$bad->relay && $bad->mode===0 && $bad->attrs['ModeSwitchBlocked'],
     'unsafe power-on default refuses cooling and holds old Symcon mode');
 $bad->config['initial_state']='off';
+unset($bad->config['auto_on']);
+try { $bad->request(1); ok(false, 'missing auto_on field cannot be treated as false'); }
+catch (RuntimeException $e) {}
+ok(!$bad->relay, 'missing safety config remains blocked');
+$bad->config['auto_on']=false;
+unset($bad->config['auto_off']);
+try { $bad->request(1); ok(false, 'missing auto_off field cannot be treated as false'); }
+catch (RuntimeException $e) {}
+ok(!$bad->relay, 'missing auto_off field remains blocked');
+$bad->config['auto_off']=false;
 $bad->config['in_mode']='follow';
 try { $bad->request(1); ok(false, 'SW should be detached'); }
 catch (RuntimeException $e) {}
