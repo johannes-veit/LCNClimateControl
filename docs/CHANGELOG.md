@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.23 (30.10.2026) – Diagnosen an Inbetriebnahme und Freigabe angeglichen
+- Alle elf S1-Einzelzertifikate statt nur des historischen M11-Spezialtests zaehlen; M11 bleibt getrennt ausgewiesen.
+- 11 technisch zugeordnete Raeume werden unabhaengig von gespeicherten Blockadeeintraegen gezaehlt; Blockaden werden weiterhin sichtbar angezeigt und NICHT automatisch geloescht.
+- Manuelle Freigabe bzw. Shelly-Betriebsartenkontakt werden als moegliche Alternative zum externen Boolean korrekt beschrieben, ohne eine aktuelle Kuehlfreigabe vorzutaueschen.
+- Bei externer Kuehlfreigabe nur echte Boolean-Variablen als TRUE/FALSE anzeigen. Ungueltige Typen melden.
+- KUEHLEN-Freigabebericht unterscheidet Software-Vorpruefung und physische Abnahme. Keine Aenderung an Sicherheitsverriegelungen, Pumpen- oder Ventilbefehlen, Lernmodellen oder Sensorgrenzwerten.
+
+
 ## 0.5.22 (30.10.2026) – EWT-Taupunktschutz gehaertet
 - Luftfeuchte fuer den Kuehl-Pumpenschutz nur noch maximal 30 Minuten gueltig, passend zur separaten 15-Minuten-Abfrage; alle alten gespeicherten Groessengrenzen werden bei der Auswertung begrenzt. Explizit kuerzere positive Altersgrenzen bleiben wirksam (historischer 900-s-Default migriert).
 - Shelly-EIN gilt nur bei bestaetigter 40-s-timed `toggle_after`-Rueckmeldung; ohne diese wird versucht, den Ausgang sofort wieder dauerhaft AUS zu schalten.
