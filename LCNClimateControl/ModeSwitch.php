@@ -190,8 +190,12 @@ trait LCNClimateModeSwitch
             if ($cooling && !$blocked) {
                 try {
                     $this->ModeSwitchVerifyConfig();
-                    if ($this->CoolingCommissionReadinessErrors() !== []) {
-                        throw new RuntimeException('Kuehlsicherheitsfreigabe fehlt');
+                    // A commissioning preflight is ONLY valid before a
+                    // mode change: in active cooling, regulator locks are
+                    // EXPECTED and must not cause a false heating fallback.
+                    // Runtime: respect ongoing external/manual safety veto.
+                    if (!$this->DirectCoolingSafe()) {
+                        throw new RuntimeException('Laufende externe Kuehlsicherheitsfreigabe fehlt');
                     }
                     // Do not send an unnecessary Set(OFF) every 10 s.
                     // A divergence is a fault, not permission to start cooling.
