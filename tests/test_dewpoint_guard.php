@@ -214,6 +214,24 @@ $sim->p['ModeSwitchSource'] = 0; // remaining legacy pump test scenarios
 $sim->attr['DewPointGuardSafeSince'] = 0;
 $sim->attr['DewPointGuardLastRenew'] = 0;
 
+// When the physical cooling outlet returns power, Shelly could report
+// output ON by its own startup configuration or a manual app command.
+// Such an unleased ON must never bypass the 120-second safety interval.
+$sim->remoteOn = true;
+$sim->attr['DewPointGuardState'] = 'UNKNOWN';
+$sim->attr['DewPointGuardLastRenew'] = 0;
+$sim->DewPointGuardTick();
+check(!$sim->remoteOn && $sim->attr['DewPointGuardState'] === 'OFF',
+    'unexpected plug ON is switched OFF before any new pump permission');
+check(str_contains($sim->values['DewPointGuardStatus'], 'ungeplanter Pumpenstart abgeschaltet'),
+    'pump diagnostic names power-on/manual uncontrolled start');
+check(count(array_filter($sim->rpcCalls,
+    fn($x) => $x[0] === 'Switch.Set' && $x[1]['on'] === 'true')) === 0,
+    'unexpected pump output cannot obtain a new ON lease immediately');
+$sim->rpcCalls = [];
+$sim->attr['DewPointGuardSafeSince'] = 0;
+$sim->attr['DewPointGuardLastRenew'] = 0;
+
 // Initial output OFF: even with safe water, restart is only allowed
 // after 120 seconds of CONTINUOUS headroom.
 $sim->DewPointGuardTick();
