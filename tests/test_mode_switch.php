@@ -31,6 +31,7 @@ class ModeSwitchMock
     public bool $ignoreCommands = false;
     public bool $badReadOnce = false;
     public bool $readiness = true;
+    public bool $runtimeSafe = true;
     public ?string $timer = null;
     public bool $cancelTimerOnSet = true;
     public array $config = [
@@ -47,6 +48,7 @@ class ModeSwitchMock
     public function SendDebug(string $k, string $msg, int $lvl): void {}
     private function GetMode(): int { return $this->mode; }
     private function CoolingCommissionReadinessErrors(): array { return $this->readiness ? [] : ['not ready']; }
+    private function DirectCoolingSafe(): bool { return $this->runtimeSafe; }
     protected function ModeSwitchRpc(string $method, array $params = []): array
     {
         $this->rpcCalls[] = [$method, $params];
@@ -179,10 +181,18 @@ $bad->ignoreCommands = false;
 $bad->request(1);
 ok(!$bad->relay && $bad->mode === 1, 'manual retry after fix authorizes cooling');
 
+// In normal active cooling, some direct-LCN regulators are intentionally
+// locked. The startup commissioning preflight would reject that, but the
+// runtime-mode contact must NOT flip to HEIZEN because of those locks.
 $bad->readiness = false;
+$bad->ModeSwitchTick();
+ok(!$bad->relay && !$bad->attrs['ModeSwitchBlocked'],
+    'active cooling continues despite expected locked regulators');
+$bad->runtimeSafe = false;
 $bad->ModeSwitchTick();
 ok($bad->relay && $bad->attrs['ModeSwitchBlocked'],
     'cooling protection failure switches physical plant back to heating ON');
+$bad->runtimeSafe = true;
 $bad->readiness = true;
 $before = count($bad->commands());
 $bad->ModeSwitchTick();
