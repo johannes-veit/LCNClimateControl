@@ -101,8 +101,9 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterPropertyString('DewPointPumpIP', '192.168.103.67');
         $this->RegisterPropertyFloat('DewPointMarginK', 1.5);
         $this->RegisterPropertyFloat('DewPointHysteresisK', 0.5);
-        // Original LCN humidity variables may only publish on actual change.
-        $this->RegisterPropertyInteger('DewPointMaxAgeSeconds', 90000);
+        // External 5-min LCN polling allows a tighter 6-h humidity validity.
+        // Old persisted 25-h defaults are safely capped in DewPointGuard.
+        $this->RegisterPropertyInteger('DewPointMaxAgeSeconds', 21600);
         $this->RegisterPropertyInteger('DewPointPushWebFront', 0);
         // Explicit one-time opt-in: user handles plant HEIZEN/KUEHLEN manually.
         // The Symcon mode selection then authorizes cooling; no extra IPS variable.
