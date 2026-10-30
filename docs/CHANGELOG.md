@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.22 (30.10.2026) – EWT-Taupunktschutz gehaertet
+- Luftfeuchte fuer den Kuehl-Pumpenschutz nur noch maximal 30 Minuten gueltig, passend zur separaten 15-Minuten-Abfrage; alle alten gespeicherten Groessengrenzen werden bei der Auswertung begrenzt. Explizit kuerzere positive Altersgrenzen bleiben wirksam (historischer 900-s-Default migriert).
+- Shelly-EIN gilt nur bei bestaetigter 40-s-timed `toggle_after`-Rueckmeldung; ohne diese wird versucht, den Ausgang sofort wieder dauerhaft AUS zu schalten.
+- Bei angezeigtem AUS mit noch aktivem Umschalt-Timer wird dieser durch einen bestaetigten dauerhaften AUS-Befehl geloescht. AUS-Befehle enthalten keinen Flip-Back-Timer.
+- Keine neuen Symcon-Objekte/Timer, keine Veraenderung an A7/A8/S1/LCN-Regelung oder vorhandenen SMART-FBH-Lernmodellen. Neue Offline-Simulationen fuer alte Konfigurationswerte, Sensor-Gueltigkeit und Relais-Timer.
+- Reale Shelly-/LCN-Verdrahtung und Kondensationsfreiheit sind nicht per Softwaretest nachweisbar.
+
 ## 0.2.10
 - Konfigurationsdiagnose mit exaktem Raum und Instanz-/Variablen-IDs statt generischer Fehlermeldung.
 - Fail-Closed bei Bedienung und zusätzlich beim Worker geprüft; Konfigurationsfehler werden ohne Fatal-Popup im HTML-SDK angezeigt.
