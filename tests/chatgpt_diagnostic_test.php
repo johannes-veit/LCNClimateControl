@@ -28,6 +28,7 @@ class DiagnosticProbe {
     public array $errors=[];
     public bool $throwOnFallback = false;
     public bool $manualApproval = false;
+    public int $safetyVar = 0;
     public array $verified = [];
     private function GetMode():int{return $this->mode;}
     private function GetRuntimeRooms():array{return [
@@ -50,7 +51,9 @@ class DiagnosticProbe {
     private function GetCurrentJob():?array{return null;}
     private function GetQueue():array{return [];}
     private function IsBusy():bool{return $this->busy;}
-    private function ReadPropertyInteger(string $name):int{return 0;}
+    private function ReadPropertyInteger(string $name):int{
+        return $name==='CoolingSafetyVariable' ? $this->safetyVar : 0;
+    }
     private function ReadPropertyBoolean(string $name):bool{
         return $name==='ManualCoolingApproval' && $this->manualApproval;
     }
@@ -98,6 +101,17 @@ $text = $p->BuildChatGPTDiagnosticReport();
 ensure(str_contains($text,'manuelle Freigabe konfiguriert'),
     'manual software approval is accurately reported without implying physical mode');
 $p->manualApproval = false;
+$p->safetyVar = 102;
+$text = $p->BuildChatGPTDiagnosticReport();
+ensure(str_contains($text,'Software-Kuehlfreigabe: Boolean #102 = TRUE'),
+    'valid external Boolean is reported TRUE');
+$p->safetyVar = 400;
+$GLOBALS['feedback'][400] = ['VariableType'=>2,'VariableUpdated'=>time(),
+    'Value'=>1.0];
+$text = $p->BuildChatGPTDiagnosticReport();
+ensure(str_contains($text,'Boolean #400 = UNGUELTIGER TYP'),
+    'a FLOAT must never be presented as a valid external Boolean');
+$p->safetyVar = 0;
 $p->verified=[100=>true, 200=>true];
 $text = $p->BuildChatGPTDiagnosticReport();
 ensure(str_contains($text,'S1-Einzeltests bestanden: 2') &&
