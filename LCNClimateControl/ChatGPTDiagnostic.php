@@ -110,8 +110,13 @@ trait LCNClimateChatGPTDiagnostic
         if ($safeVar > 0) {
             $safeLabel = 'Boolean #' . $safeVar . ' = ';
             try {
-                $safeLabel .= IPS_VariableExists($safeVar)
-                    ? ((bool) GetValue($safeVar) ? 'TRUE' : 'FALSE') : 'FEHLT';
+                if (!IPS_VariableExists($safeVar)) {
+                    $safeLabel .= 'FEHLT';
+                } elseif ((int) (IPS_GetVariable($safeVar)['VariableType'] ?? -1) !== VARIABLETYPE_BOOLEAN) {
+                    $safeLabel .= 'UNGUELTIGER TYP (Boolean erforderlich)';
+                } else {
+                    $safeLabel .= (bool) GetValue($safeVar) ? 'TRUE' : 'FALSE';
+                }
             } catch (Throwable) {
                 $safeLabel .= 'nicht lesbar';
             }
