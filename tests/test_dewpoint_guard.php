@@ -104,6 +104,8 @@ final class EwtSimulation
     public bool $ignoreCommands = false;
     public bool $ignoreNextCommand = false;
     public bool $failNextStatusRead = false;
+    public bool $reportAutoOffLease = true;
+    public bool $offHasUnexpectedTimer = false;
 
     public function ReadPropertyBoolean(string $key): bool { return (bool) ($this->p[$key] ?? false); }
     public function ReadPropertyInteger(string $key): int { return (int) ($this->p[$key] ?? 0); }
@@ -134,12 +136,23 @@ final class EwtSimulation
                 $this->failNextStatusRead = false;
                 throw new RuntimeException('simuliert: Switch.GetStatus voruebergehend nicht lesbar');
             }
-            return ['output'=>$this->remoteOn];
+            $status = ['output'=>$this->remoteOn];
+            if ($this->remoteOn && $this->reportAutoOffLease) {
+                $status += ['timer_type'=>'toggle_after', 'timer_started_at'=>time(),
+                            'timer_duration'=>40];
+            } elseif (!$this->remoteOn && $this->offHasUnexpectedTimer) {
+                $status += ['timer_type'=>'auto_on', 'timer_started_at'=>time(),
+                            'timer_duration'=>20];
+            }
+            return $status;
         }
         if ($method === 'Switch.Set') {
             $before = $this->remoteOn;
             if ($this->ignoreNextCommand) $this->ignoreNextCommand = false;
-            elseif (!$this->ignoreCommands) $this->remoteOn = $params['on'] === 'true';
+            elseif (!$this->ignoreCommands) {
+                $this->remoteOn = $params['on'] === 'true';
+                if (!$this->remoteOn) $this->offHasUnexpectedTimer = false;
+            }
             return ['was_on'=>$before];
         }
         throw new RuntimeException('unbekannter RPC-Aufruf');
@@ -150,39 +163,35 @@ check($sim->snapshot()['ok'] === true, 'LCN humidity IDs mapped without manual c
 check($sim->snapshot()['room'] === 'EG Bad', 'highest of all room dewpoints selected');
 $dew = $sim->snapshot()['dew'];
 
-// External 5-min polling provides fresher humidity data, enabling a
-// strict 6-h max without loosening any other dew point safety condition.
+// 15-minute RH polling: an actual sensor update must be within 30 min.
+// Legacy settings are capped, no old 6-h value can authorize cooling.
 $clock = time();
-$GLOBALS['ewt_data'][53361]['at'] = $clock - 300; // nominal 5-min poll
-check($sim->snapshot()['ok'] === true,
-    'humidity last updated 5 minutes ago remains valid');
-foreach ([900, 43200, 90000, 21600] as $savedAgeSetting) {
+$GLOBALS['ewt_data'][53361]['at'] = $clock - 300;
+check($sim->snapshot()['ok'] === true, 'RH updated 5 min ago is valid');
+foreach ([900, 1800, 3600, 43200, 90000, 21600] as $savedAgeSetting) {
     $sim->p['DewPointMaxAgeSeconds'] = $savedAgeSetting;
-    $GLOBALS['ewt_data'][53361]['at'] = $clock - 21590;
+    $GLOBALS['ewt_data'][53361]['at'] = $clock - 1790;
     check($sim->snapshot()['ok'] === true,
-        'humidity just under 6 h stays valid with stored setting ' . $savedAgeSetting);
-    $GLOBALS['ewt_data'][53361]['at'] = $clock - 21601;
+        'RH under 30 min valid with stored setting ' . $savedAgeSetting);
+    $GLOBALS['ewt_data'][53361]['at'] = $clock - 1801;
     $stale = $sim->snapshot();
     check($stale['ok'] === false,
-        'humidity more than 6 h old blocks with stored setting ' . $savedAgeSetting);
+        'RH over 30 min blocks with stored setting ' . $savedAgeSetting);
     check(str_contains($stale['reason'], 'EG Bad')
         && str_contains($stale['reason'], 'Luftfeuchte (#53361)')
-        && str_contains($stale['reason'], '6.0 h'),
-        'stale humidity details include sensor and 6-h limit');
+        && str_contains($stale['reason'], '0.5 h'),
+        'stale RH report names failing sensor and 30-min limit');
 }
-// The previously accepted 20h33m reading must now be rejected.
-$sim->p['DewPointMaxAgeSeconds'] = 90000;
+// An explicitly stricter setting must never be relaxed to 30 min.
+$sim->p['DewPointMaxAgeSeconds'] = 600;
+$GLOBALS['ewt_data'][53361]['at'] = $clock - 590;
+check($sim->snapshot()['ok'] === true, 'explicit 10-min RH limit remains valid');
+$GLOBALS['ewt_data'][53361]['at'] = $clock - 610;
+check($sim->snapshot()['ok'] === false, 'explicit 10-min RH limit rejects stale data');
+$sim->p['DewPointMaxAgeSeconds'] = 21600;
 $GLOBALS['ewt_data'][53361]['at'] = $clock - 1233 * 60;
 check($sim->snapshot()['ok'] === false,
-    'previously accepted 20h33m RH reading cannot bypass new 6h cap');
-$sim->p['DewPointMaxAgeSeconds'] = 3600; // explicit 1-h custom limit
-$GLOBALS['ewt_data'][53361]['at'] = $clock - 3601;
-check($sim->snapshot()['ok'] === false,
-    'explicit shorter custom age limit is preserved');
-$GLOBALS['ewt_data'][53361]['at'] = $clock - 3590;
-check($sim->snapshot()['ok'] === true,
-    'explicit shorter custom age limit still permits valid sensor');
-$sim->p['DewPointMaxAgeSeconds'] = 90000;
+    'previously accepted 20h33min RH reading cannot pass 30-min protection');
 $GLOBALS['ewt_data'][53361]['at'] = time();
 $GLOBALS['ewt_data'][12812]['at'] = time() - 7201;
 $oldTemp = $sim->snapshot();
@@ -323,12 +332,12 @@ check(str_contains($sim->values['DewPointGuardStatus'], 'FBH-Fühler 101')
     && str_contains($sim->values['DewPointGuardStatus'], '0.2 h'),
     'stale T101 status exposes precise 15-minute limit');
 $GLOBALS['ewt_data'][20510]['at'] = time();
+$GLOBALS['ewt_data'][53361]['at'] = time() - 1790;
+check($sim->snapshot()['ok'] === true, 'humidity under 30-minute limit remains valid');
+$GLOBALS['ewt_data'][53361]['at'] = time() - 1801;
+check($sim->snapshot()['ok'] === false, 'humidity above 30-minute limit is stale');
 $GLOBALS['ewt_data'][53361]['at'] = time() - 3600;
-check($sim->snapshot()['ok'] === true, 'unchanged LCN humidity valid at one hour');
-$GLOBALS['ewt_data'][53361]['at'] = time() - 21599;
-check($sim->snapshot()['ok'] === true, 'humidity under 6-hour limit remains valid');
-$GLOBALS['ewt_data'][53361]['at'] = time() - 21601;
-check($sim->snapshot()['ok'] === false, 'humidity above 6-hour limit is stale');
+check($sim->snapshot()['ok'] === false, 'one-hour humidity must not allow pump');
 $GLOBALS['ewt_data'][53361]['at'] = time();
 
 // Simulate a long Symcon timer pause: previous stability must not
@@ -352,8 +361,9 @@ $sim->ignoreCommands = true;
 $sim->rpcCalls = [];
 $sim->DewPointGuardTick();
 check($sim->attr['DewPointGuardState'] === 'UNKNOWN', 'ignored command is not confirmed');
-check(count(array_filter($sim->rpcCalls, fn($x) => $x[0] === 'Switch.Set')) === 2,
-    'wrong readback triggers exactly one retry');
+check(count(array_filter($sim->rpcCalls,
+    fn($x) => $x[0] === 'Switch.Set' && $x[1]['on'] === 'true')) === 2,
+    'wrong readback triggers one ON retry; then emergency OFF');
 
 // Transient lost first command: second attempt succeeds automatically.
 $sim->ignoreCommands = false;
@@ -366,6 +376,28 @@ check($sim->remoteOn && $sim->attr['DewPointGuardState'] === 'ON', 'single faile
 check(count(array_filter($sim->rpcCalls, fn($x) => $x[0] === 'Switch.Set')) === 2,
     'one retry and then confirmed');
 
+// Missing Shelly auto-OFF proof: even a successful ON output must be
+// switched back OFF, rather than left powered indefinitely.
+$missingLease = new EwtSimulation();
+$missingLease->reportAutoOffLease = false;
+$missingLease->attr['DewPointGuardSafeSince'] = time() - 121;
+$missingLease->attr['DewPointGuardLastRenew'] = time();
+$missingLease->DewPointGuardTick();
+check(!$missingLease->remoteOn, 'ON without confirmed 40-s Shelly timer is stopped');
+check($missingLease->attr['DewPointGuardState'] === 'UNKNOWN',
+    'unconfirmed timer never produces authorized ON status');
+check(count(array_filter($missingLease->rpcCalls,
+    fn($x) => $x[0] === 'Switch.Set' && $x[1]['on'] === 'false')) >= 1,
+    'timer verification failure explicitly orders emergency OFF');
+// Even an OFF output may contain an active timer to toggle back ON.
+$offTimer = new EwtSimulation();
+$offTimer->offHasUnexpectedTimer = true;
+$offTimer->DewPointGuardTick();
+check(!$offTimer->remoteOn && !$offTimer->offHasUnexpectedTimer,
+    'pending auto-ON while OFF is canceled');
+check(count(array_filter($offTimer->rpcCalls,
+    fn($x) => $x[0] === 'Switch.Set' && $x[1]['on'] === 'false')) === 1,
+    'pending timer canceled with permanent OFF (no toggle_after)');
 // Unsafe sensors + missing status: still try OFF, and do not claim success.
 $sim->remoteOn = true;
 $sim->remoteOnline = false;
