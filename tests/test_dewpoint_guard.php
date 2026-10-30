@@ -163,8 +163,13 @@ $GLOBALS['ewt_data'][53361]['at'] = $clock - 90000;
 check($sim->snapshot()['ok'] === true,
     'humidity exactly 25 h old remains allowed');
 $GLOBALS['ewt_data'][53361]['at'] = $clock - 90001;
-check($sim->snapshot()['ok'] === false,
+$stale = $sim->snapshot();
+check($stale['ok'] === false,
     'humidity older than 25 h still blocks cooling pump');
+check(str_contains($stale['reason'], 'EG Bad')
+    && str_contains($stale['reason'], 'Luftfeuchte (#53361)')
+    && str_contains($stale['reason'], '25.0 h'),
+    'stale humidity status names room, original variable ID and 25-hour limit');
 $sim->p['DewPointMaxAgeSeconds'] = 90000; // new default
 $GLOBALS['ewt_data'][53361]['at'] = $clock - 86400;
 check($sim->snapshot()['ok'] === true,
@@ -175,11 +180,58 @@ check($sim->snapshot()['ok'] === false,
 $sim->p['DewPointMaxAgeSeconds'] = 43200;
 $GLOBALS['ewt_data'][53361]['at'] = time();
 $GLOBALS['ewt_data'][12812]['at'] = time() - 7201;
-check($sim->snapshot()['ok'] === false,
+$oldTemp = $sim->snapshot();
+check($oldTemp['ok'] === false,
     'room temperature remains limited to two hours');
+check(str_contains($oldTemp['reason'], 'Temperatur (#12812)')
+    && str_contains($oldTemp['reason'], '2.0 h'),
+    'stale temperature status names original variable and two-hour limit');
 $GLOBALS['ewt_data'][12812]['at'] = time();
 check($sim->snapshot()['ok'] === true,
     'fresh room temperature and humidity release sensor check');
+
+// The independent mode-contact timer must stay live. If its last
+// physical COOLING confirmation is stale, the EWT guard must not renew
+// its 40-s plug lease, even when the dew point and valves are safe.
+$sim->p['ModeSwitchSource'] = 1;
+$sim->attr['ModeSwitchBlocked'] = false;
+$sim->attr['ModeSwitchLastVerifiedAt'] = time() - 26;
+$sim->DewPointGuardTick();
+check($sim->attr['DewPointGuardState'] === 'COOLING_INTERLOCK',
+    '26-second old mode contact inhibits cooling pump even when sensors are safe');
+check(count($sim->rpcCalls) === 0 && !$sim->remoteOn,
+    'stale mode confirmation cannot trigger pump output commands');
+$sim->attr['ModeSwitchLastVerifiedAt'] = time() + 35;
+$sim->DewPointGuardTick();
+check($sim->attr['DewPointGuardState'] === 'COOLING_INTERLOCK',
+    'future-dated mode contact confirmation never authorizes cooling');
+$sim->attr['ModeSwitchLastVerifiedAt'] = time();
+$sim->DewPointGuardTick();
+check($sim->attr['DewPointGuardState'] === 'OFF'
+    && $sim->attr['DewPointGuardSafeSince'] > 0
+    && str_contains($sim->values['DewPointGuardStatus'], 'Wiederanlauf in'),
+    'fresh mode contact permits normal 120-second dew-point restart wait');
+$sim->p['ModeSwitchSource'] = 0; // remaining legacy pump test scenarios
+$sim->attr['DewPointGuardSafeSince'] = 0;
+$sim->attr['DewPointGuardLastRenew'] = 0;
+
+// When the physical cooling outlet returns power, Shelly could report
+// output ON by its own startup configuration or a manual app command.
+// Such an unleased ON must never bypass the 120-second safety interval.
+$sim->remoteOn = true;
+$sim->attr['DewPointGuardState'] = 'UNKNOWN';
+$sim->attr['DewPointGuardLastRenew'] = 0;
+$sim->DewPointGuardTick();
+check(!$sim->remoteOn && $sim->attr['DewPointGuardState'] === 'OFF',
+    'unexpected plug ON is switched OFF before any new pump permission');
+check(str_contains($sim->values['DewPointGuardStatus'], 'ungeplanter Pumpenstart abgeschaltet'),
+    'pump diagnostic names power-on/manual uncontrolled start');
+check(count(array_filter($sim->rpcCalls,
+    fn($x) => $x[0] === 'Switch.Set' && $x[1]['on'] === 'true')) === 0,
+    'unexpected pump output cannot obtain a new ON lease immediately');
+$sim->rpcCalls = [];
+$sim->attr['DewPointGuardSafeSince'] = 0;
+$sim->attr['DewPointGuardLastRenew'] = 0;
 
 // Initial output OFF: even with safe water, restart is only allowed
 // after 120 seconds of CONTINUOUS headroom.
@@ -201,6 +253,8 @@ check(str_contains($sim->values['DewPointGuardStatus'], 'EWT-WT nicht synchron')
 $GLOBALS['ewt_data'][23904]['at'] = time() - 901;
 $sim->DewPointGuardTick();
 check(str_contains($sim->values['DewPointGuardStatus'], 'T104 --'), 'old sensor omitted');
+check(str_contains($sim->values['DewPointGuardStatus'], 'T104 -- (15 min alt)'),
+    'stale optional EWT sensor shows its age instead of an unexplained dash');
 $GLOBALS['ewt_data'][23904]['at'] = time();
 
 check(count(array_filter($sim->rpcCalls, fn($x) => $x[0] === 'Switch.Set')) === 0,
@@ -242,6 +296,9 @@ check($sim->remoteOn, 'restart only after renewed stable interval');
 unset($GLOBALS['ewt_data'][53361]);
 $sim->DewPointGuardTick();
 check(!$sim->remoteOn, 'missing LCN humidity stops');
+check(str_contains($sim->values['DewPointGuardStatus'], 'Luftfeuchte (#53361)')
+    && str_contains($sim->values['DewPointGuardStatus'], 'Messvariable fehlt'),
+    'missing humidity reports the actual missing variable');
 $GLOBALS['ewt_data'][53361] = ['v'=>60.0,'at'=>time(),'t'=>VARIABLETYPE_FLOAT];
 $GLOBALS['ewt_data'][20510]['v'] = 19.0;
 $sim->DewPointGuardTick();
@@ -256,6 +313,10 @@ $GLOBALS['ewt_data'][20510]['v'] = 19.0;
 $GLOBALS['ewt_data'][20510]['at'] = time() - 901;
 $sim->DewPointGuardTick();
 check(!$sim->remoteOn, 'water value older than 15 min blocks start');
+check(str_contains($sim->values['DewPointGuardStatus'], 'FBH-Fühler 101')
+    && str_contains($sim->values['DewPointGuardStatus'], 'Kuehlwasser')
+    && str_contains($sim->values['DewPointGuardStatus'], '0.2 h'),
+    'stale T101 status exposes precise 15-minute limit');
 $GLOBALS['ewt_data'][20510]['at'] = time();
 $GLOBALS['ewt_data'][53361]['at'] = time() - 3600;
 check($sim->snapshot()['ok'] === true, 'unchanged LCN humidity valid at one hour');
@@ -430,6 +491,8 @@ $GLOBALS['ewt_data'][14561] = ['v'=>20.0, 'at'=>time(), 't'=>VARIABLETYPE_FLOAT]
 $GLOBALS['ewt_data'][23904] = ['v'=>15.0, 'at'=>time(), 't'=>VARIABLETYPE_FLOAT];
 $opt = new EwtSimulation();
 $opt->remoteOn = true;
+$opt->attr['DewPointGuardState'] = 'ON';
+$opt->attr['DewPointGuardLastRenew'] = time();
 $opt->DewPointGuardTick();
 check($opt->remoteOn, 'default OFF keeps original controller even if T102 is cold');
 check(!str_contains($opt->values['DewPointGuardStatus'], 'Zusatzregelung EIN'),
@@ -584,6 +647,8 @@ $deltaOk->p['DewPointEwtDeltaMaxK'] = 2.0;
 $GLOBALS['ewt_data'][12630]['v'] = 18.0;
 $GLOBALS['ewt_data'][23904]['v'] = 19.0;
 $deltaOk->remoteOn = true;
+$deltaOk->attr['DewPointGuardState'] = 'ON';
+$deltaOk->attr['DewPointGuardLastRenew'] = time();
 $deltaOk->attr['DewPointGuardLastRenew'] = time();
 $deltaOk->attr['DewPointEfficiencyRunSince'] = time()-1000;
 $deltaOk->DewPointGuardTick();
@@ -606,6 +671,8 @@ $deltaHigh->p['DewPointEfficiencyEnabled'] = true;
 $deltaHigh->p['DewPointEwtDeltaMinK'] = 0.2;
 $deltaHigh->p['DewPointEwtDeltaMaxK'] = 0.8;
 $deltaHigh->remoteOn = true;
+$deltaHigh->attr['DewPointGuardState'] = 'ON';
+$deltaHigh->attr['DewPointGuardLastRenew'] = time();
 $deltaHigh->attr['DewPointGuardLastRenew'] = time();
 $deltaHigh->attr['DewPointEfficiencyRunSince'] = time()-1000;
 $deltaHigh->attr['DewPointEfficiencyWeakSince'] = time()-301;
@@ -619,6 +686,8 @@ $invalid->p['DewPointEfficiencyEnabled'] = true;
 $invalid->p['DewPointEwtVLMinC'] = 25.0;
 $invalid->p['DewPointEwtVLMaxC'] = 15.0;
 $invalid->remoteOn = true;
+$invalid->attr['DewPointGuardState'] = 'ON';
+$invalid->attr['DewPointGuardLastRenew'] = time();
 $invalid->DewPointGuardTick();
 check($invalid->remoteOn && str_contains($invalid->values['DewPointGuardStatus'], 'ungueltige'),
     'invalid source band reports configuration error, original controller continues');
@@ -670,6 +739,8 @@ check(str_contains($readError->values['DewPointGuardStatus'], 'NICHT BESTAETIGT'
 $tsupply = new EwtSimulation();
 $tsupply->p['DewPointEfficiencyEnabled'] = true;
 $tsupply->remoteOn = true;
+$tsupply->attr['DewPointGuardState'] = 'ON';
+$tsupply->attr['DewPointGuardLastRenew'] = time();
 $tsupply->attr['DewPointEfficiencyPauseUntil'] = time()+600;
 $GLOBALS['ewt_data'][21409]['v'] = 12.0;
 $tsupply->DewPointGuardTick();
@@ -697,6 +768,7 @@ check(str_contains($interlock->values['DewPointGuardStatus'], 'KUEHLEN GESPERRT'
     'blocked cooling mode displays correct warning without pretending pump OFF');
 $interlock->remoteOnline = true;
 $interlock->attr['ModeSwitchBlocked'] = false;
+$interlock->attr['ModeSwitchLastVerifiedAt'] = time(); // explicit verified COOLING relay
 $interlock->DewPointGuardTick();
 check(count($interlock->rpcCalls) > 0,
     'after explicit mode authorization ordinary pump guard resumes');

@@ -97,6 +97,21 @@ trait LCNClimateModeSwitch
     }
 
     /**
+     * Shelly reports pending relay timers as timer_type and/or timer metadata.
+     * In this installation any timed HEIZEN output could later OPEN the
+     * contact and unexpectedly request KUEHLEN, so no timer is acceptable.
+     */
+    private function ModeSwitchHasPendingTimer(array $status): bool
+    {
+        if (isset($status['timer_type']) && $status['timer_type'] !== '') {
+            return true;
+        }
+        return isset($status['timer_started_at'], $status['timer_duration'])
+            && is_numeric($status['timer_duration'])
+            && (float) $status['timer_duration'] > 0;
+    }
+
+    /**
      * Always issue a permanent state command, with NO toggle_after parameter.
      * On HEIZEN ensure no old toggle_after timer is left from v0.5.16.
      */
@@ -111,8 +126,10 @@ trait LCNClimateModeSwitch
                 if ($status['output'] !== $on) {
                     throw new RuntimeException('Shelly-Ausgang weicht vom Sollzustand ab');
                 }
-                if ($on && ($status['timer_type'] ?? '') === 'toggle_after') {
-                    throw new RuntimeException('Shelly hat noch einen alten toggle_after-Auto-AUS-Timer');
+                if ($on && $this->ModeSwitchHasPendingTimer($status)) {
+                    throw new RuntimeException(
+                        'Shelly HEIZEN hat noch einen aktiven Zeitgeber ('
+                        . (string) ($status['timer_type'] ?? 'Timer') . ')');
                 }
                 return;
             } catch (Throwable $e) {
@@ -145,6 +162,7 @@ trait LCNClimateModeSwitch
             return;
         }
         $this->WriteAttributeBoolean('ModeSwitchBlocked', true);
+        $this->WriteAttributeInteger('ModeSwitchLastVerifiedAt', 0);
 
         if ($mode === self::MODE_HEATING) {
             try {
@@ -160,6 +178,7 @@ trait LCNClimateModeSwitch
         try {
             $this->ModeSwitchVerifyConfig();
             $this->ModeSwitchSetAndVerify(false);
+            $this->WriteAttributeInteger('ModeSwitchLastVerifiedAt', time());
             $this->WriteAttributeBoolean('ModeSwitchBlocked', false);
             $this->ModeSwitchReport('KUEHLEN – Shelly AUS (Kontakt offen), bestaetigt');
         } catch (Throwable $e) {
@@ -202,9 +221,14 @@ trait LCNClimateModeSwitch
                     if ($this->ModeSwitchReadOutput() !== false) {
                         throw new RuntimeException('Shelly-Kontakt nicht AUS: Kuehlstellung nicht bestaetigt');
                     }
+                    // This monotonic-freshness gate is consumed by the
+                    // separate 10-s EWT pump watchdog. A frozen or stopped
+                    // ModeSwitchTimer must never leave cooling permitted.
+                    $this->WriteAttributeInteger('ModeSwitchLastVerifiedAt', time());
                     $this->ModeSwitchReport('KUEHLEN – Shelly AUS (Kontakt offen), bestaetigt');
                 } catch (Throwable $e) {
                     $this->WriteAttributeBoolean('ModeSwitchBlocked', true);
+                    $this->WriteAttributeInteger('ModeSwitchLastVerifiedAt', 0);
                     $heat = $this->ModeSwitchTryHeat();
                     $this->ModeSwitchReport('FEHLER: Kuehlung gesperrt (' . $e->getMessage()
                         . '); HEIZEN ' . ($heat ? 'bestaetigt' : 'NICHT BESTAETIGT'));
@@ -215,9 +239,10 @@ trait LCNClimateModeSwitch
 
             // HEIZEN or blocked KUEHLEN: enforce the real physical heating
             // contact, and cancel any old v0.5.16 toggle_after watchdog.
+            $this->WriteAttributeInteger('ModeSwitchLastVerifiedAt', 0);
             try {
                 $state = $this->ModeSwitchReadStatus();
-                if ($state['output'] !== true || ($state['timer_type'] ?? '') === 'toggle_after') {
+                if ($state['output'] !== true || $this->ModeSwitchHasPendingTimer($state)) {
                     $this->ModeSwitchSetAndVerify(true);
                 }
                 $this->ModeSwitchReport($cooling

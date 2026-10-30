@@ -44,6 +44,8 @@ class ModeSwitchMock
     public function ReadPropertyBoolean(string $k): bool { return (bool)($this->props[$k] ?? false); }
     public function ReadAttributeBoolean(string $k): bool { return (bool)($this->attrs[$k] ?? false); }
     public function WriteAttributeBoolean(string $k, bool $v): void { $this->attrs[$k] = $v; }
+    public function WriteAttributeInteger(string $k, int $v): void { $this->attrs[$k] = $v; }
+    public function ReadAttributeInteger(string $k): int { return (int)($this->attrs[$k] ?? 0); }
     public function SetValueIfChanged(string $k, mixed $v): void { $this->values[$k] = $v; }
     public function SendDebug(string $k, string $msg, int $lvl): void {}
     private function GetMode(): int { return $this->mode; }
@@ -88,6 +90,8 @@ $m->props['ModeSwitchSource'] = 1;
 $m->mode = 0;
 $m->request(0);
 ok($m->relay && $m->mode === 0, 'HEIZEN closes I/O (Shelly ON)');
+ok($m->ReadAttributeInteger('ModeSwitchLastVerifiedAt') === 0,
+    'heating has no cached cooling authorization');
 $cmds = $m->commands();
 ok(count($cmds) === 1 && $cmds[0][1]['on'] === 'true'
     && !array_key_exists('toggle_after', $cmds[0][1]),
@@ -100,16 +104,23 @@ ok(count($m->commands()) === $before && $m->relay,
 $m->request(1);
 ok(!$m->relay && $m->mode === 1 && !$m->attrs['ModeSwitchBlocked'],
     'KUEHLEN opens I/O (Shelly OFF), unlocks separate pump guard');
+ok($m->ReadAttributeInteger('ModeSwitchLastVerifiedAt') >= time() - 1,
+    'cooling command stamps fresh physical contact verification');
 $cmds = $m->commands();
 ok(end($cmds)[1]['on'] === 'false'
     && !array_key_exists('toggle_after', end($cmds)[1]),
     'cooling OFF is likewise permanent, not time-limited');
 $before = count($cmds);
+$m->WriteAttributeInteger('ModeSwitchLastVerifiedAt', time() - 20);
 $m->ModeSwitchTick();
 ok(!$m->relay && count($m->commands()) === $before,
     'cooling watchdog reads OFF and never toggles it itself');
+ok($m->ReadAttributeInteger('ModeSwitchLastVerifiedAt') >= time() - 1,
+    'cooling watchdog refreshes the separate pump permission timestamp');
 $m->request(0);
 ok($m->relay && $m->mode === 0, 'HEIZEN again forces relay ON');
+ok($m->ReadAttributeInteger('ModeSwitchLastVerifiedAt') === 0,
+    'heating transition instantly removes previously cached cooling permission');
 
 $m->relay = false; // accidental APP or secondary controller change
 $m->ModeSwitchTick();
@@ -126,6 +137,20 @@ try { $m->request(0); ok(false, 'uncancellable old auto-OFF must be rejected'); 
 catch (RuntimeException $e) {}
 ok(str_contains($m->values['ModeSwitchStatus'], 'nicht bestaetigt'),
     'old auto-OFF lease failure is diagnosed instead of claiming heating');
+$m->cancelTimerOnSet = true;
+$m->timer = null;
+
+// A Shelly may also keep an auto_off timer from an older device setting.
+$m->timer = 'auto_off';
+$m->ModeSwitchTick();
+ok($m->timer === null && $m->relay,
+    'any active auto_off timer in HEIZEN is cleared before it can open I/O');
+$m->timer = 'auto_off';
+$m->cancelTimerOnSet = false;
+try { $m->request(0); ok(false, 'uncancellable auto_off must be rejected'); }
+catch (RuntimeException $e) {}
+ok(str_contains($m->values['ModeSwitchStatus'], 'nicht bestaetigt'),
+    'uncancellable automatic timer is diagnosed instead of claiming HEIZEN');
 $m->cancelTimerOnSet = true;
 $m->timer = null;
 
@@ -192,6 +217,8 @@ $bad->runtimeSafe = false;
 $bad->ModeSwitchTick();
 ok($bad->relay && $bad->attrs['ModeSwitchBlocked'],
     'cooling protection failure switches physical plant back to heating ON');
+ok($bad->ReadAttributeInteger('ModeSwitchLastVerifiedAt') === 0,
+    'cooling safety failure revokes last confirmed physical contact timestamp');
 $bad->runtimeSafe = true;
 $bad->readiness = true;
 $before = count($bad->commands());

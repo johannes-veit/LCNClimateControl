@@ -147,6 +147,9 @@ class LCNClimateControl extends IPSModuleStrict
         $this->RegisterAttributeString('ThermalLearningState', '{}');
         $this->RegisterAttributeString('DewPointGuardState', 'UNKNOWN');
         $this->RegisterAttributeBoolean('ModeSwitchBlocked', true);
+        // Private runtime attribute only: pump may run only after a fresh
+        // confirmed COOLING contact (not an old cached permission).
+        $this->RegisterAttributeInteger('ModeSwitchLastVerifiedAt', 0);
         $this->RegisterAttributeInteger('DewPointGuardLastStop', 0);
         $this->RegisterAttributeInteger('DewPointGuardSafeSince', 0);
         $this->RegisterAttributeInteger('DewPointGuardLastRenew', 0);
@@ -219,6 +222,12 @@ class LCNClimateControl extends IPSModuleStrict
         // Re-read edited limits immediately; no old 15-minute pause or
         // temperature observation survives a module configuration change.
         $this->DewPointEfficiencyReset();
+        // Module restart/update invalidates a former EWT pump lease.
+        // Do not trust a physically ON plug without a fresh controller
+        // authorization: otherwise it could bypass the 120-s safety wait.
+        $this->WriteAttributeString('DewPointGuardState', 'UNKNOWN');
+        $this->WriteAttributeInteger('DewPointGuardLastRenew', 0);
+        $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
         $this->SetTimerInterval('DewPointGuardTimer',
             $this->ReadPropertyBoolean('DewPointAutoPumpEnabled') ? 10000 : 0);
         // Existing installations stay on the manual wall switch.
@@ -226,6 +235,7 @@ class LCNClimateControl extends IPSModuleStrict
         // earlier cooling authorization; a new explicit KUEHLEN request
         // is required before Shelly may open its contact (output OFF).
         $this->WriteAttributeBoolean('ModeSwitchBlocked', true);
+        $this->WriteAttributeInteger('ModeSwitchLastVerifiedAt', 0);
         $this->SetTimerInterval('ModeSwitchTimer',
             $this->ModeSwitchIsShelly() ? 10000 : 0);
         // Same two existing timers for passive learning OR isolated read-only
@@ -795,9 +805,9 @@ class LCNClimateControl extends IPSModuleStrict
             return;
         }
 
-        // Switch the REAL plant contact first. Do not advertise KUEHLEN in
-        // Symcon or issue LCN cooling jobs without a verified Shelly ON.
-        // A failed HEIZEN/OFF similarly keeps the old mode until resolved.
+        // Switch the REAL plant contact first: KUEHLEN requires verified
+        // Shelly OFF (contact open), HEIZEN verified Shelly ON (contact closed).
+        // The Symcon mode changes only after the physical relay is confirmed.
         $this->ModeSwitchSelect($Mode);
         $rooms = $this->GetRuntimeRooms();
         $this->ClearPendingMode();

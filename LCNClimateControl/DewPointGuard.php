@@ -103,6 +103,38 @@ trait LCNClimateDewPointGuard
     }
 
     /**
+     * Explain why a REQUIRED temperature/humidity reading is invalid.
+     * Diagnostic only: never bypass the strict freshness/range validation.
+     */
+    private function DewPointInvalidSensorReason(int $id, string $label, int $maxAge): string
+    {
+        $prefix = $label . ' (#' . $id . ')';
+        if ($id <= 0 || !IPS_VariableExists($id)) {
+            return $prefix . ': Messvariable fehlt';
+        }
+        try {
+            $meta = IPS_GetVariable($id);
+            if (!in_array((int) ($meta['VariableType'] ?? -1),
+                [VARIABLETYPE_INTEGER, VARIABLETYPE_FLOAT], true)) {
+                return $prefix . ': ungueltiger Variablentyp';
+            }
+            $at = (int) ($meta['VariableUpdated'] ?? 0);
+            $now = time();
+            if ($at <= 0 || $at > $now + 30) {
+                return $prefix . ': ungueltiger Zeitstempel';
+            }
+            $age = $now - $at;
+            if ($age > $maxAge) {
+                return sprintf('%s: letzter Messwert %.1f h alt (maximal %.1f h)',
+                    $prefix, $age / 3600, $maxAge / 3600);
+            }
+            return $prefix . ': Messwert ungueltig oder ausserhalb Messbereich';
+        } catch (Throwable) {
+            return $prefix . ': Messvariable nicht lesbar';
+        }
+    }
+
+    /**
      * Cooling pump is useful only when at least one NC floor valve is
      * electrically confirmed OPEN. A selected room alone is not proof:
      * the native LCN relay feedback must agree with the stored cooling state.
@@ -160,7 +192,8 @@ trait LCNClimateDewPointGuard
         $waterID = (int) $this->ReadPropertyInteger('DewPointWaterVariable');
         $water = $this->DewPointFreshValue($waterID, 0, 55, 900);
         if ($water === null) {
-            return ['ok' => false, 'reason' => 'FBH-Fühler 101 (#' . $waterID . ') fehlt oder ist veraltet'];
+            return ['ok' => false, 'reason' => 'FBH-Fühler 101: '
+                . $this->DewPointInvalidSensorReason($waterID, 'Kuehlwasser', 900)];
         }
         $maximum = null;
         $criticalRoom = '';
@@ -198,8 +231,16 @@ trait LCNClimateDewPointGuard
             $temperature = $this->DewPointFreshValue($tempID, -10, 45, 7200);
             $humidity = $this->DewPointFreshValue($rhID, 1, 100, $humidityMaxAge);
             if ($temperature === null || $humidity === null) {
-                return ['ok' => false, 'reason' => $name
-                    . ': Temperatur/Luftfeuchte ungueltig oder zu alt (T #' . $tempID . ', RH #' . $rhID . ')'];
+                $reasons = [];
+                if ($temperature === null) {
+                    $reasons[] = $this->DewPointInvalidSensorReason(
+                        $tempID, 'Temperatur', 7200);
+                }
+                if ($humidity === null) {
+                    $reasons[] = $this->DewPointInvalidSensorReason(
+                        $rhID, 'Luftfeuchte', $humidityMaxAge);
+                }
+                return ['ok' => false, 'reason' => $name . ': ' . implode('; ', $reasons)];
             }
             $dew = LCNClimateDewPointLogic::dewPoint($temperature, $humidity);
             if ($dew === null) {
@@ -247,7 +288,18 @@ trait LCNClimateDewPointGuard
                 $valid[$number] = ['v' => $v, 'at' => $stamp];
                 $parts[] = sprintf('T%d %.2f °C', $number, $v);
             } catch (Throwable) {
-                $parts[] = 'T' . $number . ' --';
+                $age = '';
+                if ($id > 0 && IPS_VariableExists($id)) {
+                    try {
+                        $stamp = (int) (IPS_GetVariable($id)['VariableUpdated'] ?? 0);
+                        if ($stamp > 0 && $stamp <= $now && $now - $stamp > 900) {
+                            $age = ' (' . round(($now - $stamp) / 60) . ' min alt)';
+                        }
+                    } catch (Throwable) {
+                        // Diagnostic remains non-blocking.
+                    }
+                }
+                $parts[] = 'T' . $number . ' --' . $age;
             }
         }
         $deltas = [];
@@ -560,16 +612,25 @@ trait LCNClimateDewPointGuard
             // The 230-V socket feeding the pump plug is then unpowered;
             // do not issue ON/RPC commands or misreport it as a pump fault.
             // The independent 40-s pump lease expires without renewal.
-            if ($this->ReadPropertyInteger('ModeSwitchSource') === 1
-                && $this->ReadAttributeBoolean('ModeSwitchBlocked')) {
+            $modeSwitchFresh = true;
+            if ($this->ReadPropertyInteger('ModeSwitchSource') === 1) {
+                $verifiedAt = $this->ReadAttributeInteger('ModeSwitchLastVerifiedAt');
+                // 10-s physical-mode watchdog: tolerate short scheduling jitter
+                // but do not accept an indefinitely old cooling confirmation.
+                $modeSwitchFresh = !$this->ReadAttributeBoolean('ModeSwitchBlocked')
+                    && $verifiedAt > 0 && $verifiedAt <= time()
+                    && time() - $verifiedAt <= 25;
+            }
+            if (!$modeSwitchFresh) {
                 $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
                 $this->WriteAttributeInteger('DewPointGuardLastRenew', 0);
                 $this->DewPointEfficiencyReset();
                 $this->WriteAttributeString('DewPointGuardState', 'COOLING_INTERLOCK');
                 $this->WriteAttributeString('DewPointGuardNotifyState', 'COOLING_INTERLOCK');
                 $this->SetValueIfChanged('DewPointGuardStatus',
-                    'KUEHLEN GESPERRT – Betriebsarten-Shelly ohne bestaetigte Freigabe'
-                    . ' (EWT-Pumpen-Plug stromlos erwartet; Ausgang NICHT bestaetigt).');
+                    'KUEHLEN GESPERRT – Betriebsarten-Shelly: Kontaktfreigabe gesperrt'
+                    . ' oder letzte Bestaetigung aelter als 25 s'
+                    . ' (EWT-Pumpen-Plug moeglicherweise stromlos; keine neue Pumpenfreigabe).');
                 return;
             }
             $snapshot = $this->DewPointGuardSnapshot();
@@ -594,6 +655,19 @@ trait LCNClimateDewPointGuard
 
                 $now = time();
                 $lastCheck = $this->ReadAttributeInteger('DewPointGuardLastRenew');
+                // A physical ON is not proof that *this module* authorized
+                // the pump. The plug may have restored ON after its socket
+                // received power, or someone may have switched it in the app.
+                // Without a recent, confirmed ON lease the 120-s stable
+                // restart period must not be bypassed.
+                $previouslyAuthorizedOn = $this->ReadAttributeString('DewPointGuardState') === 'ON'
+                    && $lastCheck > 0 && $lastCheck <= $now && $now - $lastCheck <= 35;
+                $unexpectedPumpOn = $wasOn && !$previouslyAuthorizedOn;
+                if ($unexpectedPumpOn) {
+                    $this->DewPointCommandAndVerify(false);
+                    $wasOn = false;
+                    $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
+                }
                 if ($lastCheck <= 0 || $now < $lastCheck || $now - $lastCheck > 35) {
                     // After Symcon restart, a long scheduling gap or lost
                     // communication, the 120-s stable period starts afresh.
@@ -673,6 +747,9 @@ trait LCNClimateDewPointGuard
                     $detail .= ' – ' . $openCircuits . ' Kuehlventil(e) offen';
                 }
                 $waitingText = $waiting ? (' – Wiederanlauf in ' . $secondsLeft . ' s') : '';
+                if ($unexpectedPumpOn) {
+                    $waitingText .= ' – ungeplanter Pumpenstart abgeschaltet';
+                }
                 $this->SetValueIfChanged('DewPointGuardStatus',
                     $label . ' – bestaetigt' . $waitingText . ' – ' . $detail
                         . $this->DewPointThermalDiagnostic()
