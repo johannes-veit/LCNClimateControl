@@ -150,6 +150,37 @@ check($sim->snapshot()['ok'] === true, 'LCN humidity IDs mapped without manual c
 check($sim->snapshot()['room'] === 'EG Bad', 'highest of all room dewpoints selected');
 $dew = $sim->snapshot()['dew'];
 
+// LCN GUS Feuchte kann laenger als 12 h unveraendert bleiben.
+// Grenzfaelle fuer die neue maximal 25-stuendige Freigabe:
+$clock = time();
+$GLOBALS['ewt_data'][53361]['at'] = $clock - 1233 * 60; // 20 h 33 min (real installation)
+check($sim->snapshot()['ok'] === true,
+    '20 h 33 min old EG Bad humidity is valid with legacy 900-s setting');
+$sim->p['DewPointMaxAgeSeconds'] = 43200; // persisted old default, pre-update
+check($sim->snapshot()['ok'] === true,
+    'existing persisted 12-hour default is auto-upgraded to 25 h');
+$GLOBALS['ewt_data'][53361]['at'] = $clock - 90000;
+check($sim->snapshot()['ok'] === true,
+    'humidity exactly 25 h old remains allowed');
+$GLOBALS['ewt_data'][53361]['at'] = $clock - 90001;
+check($sim->snapshot()['ok'] === false,
+    'humidity older than 25 h still blocks cooling pump');
+$sim->p['DewPointMaxAgeSeconds'] = 90000; // new default
+$GLOBALS['ewt_data'][53361]['at'] = $clock - 86400;
+check($sim->snapshot()['ok'] === true,
+    'new default permits 24-hour-old humidity');
+$sim->p['DewPointMaxAgeSeconds'] = 21600; // nondefault manual shorter value
+check($sim->snapshot()['ok'] === false,
+    'explicitly configured shorter humidity limit remains protective');
+$sim->p['DewPointMaxAgeSeconds'] = 43200;
+$GLOBALS['ewt_data'][53361]['at'] = time();
+$GLOBALS['ewt_data'][12812]['at'] = time() - 7201;
+check($sim->snapshot()['ok'] === false,
+    'room temperature remains limited to two hours');
+$GLOBALS['ewt_data'][12812]['at'] = time();
+check($sim->snapshot()['ok'] === true,
+    'fresh room temperature and humidity release sensor check');
+
 // Initial output OFF: even with safe water, restart is only allowed
 // after 120 seconds of CONTINUOUS headroom.
 $sim->DewPointGuardTick();
@@ -229,7 +260,9 @@ $GLOBALS['ewt_data'][20510]['at'] = time();
 $GLOBALS['ewt_data'][53361]['at'] = time() - 3600;
 check($sim->snapshot()['ok'] === true, 'unchanged LCN humidity valid at one hour');
 $GLOBALS['ewt_data'][53361]['at'] = time() - 43201;
-check($sim->snapshot()['ok'] === false, 'humidity older than 12 hours is stale');
+check($sim->snapshot()['ok'] === true, 'humidity older than former 12-hour limit remains valid');
+$GLOBALS['ewt_data'][53361]['at'] = time() - 90001;
+check($sim->snapshot()['ok'] === false, 'humidity older than new 25-hour limit is stale');
 $GLOBALS['ewt_data'][53361]['at'] = time();
 
 // Simulate a long Symcon timer pause: previous stability must not
