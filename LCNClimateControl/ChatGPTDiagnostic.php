@@ -102,7 +102,11 @@ trait LCNClimateChatGPTDiagnostic
             && (bool) ($m11['lockCommandAccepted'] ?? false)
             && (bool) ($m11['releaseCommandAccepted'] ?? false);
         $safeVar = (int) $this->ReadPropertyInteger('CoolingSafetyVariable');
-        $safeLabel = 'NICHT KONFIGURIERT – KUEHLBETRIEB GESPERRT (Pflicht)';
+        $manual = $this->ReadPropertyBoolean('ManualCoolingApproval')
+            || $this->ReadPropertyInteger('ModeSwitchSource') === 1;
+        $safeLabel = $manual
+            ? 'keine externe Boolean – manuelle Freigabe konfiguriert (KUEHLEN erst nach expliziter Anforderung)'
+            : 'keine externe Boolean, manuelle Freigabe aus – KUEHLEN GESPERRT';
         if ($safeVar > 0) {
             $safeLabel = 'Boolean #' . $safeVar . ' = ';
             try {
@@ -129,7 +133,7 @@ trait LCNClimateChatGPTDiagnostic
                       . ' / ' . (string) ($currentJob['Type'] ?? 'Typ?')
                       . ' / ' . (string) ($currentJob['Phase'] ?? 'Phase?')
                     : ', kein aktueller Auftrag'),
-            'Externe Software-Kuehlfreigabe: ' . $safeLabel,
+            'Software-Kuehlfreigabe: ' . $safeLabel,
             'Ventile: NC, stromlos ZU, Relais EIN = Ventil bestromt (bestaetigt)',
             'S1TargetLock TRUE = GESPERRT, FALSE = FREIGEGEBEN.',
             'WICHTIG: "Regler-Sperrung erlaubt" in LCN-PRO ist nicht passiv auslesbar.',
@@ -139,6 +143,7 @@ trait LCNClimateChatGPTDiagnostic
         ];
 
         $ready = 0;
+        $technical = 0;
         $legacy = 0;
         $blocked = 0;
         $lockedCount = 0;
@@ -164,6 +169,7 @@ trait LCNClimateChatGPTDiagnostic
                 if ($roomRelayPassed) { $relayVerified++; }
                 $directReady = $this->UsesDirectCooling() && $mapping !== null
                     && $this->DirectCoolingLockActionID($room, $mapping) > 0;
+                if ($directReady) { $technical++; }
                 $isBlocked = $persisted === 'uncertain' || $fallbackKind === 'blocked'
                     || str_contains($eligibility, 'bereits gesperrt');
                 $m11VerifiedHere = $m11ActionPassed && $sender === 37617 && $target === 34107
@@ -174,11 +180,11 @@ trait LCNClimateChatGPTDiagnostic
                 if ($m11VerifiedHere) {
                     $provenRooms++;
                 }
-                $route = $isBlocked ? 'GESTOPPT/PRUEFEN'
+                $route = $isBlocked ? 'GESTOPPT/PRUEFEN (gespeicherter Sperr-/Blockadestatus)'
                     : ($persisted !== '' ? 'DIREKT / REGLER ' . strtoupper($persisted)
-                    : ($directReady ? ($m11VerifiedHere
-                        ? 'DIREKT VORBEREITET (M11-S1-Sperr-/Freigabetest BESTANDEN)'
-                        : 'DIREKT VORBEREITET (S1-Sperr-/Freigabetest noch ausstehend)')
+                    : ($directReady ? ($roomS1Passed
+                        ? 'DIREKT VORBEREITET (S1-EINZELTEST BESTANDEN)'
+                        : 'DIREKT VORBEREITET (S1-EINZELTEST AUSSTEHEND)')
                     : 'DIREKT NICHT BEREIT – ZUORDNUNG PRUEFEN'));
                 if ($isBlocked) {
                     $blocked++;
@@ -251,12 +257,14 @@ trait LCNClimateChatGPTDiagnostic
         }
         $lines[] = '';
         $lines[] = '--- ZUSAMMENFASSUNG ---';
-        $lines[] = 'Direkt technisch zugeordnet: ' . $ready
-            . '; S1-Sperr-/Freigabetest bestanden: ' . $provenRooms
-            . '; noch nicht erfolgreich getestet: ' . max(0, count($rooms) - $provenRooms)
+        $lines[] = 'Direkt technisch zugeordnet: ' . $technical
+            . '; davon ohne gespeicherte Blockade: ' . $ready
+            . '; S1-Einzeltests bestanden: ' . $regulatorVerified
+            . '; S1-Einzeltests ausstehend: ' . max(0, count($rooms) - $regulatorVerified)
+            . '; separater M11-Test bestaetigt: ' . $provenRooms
             . '; alte Steuerung: ' . $legacy
-            . '; blockiert/Pruefung: ' . $blocked
-            . '; zuletzt als gesperrt gemeldet: ' . $lockedCount . '.';
+            . '; gespeicherte Blockaden/Pruefung: ' . $blocked
+            . '; aktuell als gesperrt gemeldet: ' . $lockedCount . '.';
         $lines[] = 'WICHTIG: Technisch vorbereitet bedeutet NICHT betriebsbereit. '
             . 'Bis zur Gesamtfreigabe keine Kuehlschaltung und KEIN A7/A8-Rueckfall.';
         $lastError = trim((string) $this->ReadAttributeString('LastError'));
@@ -267,8 +275,13 @@ trait LCNClimateChatGPTDiagnostic
             . '/11; Einzelrelais-Test: ' . $relayVerified . '/11.';
         $coolingGate = $this->CoolingCommissionReadinessErrors();
         $lines[] = 'KUEHLEN: ' . ($coolingGate === []
-            ? 'SOFTWARE-FREIGABEBEREIT (physische Abnahme vorausgesetzt)'
+            ? 'SOFTWARE-VORPRUEFUNG BESTANDEN (physische Abnahme vorausgesetzt)'
             : 'GESPERRT – ' . implode('; ', $coolingGate));
+        if ($blocked > 0) {
+            $lines[] = 'HINWEIS: ' . $blocked
+                . ' gespeicherte Blockade(n) – nicht durch erfolgreichen S1-Test automatisch geloescht;'
+                . ' vor Kuehlbetrieb Ursprungsfehler pruefen.';
+        }
         $lines[] = 'LCN-PRO Sperrerlaubnis und echte mechanische Ventilstellung: durch diese Diagnose NICHT bestaetigt.';
         $lines[] = '--- ENDE – kompletten Text an ChatGPT senden ---';
         return implode("\n", $lines);
