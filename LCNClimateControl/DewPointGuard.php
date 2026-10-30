@@ -103,6 +103,38 @@ trait LCNClimateDewPointGuard
     }
 
     /**
+     * Explain why a REQUIRED temperature/humidity reading is invalid.
+     * Diagnostic only: never bypass the strict freshness/range validation.
+     */
+    private function DewPointInvalidSensorReason(int $id, string $label, int $maxAge): string
+    {
+        $prefix = $label . ' (#' . $id . ')';
+        if ($id <= 0 || !IPS_VariableExists($id)) {
+            return $prefix . ': Messvariable fehlt';
+        }
+        try {
+            $meta = IPS_GetVariable($id);
+            if (!in_array((int) ($meta['VariableType'] ?? -1),
+                [VARIABLETYPE_INTEGER, VARIABLETYPE_FLOAT], true)) {
+                return $prefix . ': ungueltiger Variablentyp';
+            }
+            $at = (int) ($meta['VariableUpdated'] ?? 0);
+            $now = time();
+            if ($at <= 0 || $at > $now + 30) {
+                return $prefix . ': ungueltiger Zeitstempel';
+            }
+            $age = $now - $at;
+            if ($age > $maxAge) {
+                return sprintf('%s: letzter Messwert %.1f h alt (maximal %.1f h)',
+                    $prefix, $age / 3600, $maxAge / 3600);
+            }
+            return $prefix . ': Messwert ungueltig oder ausserhalb Messbereich';
+        } catch (Throwable) {
+            return $prefix . ': Messvariable nicht lesbar';
+        }
+    }
+
+    /**
      * Cooling pump is useful only when at least one NC floor valve is
      * electrically confirmed OPEN. A selected room alone is not proof:
      * the native LCN relay feedback must agree with the stored cooling state.
@@ -198,8 +230,16 @@ trait LCNClimateDewPointGuard
             $temperature = $this->DewPointFreshValue($tempID, -10, 45, 7200);
             $humidity = $this->DewPointFreshValue($rhID, 1, 100, $humidityMaxAge);
             if ($temperature === null || $humidity === null) {
-                return ['ok' => false, 'reason' => $name
-                    . ': Temperatur/Luftfeuchte ungueltig oder zu alt (T #' . $tempID . ', RH #' . $rhID . ')'];
+                $reasons = [];
+                if ($temperature === null) {
+                    $reasons[] = $this->DewPointInvalidSensorReason(
+                        $tempID, 'Temperatur', 7200);
+                }
+                if ($humidity === null) {
+                    $reasons[] = $this->DewPointInvalidSensorReason(
+                        $rhID, 'Luftfeuchte', $humidityMaxAge);
+                }
+                return ['ok' => false, 'reason' => $name . ': ' . implode('; ', $reasons)];
             }
             $dew = LCNClimateDewPointLogic::dewPoint($temperature, $humidity);
             if ($dew === null) {
