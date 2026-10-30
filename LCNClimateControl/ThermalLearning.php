@@ -31,6 +31,57 @@ final class LCNThermalLearningModel
             'quality_n' => $qualityN, 'long_mean' => round($longMean, 4)];
     }
 
+    /**
+     * Constant-size 60-minute rolling source average. Each 30-minute learner
+     * tick contributes at most one fresh, timestamped observation per sensor.
+     * Old or missing sensors never produce an invented mean.
+     */
+    public static function hydraulicRolling(array $previous, ?array $reading, int $now): array
+    {
+        $source = (int) ($reading['source'] ?? 0);
+        $value = $reading['value'] ?? null;
+        $at = (int) ($reading['updated'] ?? 0);
+        $valid = $source > 0 && is_numeric($value) && is_finite((float) $value)
+            && (float) $value >= -5 && (float) $value <= 65
+            && $at > 0 && $at <= $now && $now - $at <= 2700;
+        $points = [];
+        if ($valid && (int) ($previous['source'] ?? 0) === $source) {
+            foreach ((array) ($previous['points'] ?? []) as $point) {
+                if (!is_array($point) || count($point) !== 2
+                    || !is_numeric($point[0] ?? null) || !is_numeric($point[1] ?? null)) {
+                    continue;
+                }
+                $when = (int) $point[0];
+                $temp = (float) $point[1];
+                if ($when >= $now - 3600 && $when < $now
+                    && is_finite($temp) && $temp >= -5 && $temp <= 65) {
+                    $points[] = [$when, $temp];
+                }
+            }
+        }
+        if ($valid) {
+            $points[] = [$now, round((float) $value, 3)];
+        }
+        $points = array_slice($points, -4);
+        $n = count($points);
+        // At least two independent time slots, separated by at least 20 min.
+        // The 30-min sampling schedule generally supplies 2-3 points per hour.
+        $avg = $n >= 2 && $points[$n-1][0] - $points[0][0] >= 1200
+            ? round(array_sum(array_column($points, 1)) / $n, 3) : null;
+        return [
+            'source' => $valid ? $source : 0,
+            'updated' => $valid ? $at : 0,
+            'value' => $valid ? round((float) $value, 3) : null,
+            'mean60' => $avg, 'count' => $n, 'points' => $points
+        ];
+    }
+
+    private static function supplyBand(float $supply): string
+    {
+        return $supply < 26.0 ? 'supply_lt26'
+            : ($supply < 30.0 ? 'supply_26_30' : 'supply_ge30');
+    }
+
     private static function outdoorBand(?float $outdoor): string
     {
         if ($outdoor === null) {
@@ -184,7 +235,7 @@ final class LCNThermalLearningModel
             'rates', 'gradient_rates', 'weather_trend_rates', 'loss_proxy',
             'last_evidence_at', 'resets', 'rejected_stale', 'hidden_switches',
             'house_context_by_valve', 'source_temp_id', 'source_relay_id',
-            'source_audit'];
+            'source_audit', 'heating_by_supply', 'heating_drive', 'heating_spread'];
         $room = array_intersect_key($room, array_flip($allowed));
         $stat = static function ($value): array {
             if (!is_array($value) || !is_numeric($value['n'] ?? null)
@@ -220,7 +271,9 @@ final class LCNThermalLearningModel
                 'heating' => ['outside_rising', 'outside_falling'],
                 'passive_cooling' => ['outside_rising', 'outside_falling']
             ],
-            'afterheat_model' => ['gain' => null, 'delay_minutes' => null]
+            'afterheat_model' => ['gain' => null, 'delay_minutes' => null],
+            'heating_by_supply' => ['supply_lt26' => null,
+                'supply_26_30' => null, 'supply_ge30' => null]
         ];
         foreach ($statFamilies as $family => $kinds) {
             $saved = is_array($room[$family] ?? null) ? $room[$family] : [];
@@ -240,6 +293,11 @@ final class LCNThermalLearningModel
             if ($clean === []) { unset($room[$family]); }
             else { $room[$family] = $clean; }
         }
+        foreach (['heating_drive', 'heating_spread'] as $metric) {
+            $v = $stat($room[$metric] ?? null);
+            if ($v === []) { unset($room[$metric]); }
+            else { $room[$metric] = $v; }
+        }
         $loss = $stat($room['loss_proxy'] ?? null);
         if ($loss === []) { unset($room['loss_proxy']); }
         else { $room['loss_proxy'] = $loss; }
@@ -248,7 +306,8 @@ final class LCNThermalLearningModel
             if (!is_array($room[$field] ?? null)) { unset($room[$field]); continue; }
             $room[$field] = array_intersect_key($room[$field], array_flip([
                 'time','temp','target','valve','outside','temp_sample_at',
-                'valve_sample_at','valve_changed_at','outside_lag'
+                'valve_sample_at','valve_changed_at','outside_lag',
+                'supply60','return60'
             ]));
         }
         if (isset($room['afterheat'])) {
@@ -330,6 +389,10 @@ final class LCNThermalLearningModel
             && is_finite((float) $input['outside'])
             && (float) $input['outside'] >= -45 && (float) $input['outside'] <= 55
             ? (float) $input['outside'] : null;
+        $hydraulic = static function (mixed $v): ?float {
+            return is_numeric($v) && is_finite((float) $v)
+                && (float) $v >= -5 && (float) $v <= 65 ? (float) $v : null;
+        };
         $observation = [
             'time' => $time, 'temp' => $temp, 'target' => $target,
             'valve' => $valve, 'outside' => $outside,
@@ -337,7 +400,9 @@ final class LCNThermalLearningModel
             'valve_sample_at' => $valveSampleAt,
             'valve_changed_at' => $valveChangedAt,
             'outside_lag' => isset($input['outside_lag']) && is_numeric($input['outside_lag'])
-                ? (float) $input['outside_lag'] : null
+                ? (float) $input['outside_lag'] : null,
+            'supply60' => $hydraulic($input['supply60'] ?? null),
+            'return60' => $hydraulic($input['return60'] ?? null)
         ];
         $previous = $state['last'] ?? null;
         if (!is_array($previous)) {
@@ -421,6 +486,36 @@ final class LCNThermalLearningModel
                 // OFF does not yet mean passive cooling: the slab may still heat.
                 $residualHeat = !$valve && isset($state['afterheat']);
                 if ($valid && $freshEvidence && !$residualHeat) {
+                    // Hydraulic context is an additional observed correlation,
+                    // not a substitute for valid room/relay evidence. Legacy
+                    // room rates continue learning without water sensors.
+                    if ($valve) {
+                        $startSupply = $phase['supply60'] ?? null;
+                        $endSupply = $observation['supply60'];
+                        if (is_numeric($startSupply) && is_numeric($endSupply)
+                            && abs((float) $startSupply - (float) $endSupply) <= 3.0) {
+                            $supply = ((float) $startSupply + (float) $endSupply) / 2.0;
+                            $state['heating_by_supply'][self::supplyBand($supply)] = self::mean(
+                                (array) ($state['heating_by_supply'][self::supplyBand($supply)] ?? []),
+                                abs($rate));
+                            $drive = $supply - (($temp + (float) $phase['temp']) / 2.0);
+                            if ($drive >= 2.0 && $drive <= 35.0) {
+                                $state['heating_drive'] = self::mean(
+                                    (array) ($state['heating_drive'] ?? []), abs($rate) / $drive);
+                            }
+                            $startReturn = $phase['return60'] ?? null;
+                            $endReturn = $observation['return60'];
+                            if (is_numeric($startReturn) && is_numeric($endReturn)
+                                && abs((float) $startReturn - (float) $endReturn) <= 3.0) {
+                                $return = ((float) $startReturn + (float) $endReturn) / 2.0;
+                                $spread = $supply - $return;
+                                if ($spread >= 0 && $spread <= 15.0) {
+                                    $state['heating_spread'] = self::mean(
+                                        (array) ($state['heating_spread'] ?? []), $spread);
+                                }
+                            }
+                        }
+                    }
                     $band = self::outdoorBand($outside);
                     $state['rates'][$kind]['all'] = self::mean(
                         (array) ($state['rates'][$kind]['all'] ?? []), abs($rate));
@@ -472,12 +567,68 @@ final class LCNThermalLearningModel
 
 trait LCNClimateThermalLearning
 {
+    /**
+     * Read a genuine source VARIABLE, not the link object shown in the GUI.
+     * No LCN polls, no linked-property changes, no archive dependency.
+     */
+    private function ThermalReadHydraulicSource(int $link, int $now): ?array
+    {
+        try {
+            if ($link <= 0) { return null; }
+            $source = $link;
+            if (!IPS_VariableExists($source)) {
+                if (!function_exists('IPS_GetObject') || !function_exists('IPS_GetLink')
+                    || !function_exists('IPS_ObjectExists') || !IPS_ObjectExists($link)
+                    || (int) (IPS_GetObject($link)['ObjectType'] ?? -1) !== 6) {
+                    return null;
+                }
+                $source = (int) (IPS_GetLink($link)['TargetID'] ?? 0);
+            }
+            if ($source <= 0 || !IPS_VariableExists($source)) { return null; }
+            $meta = IPS_GetVariable($source);
+            $updated = (int) ($meta['VariableUpdated'] ?? 0);
+            $kind = (int) ($meta['VariableType'] ?? -1);
+            if (!in_array($kind, [1, 2], true) || $updated <= 0
+                || $updated > $now || $now - $updated > 2700) {
+                return null;
+            }
+            $value = GetValue($source);
+            if (!is_numeric($value) || !is_finite((float) $value)
+                || (float) $value < -5 || (float) $value > 65) {
+                return null;
+            }
+            return ['source' => $source, 'updated' => $updated, 'value' => (float) $value];
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    private function ThermalUpdateHydraulics(array $previous, int $now): array
+    {
+        $mapping = [
+            'supply' => 'ThermalHeatSupplyLink',
+            'return' => 'ThermalHeatReturnLink',
+            'fbh_after_wt' => 'ThermalFbhAfterExchangerLink',
+            'ewt_before_wt' => 'ThermalEwtBeforeExchangerLink',
+            'ewt_after_wt' => 'ThermalEwtAfterExchangerLink'
+        ];
+        $result = [];
+        foreach ($mapping as $channel => $property) {
+            $reading = $this->ThermalReadHydraulicSource(
+                (int) $this->ReadPropertyInteger($property), $now);
+            $result[$channel] = LCNThermalLearningModel::hydraulicRolling(
+                (array) ($previous[$channel] ?? []), $reading, $now);
+        }
+        return $result;
+    }
+
     /** The SAME compact and bounded persistence path in heating and pause. */
     private function WriteBoundedThermalLearningState(array $state): void
     {
         $state = array_intersect_key($state, array_flip([
             'schema', 'rooms', 'created_at', 'weather_history',
-            'last_tick_at', 'last_processed', 'last_eligible', 'paused_reason', 'last_exclusions'
+            'last_tick_at', 'last_processed', 'last_eligible', 'paused_reason', 'last_exclusions',
+            'hydraulics'
         ]));
         $rooms = (array) ($state['rooms'] ?? []);
         foreach ($rooms as &$roomState) {
@@ -485,6 +636,37 @@ trait LCNClimateThermalLearning
         }
         unset($roomState);
         $state['rooms'] = $rooms;
+        $channels = [];
+        foreach (['supply', 'return', 'fbh_after_wt',
+                  'ewt_before_wt', 'ewt_after_wt'] as $name) {
+            $saved = (array) ($state['hydraulics'][$name] ?? []);
+            $source = (int) ($saved['source'] ?? 0);
+            // Bound every series to the latest 60 minutes, 4 observations,
+            // with absolute source timestamps for traceable freshness.
+            $series = [];
+            foreach (array_slice((array) ($saved['points'] ?? []), -4) as $p) {
+                if (!is_array($p) || count($p) !== 2
+                    || !is_numeric($p[0] ?? null) || !is_numeric($p[1] ?? null)) { continue; }
+                $ts = (int) $p[0];
+                $v = (float) $p[1];
+                if ($ts >= time()-3600 && $ts <= time() && is_finite($v)
+                    && $v >= -5 && $v <= 65) {
+                    $series[] = [$ts, round($v, 3)];
+                }
+            }
+            $channels[$name] = [
+                'source' => max(0, $source),
+                'updated' => max(0, (int) ($saved['updated'] ?? 0)),
+                'value' => is_numeric($saved['value'] ?? null)
+                    && is_finite((float) $saved['value'])
+                    ? round((float) $saved['value'], 3) : null,
+                'mean60' => is_numeric($saved['mean60'] ?? null)
+                    && is_finite((float) $saved['mean60'])
+                    ? round((float) $saved['mean60'], 3) : null,
+                'count' => count($series), 'points' => $series
+            ];
+        }
+        $state['hydraulics'] = $channels;
         $state['weather_history'] = LCNThermalLearningModel::outdoorContext(
             (array) ($state['weather_history'] ?? []), time(), null)['points'];
         $allowedReasons = [
@@ -559,7 +741,7 @@ trait LCNClimateThermalLearning
             $state = array_intersect_key($state, array_flip([
                 'schema', 'rooms', 'created_at', 'weather_history',
                 'last_tick_at', 'last_processed', 'last_eligible', 'paused_reason',
-                'last_exclusions'
+                'last_exclusions', 'hydraulics'
             ]));
             $state['rooms'] = (array) ($state['rooms'] ?? []);
             // Keep the persistent model bounded even after years of room-ID changes.
@@ -603,9 +785,18 @@ trait LCNClimateThermalLearning
                 $state['weather_history'] = $weather['points'];
                 $laggedOutdoor = $weather['lag'];
             }
+            // The original 30-minute learning clock is reused: no new
+            // IPS variables, no extra timer, no bus traffic.
+            if (!$preflightOnly) {
+                $state['hydraulics'] = $this->ThermalUpdateHydraulics(
+                    (array) ($state['hydraulics'] ?? []), $now);
+            }
+            $supply60 = $state['hydraulics']['supply']['mean60'] ?? null;
+            $return60 = $state['hydraulics']['return']['mean60'] ?? null;
             $processed = 0;
             $eligible = 0;
-            $referenceID = $this->ReadPropertyInteger('ThermalReferenceRoomTarget');
+            $referenceID = $this->ReadPropertyBoolean('ThermalLearnAllRooms')
+                ? 0 : $this->ReadPropertyInteger('ThermalReferenceRoomTarget');
             $changes = [];
             $exclusions = [];
             foreach ($this->GetRooms() as $room) {
@@ -715,7 +906,8 @@ trait LCNClimateThermalLearning
                     'temp_sample_at' => (int) ($tMeta['VariableUpdated'] ?? 0),
                     'valve_sample_at' => (int) ($meta['VariableUpdated'] ?? 0),
                     'valve_changed_at' => (int) ($meta['VariableChanged'] ?? 0),
-                    'outside_lag' => $laggedOutdoor
+                    'outside_lag' => $laggedOutdoor,
+                    'supply60' => $supply60, 'return60' => $return60
                 ]);
                 ++$processed;
                 } catch (Throwable $roomError) {
@@ -771,7 +963,8 @@ trait LCNClimateThermalLearning
         $preflight = $this->ReadPropertyBoolean('ThermalSourcePreflightEnabled');
         $rawState = $this->ReadAttributeString('ThermalLearningState');
         $state = json_decode($rawState, true);
-        $referenceID = $this->ReadPropertyInteger('ThermalReferenceRoomTarget');
+        $referenceID = $this->ReadPropertyBoolean('ThermalLearnAllRooms')
+            ? 0 : $this->ReadPropertyInteger('ThermalReferenceRoomTarget');
         $lines = ['SMART-FBH – passives Lernen: ' . ($enabled ? 'AKTIV' : 'AUS')
             . ' | Datenquellen-Vorpruefung: ' . ($preflight ? 'AKTIV' : 'AUS'),
             'Keine LCN-Befehle, keine Sollwertänderung, keine automatische Optimierung.'];
@@ -841,8 +1034,9 @@ trait LCNClimateThermalLearning
             '=== SMART-FBH – LERN-DIAGNOSE AN CHATGPT ===',
             'Erstellt: ' . date('d.m.Y H:i:s', $now),
             'Symcon-Instanz: #' . $this->InstanceID,
-            'Referenz-Lernraum: ' . ($this->ReadPropertyInteger('ThermalReferenceRoomTarget') === 0
-                ? 'ALLE Räume' : 'S1 #' . $this->ReadPropertyInteger('ThermalReferenceRoomTarget') . ' (EG Bad: #21099)'),
+            'Referenz-Lernraum: ' . ($this->ReadPropertyBoolean('ThermalLearnAllRooms')
+                || $this->ReadPropertyInteger('ThermalReferenceRoomTarget') === 0
+                ? 'ALLE 11 Räume' : 'S1 #' . $this->ReadPropertyInteger('ThermalReferenceRoomTarget')),
             'Lernfunktion: ' . ($enabled ? 'AKTIV' : 'AUS (in der Modulkonfiguration aktivieren)'),
             'Quellen-Vorpruefung: ' . ($preflight ? 'AKTIV' : 'AUS')
                 . ' | 30-Minuten-Takt | NUR LESEN',
@@ -914,6 +1108,41 @@ trait LCNClimateThermalLearning
             }
         }
 
+        $lines[] = '--- HYDRAULIK (NUR LESEN, 60-MINUTEN-GLEITMITTEL) ---';
+        $hydraulic = (array) ($state['hydraulics'] ?? []);
+        $names = [
+            'supply' => ['FBH-Vorlauf (Heizungs-Vorlauf)', 'ThermalHeatSupplyLink'],
+            'return' => ['FBH-Ruecklauf vor Kuehl-WT (T103)', 'ThermalHeatReturnLink'],
+            'fbh_after_wt' => ['FBH nach Kuehl-WT (T101)', 'ThermalFbhAfterExchangerLink'],
+            'ewt_before_wt' => ['EWT vor Kuehl-WT (T100)', 'ThermalEwtBeforeExchangerLink'],
+            'ewt_after_wt' => ['EWT nach Kuehl-WT (T104)', 'ThermalEwtAfterExchangerLink']
+        ];
+        foreach ($names as $key => [$caption, $property]) {
+            $data = (array) ($hydraulic[$key] ?? []);
+            $raw = $data['value'] ?? null;
+            $avg = $data['mean60'] ?? null;
+            $age = ($data['updated'] ?? 0) > 0 ? $now - (int) $data['updated'] : null;
+            $fresh = $age !== null && $age >= 0 && $age <= 2700;
+            $ageText = $age === null ? 'keine aktuelle Quelle' : $age . ' s alt';
+            $lines[] = $caption . ' | Link #' . $this->ReadPropertyInteger($property)
+                . ' -> Quelle #' . (int) ($data['source'] ?? 0)
+                . ' | Ist ' . ($fresh && is_numeric($raw)
+                    ? number_format((float) $raw, 2, ',', '.') . ' °C' : '--')
+                . ' (' . $ageText . ') | 60-min-Mittel '
+                . ($fresh && is_numeric($avg)
+                    ? number_format((float) $avg, 2, ',', '.') . ' °C' : 'noch nicht verfuegbar')
+                . ' (' . (int) ($data['count'] ?? 0) . ' Stützpunkte)';
+        }
+        $supply = $hydraulic['supply']['mean60'] ?? null;
+        $return = $hydraulic['return']['mean60'] ?? null;
+        if (is_numeric($supply) && is_numeric($return)
+            && (int) ($hydraulic['supply']['updated'] ?? 0) > $now - 2700
+            && (int) ($hydraulic['return']['updated'] ?? 0) > $now - 2700) {
+            $lines[] = 'FBH-VL minus FBH-RL (jeweils 60-min-Mittel): '
+                . number_format((float) $supply - (float) $return, 2, ',', '.') . ' K';
+        }
+        $lines[] = 'T100/T104: EWT-Kuehlquelle, NICHT Heizungs-Vorlauf;'
+            . ' T101: nach Kuehl-WT, nicht als FBH-Heiz-Vorlauf verwendet.';
         $lines[] = '--- RAEUME (11 ERWARTET) ---';
         $configured = 0;
         $ready = 0;
@@ -1069,6 +1298,17 @@ trait LCNClimateThermalLearning
             $lines[] = '  Langzeitreferenz: Heizen ' . $longText($heat)
                 . ' | passiv Auskuehlen ' . $longText($cool)
                 . ' (getrennt vom gleitenden Kurzzeitwert)';
+            $bySupply = (array) ($saved['heating_by_supply'] ?? []);
+            $lines[] = '  Heizanstieg nach FBH-Vorlauf-60min: <26 °C '
+                . $describeRate((array) ($bySupply['supply_lt26'] ?? []), '°C/h')
+                . ' | 26-30 °C ' . $describeRate(
+                    (array) ($bySupply['supply_26_30'] ?? []), '°C/h')
+                . ' | >=30 °C ' . $describeRate(
+                    (array) ($bySupply['supply_ge30'] ?? []), '°C/h');
+            $lines[] = '  Heizen: Anstieg je K Vorlauf-Raum-Differenz '
+                . $describeRate((array) ($saved['heating_drive'] ?? []), '1/h')
+                . ' | FBH-VL minus FBH-RL '
+                . $describeRate((array) ($saved['heating_spread'] ?? []), 'K');
             $lines[] = '  Innen-Aussen-Differenz: ' . implode(' | ', $gradientDetail);
             $trend = (array) ($saved['weather_trend_rates'] ?? []);
             $loss = (array) ($saved['loss_proxy'] ?? []);
@@ -1095,8 +1335,9 @@ trait LCNClimateThermalLearning
             . $ready . ' | Räume mit >=3 Lernfenstern: ' . $withEvidence;
         $lines[] = 'Qualitaetsschutz: Passive Auskuehlfenster beginnen erst nach dem Estrich-Nachlauf; '
             . 'Lernraten benoetigen neuere Temperatur- UND Relaisstatusmessungen am Fensterende (max. 30 min alt).';
-        $lines[] = 'Ein gültiger Sensorwert bedeutet noch keinen gültigen Lernzyklus. '
-            . 'Sonneneinstrahlung, offene Türen und unbekannter Vorlauf können Lernwerte beeinflussen.';
+        $lines[] = 'Ein gueltiger Sensorwert bedeutet noch keinen gueltigen Lernzyklus. '
+            . 'Sonneneinstrahlung, offene Tueren und hydraulische Vermischung beeinflussen Lernwerte.'
+            . ' Vorlaufkontext nur bei stabilen 60-min-Mittelwerten, keine Wirkungskausalitaet.';
         $lines[] = 'Wettertrend ueber ca. 2h: nur bei >=1 K Aenderung; maximal sechs gemeinsame Wetterpunkte gespeichert. ';
         $lines[] = 'Innen-Aussen-Vergleich: Beobachtete Trends, keine kausale Heizlast oder Energiebedarf; '
             . 'Fenster nur bei Wetterveraenderung <=3 K, je Differenzklasse mindestens 3 Fenster.';
@@ -1107,7 +1348,8 @@ trait LCNClimateThermalLearning
             . 'Ein unveraenderter Wert ist kein Beleg fuer eine neue Meldung.';
         $lines[] = 'Datenquellen-Abnahme: Erst ab sechs getrennten Lernlaeufen klassifiziert; '
             . 'Quelle regelmaessig bedeutet NICHT verlaesslichen Heizwirkungsnachweis.';
-        $lines[] = 'Keine aktive Fußbodenkühlung angelernt; Abkühlen bedeutet passives Auskühlen bei Ventil AUS.';
+        $lines[] = 'Keine aktive Fußbodenkühlung angelernt; Abkühlen bedeutet passives Auskühlen bei Ventil AUS.'
+            . ' Hydraulik-Snapshots sind Beobachtungen und beeinflussen keine Schaltentscheidungen.';
         $lines[] = '--- ENDE – gesamten Bericht an ChatGPT senden ---';
         return implode("\n", $lines);
     }

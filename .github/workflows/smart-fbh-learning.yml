@@ -10,6 +10,9 @@ on:
       - 'tests/thermal_learning_five_years.php'
       - 'tests/thermal_learning_symcon_adapter.php'
       - 'tests/thermal_learning_source_cadence.php'
+      - 'tests/thermal_learning_hydraulics.php'
+      - 'LCNClimateControl/module.php'
+      - 'LCNClimateControl/form.json'
       - '.github/workflows/smart-fbh-learning.yml'
   workflow_dispatch:
 jobs:
@@ -30,6 +33,7 @@ jobs:
           php -l tests/thermal_learning_five_years.php
           php -l tests/thermal_learning_symcon_adapter.php
           php -l tests/thermal_learning_source_cadence.php
+          php -l tests/thermal_learning_hydraulics.php
       - name: Regression tests (no Symcon required)
         run: php tests/thermal_learning_quality.php
       - name: Five-year simulation (11 rooms, constant storage)
@@ -38,3 +42,5 @@ jobs:
         run: php tests/thermal_learning_symcon_adapter.php
       - name: 48h relay source cadence and requalification
         run: php tests/thermal_learning_source_cadence.php
+      - name: 11-room 60-minute FBH supply/return context test
+        run: php tests/thermal_learning_hydraulics.php
