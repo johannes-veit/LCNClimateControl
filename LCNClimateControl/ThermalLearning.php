@@ -31,6 +31,57 @@ final class LCNThermalLearningModel
             'quality_n' => $qualityN, 'long_mean' => round($longMean, 4)];
     }
 
+    /**
+     * Constant-size 60-minute rolling source average. Each 30-minute learner
+     * tick contributes at most one fresh, timestamped observation per sensor.
+     * Old or missing sensors never produce an invented mean.
+     */
+    public static function hydraulicRolling(array $previous, ?array $reading, int $now): array
+    {
+        $source = (int) ($reading['source'] ?? 0);
+        $value = $reading['value'] ?? null;
+        $at = (int) ($reading['updated'] ?? 0);
+        $valid = $source > 0 && is_numeric($value) && is_finite((float) $value)
+            && (float) $value >= -5 && (float) $value <= 65
+            && $at > 0 && $at <= $now && $now - $at <= 2700;
+        $points = [];
+        if ($valid && (int) ($previous['source'] ?? 0) === $source) {
+            foreach ((array) ($previous['points'] ?? []) as $point) {
+                if (!is_array($point) || count($point) !== 2
+                    || !is_numeric($point[0] ?? null) || !is_numeric($point[1] ?? null)) {
+                    continue;
+                }
+                $when = (int) $point[0];
+                $temp = (float) $point[1];
+                if ($when >= $now - 3600 && $when < $now
+                    && is_finite($temp) && $temp >= -5 && $temp <= 65) {
+                    $points[] = [$when, $temp];
+                }
+            }
+        }
+        if ($valid) {
+            $points[] = [$now, round((float) $value, 3)];
+        }
+        $points = array_slice($points, -4);
+        $n = count($points);
+        // At least two independent time slots, separated by at least 20 min.
+        // The 30-min sampling schedule generally supplies 2-3 points per hour.
+        $avg = $n >= 2 && $points[$n-1][0] - $points[0][0] >= 1200
+            ? round(array_sum(array_column($points, 1)) / $n, 3) : null;
+        return [
+            'source' => $valid ? $source : 0,
+            'updated' => $valid ? $at : 0,
+            'value' => $valid ? round((float) $value, 3) : null,
+            'mean60' => $avg, 'count' => $n, 'points' => $points
+        ];
+    }
+
+    private static function supplyBand(float $supply): string
+    {
+        return $supply < 26.0 ? 'supply_lt26'
+            : ($supply < 30.0 ? 'supply_26_30' : 'supply_ge30');
+    }
+
     private static function outdoorBand(?float $outdoor): string
     {
         if ($outdoor === null) {
@@ -184,7 +235,7 @@ final class LCNThermalLearningModel
             'rates', 'gradient_rates', 'weather_trend_rates', 'loss_proxy',
             'last_evidence_at', 'resets', 'rejected_stale', 'hidden_switches',
             'house_context_by_valve', 'source_temp_id', 'source_relay_id',
-            'source_audit'];
+            'source_audit', 'heating_by_supply', 'heating_drive', 'heating_spread'];
         $room = array_intersect_key($room, array_flip($allowed));
         $stat = static function ($value): array {
             if (!is_array($value) || !is_numeric($value['n'] ?? null)
@@ -220,7 +271,9 @@ final class LCNThermalLearningModel
                 'heating' => ['outside_rising', 'outside_falling'],
                 'passive_cooling' => ['outside_rising', 'outside_falling']
             ],
-            'afterheat_model' => ['gain' => null, 'delay_minutes' => null]
+            'afterheat_model' => ['gain' => null, 'delay_minutes' => null],
+            'heating_by_supply' => ['supply_lt26' => null,
+                'supply_26_30' => null, 'supply_ge30' => null]
         ];
         foreach ($statFamilies as $family => $kinds) {
             $saved = is_array($room[$family] ?? null) ? $room[$family] : [];
@@ -240,6 +293,11 @@ final class LCNThermalLearningModel
             if ($clean === []) { unset($room[$family]); }
             else { $room[$family] = $clean; }
         }
+        foreach (['heating_drive', 'heating_spread'] as $metric) {
+            $v = $stat($room[$metric] ?? null);
+            if ($v === []) { unset($room[$metric]); }
+            else { $room[$metric] = $v; }
+        }
         $loss = $stat($room['loss_proxy'] ?? null);
         if ($loss === []) { unset($room['loss_proxy']); }
         else { $room['loss_proxy'] = $loss; }
@@ -248,7 +306,8 @@ final class LCNThermalLearningModel
             if (!is_array($room[$field] ?? null)) { unset($room[$field]); continue; }
             $room[$field] = array_intersect_key($room[$field], array_flip([
                 'time','temp','target','valve','outside','temp_sample_at',
-                'valve_sample_at','valve_changed_at','outside_lag'
+                'valve_sample_at','valve_changed_at','outside_lag',
+                'supply60','return60'
             ]));
         }
         if (isset($room['afterheat'])) {
@@ -330,6 +389,10 @@ final class LCNThermalLearningModel
             && is_finite((float) $input['outside'])
             && (float) $input['outside'] >= -45 && (float) $input['outside'] <= 55
             ? (float) $input['outside'] : null;
+        $hydraulic = static function (mixed $v): ?float {
+            return is_numeric($v) && is_finite((float) $v)
+                && (float) $v >= -5 && (float) $v <= 65 ? (float) $v : null;
+        };
         $observation = [
             'time' => $time, 'temp' => $temp, 'target' => $target,
             'valve' => $valve, 'outside' => $outside,
@@ -337,7 +400,9 @@ final class LCNThermalLearningModel
             'valve_sample_at' => $valveSampleAt,
             'valve_changed_at' => $valveChangedAt,
             'outside_lag' => isset($input['outside_lag']) && is_numeric($input['outside_lag'])
-                ? (float) $input['outside_lag'] : null
+                ? (float) $input['outside_lag'] : null,
+            'supply60' => $hydraulic($input['supply60'] ?? null),
+            'return60' => $hydraulic($input['return60'] ?? null)
         ];
         $previous = $state['last'] ?? null;
         if (!is_array($previous)) {
@@ -421,6 +486,36 @@ final class LCNThermalLearningModel
                 // OFF does not yet mean passive cooling: the slab may still heat.
                 $residualHeat = !$valve && isset($state['afterheat']);
                 if ($valid && $freshEvidence && !$residualHeat) {
+                    // Hydraulic context is an additional observed correlation,
+                    // not a substitute for valid room/relay evidence. Legacy
+                    // room rates continue learning without water sensors.
+                    if ($valve) {
+                        $startSupply = $phase['supply60'] ?? null;
+                        $endSupply = $observation['supply60'];
+                        if (is_numeric($startSupply) && is_numeric($endSupply)
+                            && abs((float) $startSupply - (float) $endSupply) <= 3.0) {
+                            $supply = ((float) $startSupply + (float) $endSupply) / 2.0;
+                            $state['heating_by_supply'][self::supplyBand($supply)] = self::mean(
+                                (array) ($state['heating_by_supply'][self::supplyBand($supply)] ?? []),
+                                abs($rate));
+                            $drive = $supply - (($temp + (float) $phase['temp']) / 2.0);
+                            if ($drive >= 2.0 && $drive <= 35.0) {
+                                $state['heating_drive'] = self::mean(
+                                    (array) ($state['heating_drive'] ?? []), abs($rate) / $drive);
+                            }
+                            $startReturn = $phase['return60'] ?? null;
+                            $endReturn = $observation['return60'];
+                            if (is_numeric($startReturn) && is_numeric($endReturn)
+                                && abs((float) $startReturn - (float) $endReturn) <= 3.0) {
+                                $return = ((float) $startReturn + (float) $endReturn) / 2.0;
+                                $spread = $supply - $return;
+                                if ($spread >= 0 && $spread <= 15.0) {
+                                    $state['heating_spread'] = self::mean(
+                                        (array) ($state['heating_spread'] ?? []), $spread);
+                                }
+                            }
+                        }
+                    }
                     $band = self::outdoorBand($outside);
                     $state['rates'][$kind]['all'] = self::mean(
                         (array) ($state['rates'][$kind]['all'] ?? []), abs($rate));
