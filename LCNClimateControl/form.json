@@ -11,7 +11,7 @@
       "items": [
         {
           "type": "Label",
-          "caption": "Schieberegler: LINKS (0) = vorhandener Wandschalter; RECHTS (1) = Shelly 1 Gen3 schaltet den bisherigen Kontakt. Standard 0 = bisherige Anlage unveraendert. Einstellung aendert keine Elektroverdrahtung."
+          "caption": "Schieberegler: LINKS (0) = Wandschalter (bisherige Doppelbedienung); RECHTS (1) = vorhandener Shelly 1 Gen3 192.168.103.71 schaltet den Kontakt. Die Betriebsart wird AUSSCHLIESSLICH in der Symcon-Visualisierung gewaehlt. Standard 0 = alte Konfiguration unveraendert."
         },
         {
           "type": "HorizontalSlider",
@@ -43,11 +43,11 @@
         },
         {
           "type": "Label",
-          "caption": "Shelly-Webinterface (nur Stellung 1): Schalter-Eingang DETACHED/entkoppelt; Einschaltzustand nach Stromausfall AUS (OFF, nicht Restore last); Auto-ON AUS; normale Auto-OFF-Zeitsteuerung AUS; keine weiteren Zeitplaene, Szenen, Skripte oder Cloud-Befehle fuer dieses Relais. Bereits vorhandener Fuehler-Shelly 192.168.103.71 bleibt dauerhaft am Netz, seine fuenf Fuehler und MQTT bleiben UNVERAENDERT; feste IP im Heimnetz, lokale HTTP-RPC-Steuerung ohne aktivierte HTTP-Authentifizierung. Das Modul prueft OFF/DETACHED/Auto-ON und den Ausgang; KUEHLEN wird bei Fehler gesperrt."
+          "caption": "WICHTIG: Tatsaechliche Anlagen-Schaltlogik ist INVERTIERT: SHELLY EIN = HEIZEN, SHELLY AUS = KUEHLEN. Shelly-App: Eingang DETACHED/entkoppelt, Einschaltzustand bei Spannungsrueckkehr EIN/ON (nicht AUS), Auto-ON AUS, Auto-OFF AUS; bestehende Zeitplaene/Szenen/Skripte duerfen Relais nicht steuern. Die fuenf Temperaturfuehler T100-T104, Add-on und MQTT auf 192.168.103.71 UNVERAENDERT lassen. Das Modul prueft Einschaltzustand EIN, DETACHED und Timer AUS. Physischer Stromausfall nur am Shelly kann bei weiter aktiver Anlage trotzdem den Kontakt oeffnen und KUEHLEN waehlen: rein softwareseitig nicht abzusichern."
         },
         {
           "type": "Label",
-          "caption": "Sicherheitsablauf nur bei Stellung 1: Symcon KUEHLEN -> Shelly-Kontakt I/O EIN bestaetigen -> erst dann LCN-Kuehlung freigeben. HEIZEN -> Shelly I/O AUS bestaetigen. Im Kuehlbetrieb wird der Shelly alle 10 s mit einem lokalen 35-s-Auto-AUS-Vertrag nachgeschaltet: Wenn Symcon ausfaellt, schaltet der Shelly danach eigenstaendig AUS. Bei Fehler keine weitere Verlaengerung; Status als eigene Diagnosevariable. Physische Rueckmeldung der Steckdosenspannung ist dies NICHT. Nach einem Modul-Update/Neustart ist erneut eine ausdrueckliche KUEHLEN-Wahl erforderlich."
+          "caption": "Steuerung nur ueber vorhandene Symcon-Visualisierung: KUEHLEN -> Shelly AUS (I/O offen) rueckmelden -> LCN-Kuehlung; HEIZEN -> Shelly EIN (I/O geschlossen) rueckmelden -> LCN-Heizbetrieb. KEIN 35-s-Auto-AUS mehr, da dies im Heizbetrieb unbeabsichtigt KUEHLEN ausloest. Der 10-s-Timer prueft die Relaisstellung, korrigiert HEIZEN zu EIN und sperrt bei Kuehlfehlern die EWT-Pumpe, versucht HEIZEN (EIN). Nach Modulupdate/Start standardmaessig Kontakt EIN und KUEHLEN gesperrt bis erneuter ausdruecklicher KUEHLEN-Wahl. Die Steckdosenspannung wird nicht unabhaengig gemessen."
         }
       ]
     },
