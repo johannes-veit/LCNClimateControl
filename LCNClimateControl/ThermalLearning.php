@@ -1104,7 +1104,21 @@ trait LCNClimateThermalLearning
             ? date('d.m.Y H:i:s', $lastTick) . ' (' . $tickAge . ' s alt)'
             : 'NOCH KEIN LERNLAUF');
         $lines[] = 'Lernlauf zuletzt erfasste Räume: ' . (int) ($state['last_processed'] ?? 0)
-            . ' | nach Quellen-Abnahme thermisch bereit: ' . (int) ($state['last_eligible'] ?? 0);
+            . ' | im letzten Lernlauf thermisch bereit: ' . (int) ($state['last_eligible'] ?? 0);
+        $auditReadyNow = 0;
+        foreach ((array) ($state['rooms'] ?? []) as $roomState) {
+            if (LCNThermalLearningModel::auditLabel(
+                (array) ($roomState['source_audit'] ?? []), $now) === 'QUELLEN_REGELMAESSIG') {
+                ++$auditReadyNow;
+            }
+        }
+        $lines[] = 'Quellen-Abnahme jetzt: ' . $auditReadyNow
+            . '/' . count($this->GetRooms()) . ' Raeume.';
+        if ($auditReadyNow > (int) ($state['last_eligible'] ?? 0)) {
+            $lines[] = 'HINWEIS: Quellen-Abnahme wird am Ende des 30-min-Lernlaufs'
+                . ' aktualisiert; neue Freigaben gelten erst im naechsten Lernlauf.'
+                . ' Dies ist noch kein bestaetigter Auf-/Abheizzyklus.';
+        }
         $excluded = (array) ($state['last_exclusions'] ?? []);
         $counts = array_count_values(array_values(array_filter($excluded, 'is_string')));
         $details = [];
