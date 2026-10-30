@@ -741,14 +741,23 @@ class LCNClimateControl extends IPSModuleStrict
         if (!in_array($Mode, [self::MODE_HEATING, self::MODE_COOLING], true)) {
             throw new InvalidArgumentException('Ungültige Betriebsart.');
         }
+        $currentMode = $this->GetMode();
         if ($Mode === self::MODE_COOLING) {
-            $faults = $this->CoolingCommissionReadinessErrors();
-            if ($faults !== []) {
-                throw new RuntimeException('KUEHLEN gesperrt: ' . implode('; ', $faults));
+            if ($this->ModeSwitchIsShelly() && $currentMode === self::MODE_COOLING) {
+                // Existing LCN regulator locks are normal while already
+                // cooling. Allow an EXPLICIT retry of the physical contact
+                // after an update/fault without re-running pre-cooling tests
+                // which incorrectly reject the active cooling session.
+                if (!$this->DirectCoolingSafe() || $this->M11ProbeActive()) {
+                    throw new RuntimeException('KUEHLEN gesperrt: Laufende Kuehlsicherheitsfreigabe fehlt.');
+                }
+            } else {
+                $faults = $this->CoolingCommissionReadinessErrors();
+                if ($faults !== []) {
+                    throw new RuntimeException('KUEHLEN gesperrt: ' . implode('; ', $faults));
+                }
             }
         }
-
-        $currentMode = $this->GetMode();
         $pendingMode = $this->GetPendingMode();
 
         if ($Mode === $currentMode) {
