@@ -97,6 +97,21 @@ trait LCNClimateModeSwitch
     }
 
     /**
+     * Shelly reports pending relay timers as timer_type and/or timer metadata.
+     * In this installation any timed HEIZEN output could later OPEN the
+     * contact and unexpectedly request KUEHLEN, so no timer is acceptable.
+     */
+    private function ModeSwitchHasPendingTimer(array $status): bool
+    {
+        if (isset($status['timer_type']) && $status['timer_type'] !== '') {
+            return true;
+        }
+        return isset($status['timer_started_at'], $status['timer_duration'])
+            && is_numeric($status['timer_duration'])
+            && (float) $status['timer_duration'] > 0;
+    }
+
+    /**
      * Always issue a permanent state command, with NO toggle_after parameter.
      * On HEIZEN ensure no old toggle_after timer is left from v0.5.16.
      */
@@ -111,8 +126,10 @@ trait LCNClimateModeSwitch
                 if ($status['output'] !== $on) {
                     throw new RuntimeException('Shelly-Ausgang weicht vom Sollzustand ab');
                 }
-                if ($on && ($status['timer_type'] ?? '') === 'toggle_after') {
-                    throw new RuntimeException('Shelly hat noch einen alten toggle_after-Auto-AUS-Timer');
+                if ($on && $this->ModeSwitchHasPendingTimer($status)) {
+                    throw new RuntimeException(
+                        'Shelly HEIZEN hat noch einen aktiven Zeitgeber ('
+                        . (string) ($status['timer_type'] ?? 'Timer') . ')');
                 }
                 return;
             } catch (Throwable $e) {
@@ -217,7 +234,7 @@ trait LCNClimateModeSwitch
             // contact, and cancel any old v0.5.16 toggle_after watchdog.
             try {
                 $state = $this->ModeSwitchReadStatus();
-                if ($state['output'] !== true || ($state['timer_type'] ?? '') === 'toggle_after') {
+                if ($state['output'] !== true || $this->ModeSwitchHasPendingTimer($state)) {
                     $this->ModeSwitchSetAndVerify(true);
                 }
                 $this->ModeSwitchReport($cooling
