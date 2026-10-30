@@ -150,34 +150,39 @@ check($sim->snapshot()['ok'] === true, 'LCN humidity IDs mapped without manual c
 check($sim->snapshot()['room'] === 'EG Bad', 'highest of all room dewpoints selected');
 $dew = $sim->snapshot()['dew'];
 
-// LCN GUS Feuchte kann laenger als 12 h unveraendert bleiben.
-// Grenzfaelle fuer die neue maximal 25-stuendige Freigabe:
+// External 5-min polling provides fresher humidity data, enabling a
+// strict 6-h max without loosening any other dew point safety condition.
 $clock = time();
-$GLOBALS['ewt_data'][53361]['at'] = $clock - 1233 * 60; // 20 h 33 min (real installation)
+$GLOBALS['ewt_data'][53361]['at'] = $clock - 300; // nominal 5-min poll
 check($sim->snapshot()['ok'] === true,
-    '20 h 33 min old EG Bad humidity is valid with legacy 900-s setting');
-$sim->p['DewPointMaxAgeSeconds'] = 43200; // persisted old default, pre-update
-check($sim->snapshot()['ok'] === true,
-    'existing persisted 12-hour default is auto-upgraded to 25 h');
-$GLOBALS['ewt_data'][53361]['at'] = $clock - 90000;
-check($sim->snapshot()['ok'] === true,
-    'humidity exactly 25 h old remains allowed');
-$GLOBALS['ewt_data'][53361]['at'] = $clock - 90001;
-$stale = $sim->snapshot();
-check($stale['ok'] === false,
-    'humidity older than 25 h still blocks cooling pump');
-check(str_contains($stale['reason'], 'EG Bad')
-    && str_contains($stale['reason'], 'Luftfeuchte (#53361)')
-    && str_contains($stale['reason'], '25.0 h'),
-    'stale humidity status names room, original variable ID and 25-hour limit');
-$sim->p['DewPointMaxAgeSeconds'] = 90000; // new default
-$GLOBALS['ewt_data'][53361]['at'] = $clock - 86400;
-check($sim->snapshot()['ok'] === true,
-    'new default permits 24-hour-old humidity');
-$sim->p['DewPointMaxAgeSeconds'] = 21600; // nondefault manual shorter value
+    'humidity last updated 5 minutes ago remains valid');
+foreach ([900, 43200, 90000, 21600] as $savedAgeSetting) {
+    $sim->p['DewPointMaxAgeSeconds'] = $savedAgeSetting;
+    $GLOBALS['ewt_data'][53361]['at'] = $clock - 21590;
+    check($sim->snapshot()['ok'] === true,
+        'humidity just under 6 h stays valid with stored setting ' . $savedAgeSetting);
+    $GLOBALS['ewt_data'][53361]['at'] = $clock - 21601;
+    $stale = $sim->snapshot();
+    check($stale['ok'] === false,
+        'humidity more than 6 h old blocks with stored setting ' . $savedAgeSetting);
+    check(str_contains($stale['reason'], 'EG Bad')
+        && str_contains($stale['reason'], 'Luftfeuchte (#53361)')
+        && str_contains($stale['reason'], '6.0 h'),
+        'stale humidity details include sensor and 6-h limit');
+}
+// The previously accepted 20h33m reading must now be rejected.
+$sim->p['DewPointMaxAgeSeconds'] = 90000;
+$GLOBALS['ewt_data'][53361]['at'] = $clock - 1233 * 60;
 check($sim->snapshot()['ok'] === false,
-    'explicitly configured shorter humidity limit remains protective');
-$sim->p['DewPointMaxAgeSeconds'] = 43200;
+    'previously accepted 20h33m RH reading cannot bypass new 6h cap');
+$sim->p['DewPointMaxAgeSeconds'] = 3600; // explicit 1-h custom limit
+$GLOBALS['ewt_data'][53361]['at'] = $clock - 3601;
+check($sim->snapshot()['ok'] === false,
+    'explicit shorter custom age limit is preserved');
+$GLOBALS['ewt_data'][53361]['at'] = $clock - 3590;
+check($sim->snapshot()['ok'] === true,
+    'explicit shorter custom age limit still permits valid sensor');
+$sim->p['DewPointMaxAgeSeconds'] = 90000;
 $GLOBALS['ewt_data'][53361]['at'] = time();
 $GLOBALS['ewt_data'][12812]['at'] = time() - 7201;
 $oldTemp = $sim->snapshot();
@@ -320,10 +325,10 @@ check(str_contains($sim->values['DewPointGuardStatus'], 'FBH-Fühler 101')
 $GLOBALS['ewt_data'][20510]['at'] = time();
 $GLOBALS['ewt_data'][53361]['at'] = time() - 3600;
 check($sim->snapshot()['ok'] === true, 'unchanged LCN humidity valid at one hour');
-$GLOBALS['ewt_data'][53361]['at'] = time() - 43201;
-check($sim->snapshot()['ok'] === true, 'humidity older than former 12-hour limit remains valid');
-$GLOBALS['ewt_data'][53361]['at'] = time() - 90001;
-check($sim->snapshot()['ok'] === false, 'humidity older than new 25-hour limit is stale');
+$GLOBALS['ewt_data'][53361]['at'] = time() - 21599;
+check($sim->snapshot()['ok'] === true, 'humidity under 6-hour limit remains valid');
+$GLOBALS['ewt_data'][53361]['at'] = time() - 21601;
+check($sim->snapshot()['ok'] === false, 'humidity above 6-hour limit is stale');
 $GLOBALS['ewt_data'][53361]['at'] = time();
 
 // Simulate a long Symcon timer pause: previous stability must not
