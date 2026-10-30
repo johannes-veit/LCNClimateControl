@@ -224,7 +224,7 @@ class LCNClimateControl extends IPSModuleStrict
         // Existing installations stay on the manual wall switch.
         // On a mode-source/configuration change never silently retain an
         // earlier cooling authorization; a new explicit KUEHLEN request
-        // is required before Shelly may switch ON.
+        // is required before Shelly may open its contact (output OFF).
         $this->WriteAttributeBoolean('ModeSwitchBlocked', true);
         $this->SetTimerInterval('ModeSwitchTimer',
             $this->ModeSwitchIsShelly() ? 10000 : 0);
@@ -429,6 +429,23 @@ class LCNClimateControl extends IPSModuleStrict
 
         $this->CleanupStaleRoomObjects($rooms);
         $this->ApplyModeVisibility();
+
+        // Immediately enforce the physical heating contact on install/update
+        // instead of waiting for the first 10-s timer. Cooling remains blocked
+        // until the existing visualization explicitly requests KUEHLEN again.
+        // Never let an unreachable Shelly abort the entire module ApplyChanges.
+        if ($this->ModeSwitchIsShelly()
+            && $this->ReadPropertyBoolean('ModeSwitchWiringConfirmed')) {
+            try {
+                $this->ModeSwitchSetAndVerify(true);
+                $this->ModeSwitchReport($this->GetMode() === self::MODE_COOLING
+                    ? 'KUEHLEN GESPERRT nach Update – Shelly EIN / Anlage HEIZEN bestaetigt; KUEHLEN erneut anfordern'
+                    : 'HEIZEN – Shelly EIN (Kontakt geschlossen), nach Update bestaetigt');
+            } catch (Throwable $e) {
+                $this->ModeSwitchReport('FEHLER nach Update: HEIZEN am Shelly nicht bestaetigt: ' . $e->getMessage());
+                $this->SendDebug('ModeSwitchApply', $e->getMessage(), 0);
+            }
+        }
 
         $this->RefreshRuntimeStatus();
         $this->UpdateChatGPTDiagnostic();
