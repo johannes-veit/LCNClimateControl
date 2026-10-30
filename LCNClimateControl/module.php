@@ -126,6 +126,16 @@ class LCNClimateControl extends IPSModuleStrict
         // EG Bad (#21099) is the initial learning reference; 0 enables all rooms.
         // Does not affect temperature control or actual relay operation.
         $this->RegisterPropertyInteger('ThermalReferenceRoomTarget', 21099);
+        // True also upgrades already configured EG-Bad-only instances to
+        // all-room learning without touching historical EG-Bad statistics.
+        $this->RegisterPropertyBoolean('ThermalLearnAllRooms', true);
+        // Links from the existing Fussbodenheizung category: resolve to
+        // their actual temperature source before checking VariableUpdated.
+        $this->RegisterPropertyInteger('ThermalHeatSupplyLink', 47771);
+        $this->RegisterPropertyInteger('ThermalHeatReturnLink', 22808);
+        $this->RegisterPropertyInteger('ThermalFbhAfterExchangerLink', 50458);
+        $this->RegisterPropertyInteger('ThermalEwtBeforeExchangerLink', 28351);
+        $this->RegisterPropertyInteger('ThermalEwtAfterExchangerLink', 16537);
 
         // OperatingMode dient nur der verlustfreien Migration aus der fehlerhaften
         // 0.2.0-Vorschau, in der die sichtbare Betriebsart-Variable entfernt wurde.
