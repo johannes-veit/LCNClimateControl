@@ -2,33 +2,28 @@
 declare(strict_types=1);
 require_once dirname(__DIR__) . '/LCNClimateControl/ModeSwitch.php';
 
-function ok(bool $value, string $msg): void
+function ok(bool $value, string $message): void
 {
-    $GLOBALS['tests'] = ($GLOBALS['tests'] ?? 0) + 1;
-    if (!$value) {
-        fwrite(STDERR, "FAIL: $msg\n");
-        exit(1);
-    }
+    $GLOBALS['checks'] = ($GLOBALS['checks'] ?? 0) + 1;
+    if (!$value) { fwrite(STDERR, 'FAIL: ' . $message . "\n"); exit(1); }
 }
 if (!function_exists('IPS_SemaphoreEnter')) {
-    function IPS_SemaphoreEnter(string $key, int $ms): bool { return true; }
+    function IPS_SemaphoreEnter(string $key, int $timeout): bool { return true; }
     function IPS_SemaphoreLeave(string $key): void {}
 }
 class ModeSwitchMock
 {
     use LCNClimateModeSwitch;
-    private const MODE_COOLING = 1;
     private const MODE_HEATING = 0;
+    private const MODE_COOLING = 1;
     public int $InstanceID = 123;
     public int $mode = 0;
     public array $props = [
-        'ModeSwitchSource'=>0,
-        'ModeSwitchShellyIP'=>'192.168.103.71',
-        'DewPointPumpIP'=>'192.168.103.67',
-        'ModeSwitchWiringConfirmed'=>true,
-        'DewPointAutoPumpEnabled'=>true
+        'ModeSwitchSource' => 0, 'ModeSwitchShellyIP' => '192.168.103.71',
+        'DewPointPumpIP' => '192.168.103.67',
+        'ModeSwitchWiringConfirmed' => true, 'DewPointAutoPumpEnabled' => true
     ];
-    public array $attrs = ['ModeSwitchBlocked'=>true];
+    public array $attrs = ['ModeSwitchBlocked' => true];
     public array $values = [];
     public array $rpcCalls = [];
     public bool $relay = false;
@@ -36,160 +31,176 @@ class ModeSwitchMock
     public bool $ignoreCommands = false;
     public bool $badReadOnce = false;
     public bool $readiness = true;
+    public ?string $timer = null;
+    public bool $cancelTimerOnSet = true;
     public array $config = [
-        'initial_state'=>'off', 'in_mode'=>'detached', 'auto_on'=>false, 'auto_off'=>false
+        'initial_state' => 'on', 'in_mode' => 'detached',
+        'auto_on' => false, 'auto_off' => false
     ];
 
-    public function ReadPropertyInteger(string $k): int { return (int) ($this->props[$k] ?? 0); }
-    public function ReadPropertyString(string $k): string { return (string) ($this->props[$k] ?? ''); }
-    public function ReadPropertyBoolean(string $k): bool { return (bool) ($this->props[$k] ?? false); }
-    public function ReadAttributeBoolean(string $k): bool { return (bool) ($this->attrs[$k] ?? false); }
+    public function ReadPropertyInteger(string $k): int { return (int)($this->props[$k] ?? 0); }
+    public function ReadPropertyString(string $k): string { return (string)($this->props[$k] ?? ''); }
+    public function ReadPropertyBoolean(string $k): bool { return (bool)($this->props[$k] ?? false); }
+    public function ReadAttributeBoolean(string $k): bool { return (bool)($this->attrs[$k] ?? false); }
     public function WriteAttributeBoolean(string $k, bool $v): void { $this->attrs[$k] = $v; }
     public function SetValueIfChanged(string $k, mixed $v): void { $this->values[$k] = $v; }
-    public function SendDebug(string $k, string $m, int $l): void {}
+    public function SendDebug(string $k, string $msg, int $lvl): void {}
     private function GetMode(): int { return $this->mode; }
     private function CoolingCommissionReadinessErrors(): array { return $this->readiness ? [] : ['not ready']; }
-
     protected function ModeSwitchRpc(string $method, array $params = []): array
     {
         $this->rpcCalls[] = [$method, $params];
-        if (!$this->online) throw new RuntimeException('Shelly offline');
+        if (!$this->online) throw new RuntimeException('offline');
         if ($method === 'Switch.GetConfig') return $this->config;
         if ($method === 'Switch.GetStatus') {
-            if ($this->badReadOnce) {
-                $this->badReadOnce=false;
-                throw new RuntimeException('readback failed');
-            }
-            return ['output'=>$this->relay];
+            if ($this->badReadOnce) { $this->badReadOnce = false; throw new RuntimeException('read failed'); }
+            return ['output' => $this->relay] + ($this->timer === null ? [] : ['timer_type' => $this->timer]);
         }
         if ($method === 'Switch.Set') {
-            if (!$this->ignoreCommands) $this->relay = $params['on'] === 'true';
-            return ['was_on'=>!$this->relay];
+            if (!$this->ignoreCommands) {
+                $this->relay = $params['on'] === 'true';
+                if ($this->cancelTimerOnSet) $this->timer = null;
+            }
+            return ['was_on' => !$this->relay];
         }
-        throw new RuntimeException('unknown RPC');
+        throw new RuntimeException('Unknown method');
     }
-
     public function request(int $mode): void
     {
-        $r = new ReflectionMethod(self::class, 'ModeSwitchSelect');
-        $r->invoke($this, $mode);
-        $this->mode = $mode; // only commit mode after confirmed I/O
+        (new ReflectionMethod(self::class, 'ModeSwitchSelect'))->invoke($this, $mode);
+        $this->mode = $mode; // Simulates module update AFTER confirmed relay
+    }
+    public function commands(): array
+    {
+        return array_values(array_filter($this->rpcCalls, fn(array $v) => $v[0] === 'Switch.Set'));
     }
 }
+
 $m = new ModeSwitchMock();
-$m->ModeSwitchTick();
-ok($m->rpcCalls === [] && $m->relay === false,
-    'wall switch default: never send commands');
 $m->request(1);
-ok($m->mode === 1 && !$m->relay, 'wall switch: original mode choice preserved without RPC');
+$m->ModeSwitchTick();
+ok($m->mode === 1 && !$m->relay && count($m->rpcCalls) === 0,
+    'wall switch selection makes no RPC calls');
 
 $m->props['ModeSwitchSource'] = 1;
-$m->mode=0;
-$m->request(1);
-ok($m->relay && $m->mode===1, 'Shelly: verified contact ON before cooling mode');
-ok($m->attrs['ModeSwitchBlocked'] === false, 'successful explicit switch unblocks watchdog');
-$on = array_values(array_filter($m->rpcCalls, fn($x) => $x[0] === 'Switch.Set' && $x[1]['on'] === 'true'));
-ok(count($on)===1 && ($on[0][1]['toggle_after'] ?? null) === 35,
-    'the only ON is a local 35-second automatic-OFF lease');
-$before = count($m->rpcCalls);
-$m->ModeSwitchTick();
-ok($m->relay && count($m->rpcCalls)>$before, 'cooling timer renews local lease');
+$m->mode = 0;
 $m->request(0);
-ok(!$m->relay && $m->mode===0, 'heating: output OFF before changing mode');
-$before = count($m->rpcCalls);
+ok($m->relay && $m->mode === 0, 'HEIZEN closes I/O (Shelly ON)');
+$cmds = $m->commands();
+ok(count($cmds) === 1 && $cmds[0][1]['on'] === 'true'
+    && !array_key_exists('toggle_after', $cmds[0][1]),
+    'heating ON is permanent, never uses old dangerous 35-second lease');
+$before = count($cmds);
 $m->ModeSwitchTick();
-ok(count($m->rpcCalls)===$before+1, 'heating poll checks status without unnecessary OFF writes');
+ok(count($m->commands()) === $before && $m->relay,
+    'heating watchdog only reads unchanged ON contact');
 
-// The operating-mode relay and all five water thermometers are the same
-// already installed Shelly 1 Gen3 (192.168.103.71). The existing pump
-// plug .67 MUST remain a separate device.
+$m->request(1);
+ok(!$m->relay && $m->mode === 1 && !$m->attrs['ModeSwitchBlocked'],
+    'KUEHLEN opens I/O (Shelly OFF), unlocks separate pump guard');
+$cmds = $m->commands();
+ok(end($cmds)[1]['on'] === 'false'
+    && !array_key_exists('toggle_after', end($cmds)[1]),
+    'cooling OFF is likewise permanent, not time-limited');
+$before = count($cmds);
+$m->ModeSwitchTick();
+ok(!$m->relay && count($m->commands()) === $before,
+    'cooling watchdog reads OFF and never toggles it itself');
+$m->request(0);
+ok($m->relay && $m->mode === 0, 'HEIZEN again forces relay ON');
+
+$m->relay = false; // accidental APP or secondary controller change
+$m->ModeSwitchTick();
+ok($m->relay && str_contains($m->values['ModeSwitchStatus'], 'HEIZEN'),
+    'in HEIZEN force I/O ON when status unexpectedly OFF');
+
+$m->timer = 'toggle_after'; // from previous 0.5.16 behavior
+$m->ModeSwitchTick();
+ok($m->timer === null && $m->relay,
+    'migrate by clearing old 35-second auto-OFF lease');
+$m->timer = 'toggle_after';
+$m->cancelTimerOnSet = false;
+try { $m->request(0); ok(false, 'uncancellable old auto-OFF must be rejected'); }
+catch (RuntimeException $e) {}
+ok(str_contains($m->values['ModeSwitchStatus'], 'nicht bestaetigt'),
+    'old auto-OFF lease failure is diagnosed instead of claiming heating');
+$m->cancelTimerOnSet = true;
+$m->timer = null;
+
 $target = new ReflectionMethod(ModeSwitchMock::class, 'ModeSwitchTargetIP');
 ok($target->invoke($m) === '192.168.103.71',
-    'real installed sensor/Shelly relay IP is 192.168.103.71');
-$m->props['ModeSwitchShellyIP'] = ''; // persisted empty from version 0.5.15
-ok($target->invoke($m) === '192.168.103.71',
-    'existing 0.5.15 instance with blank IP uses safe default .71');
-$m->props['ModeSwitchShellyIP'] = '192.168.103.99';
-ok($target->invoke($m) === '192.168.103.99',
-    'a deliberately set different valid relay IP remains configurable');
-$m->props['ModeSwitchShellyIP'] = 'invalid-ip';
-try { $target->invoke($m); ok(false, 'invalid IP must be rejected'); }
+    'combined T100-T104 and mode contact device is 192.168.103.71');
+$m->props['ModeSwitchShellyIP'] = '';
+ok($target->invoke($m) === '192.168.103.71', 'legacy empty IP uses correct default');
+$m->props['ModeSwitchShellyIP'] = '192.168.103.67';
+try { $target->invoke($m); ok(false, 'pump plug must never be mode relay'); }
 catch (RuntimeException $e) {}
 $m->props['ModeSwitchShellyIP'] = '192.168.103.71';
 
 $bad = new ModeSwitchMock();
-$bad->props['ModeSwitchSource']=1;
-$bad->config['initial_state']='restore_last';
-try { $bad->request(1); ok(false, 'incorrect power-on config should reject'); }
+$bad->props['ModeSwitchSource'] = 1;
+$bad->config['initial_state'] = 'off'; // old unsafe setup
+try { $bad->request(1); ok(false, 'power-on default OFF must be rejected'); }
 catch (RuntimeException $e) {}
-ok(!$bad->relay && $bad->mode===0 && $bad->attrs['ModeSwitchBlocked'],
-    'unsafe power-on default refuses cooling and holds old Symcon mode');
-$bad->config['initial_state']='off';
+ok($bad->relay && $bad->mode === 0 && $bad->attrs['ModeSwitchBlocked'],
+    'old configuration blocks cooling and restores physical heating ON');
+$bad->config['initial_state'] = 'on';
 unset($bad->config['auto_on']);
-try { $bad->request(1); ok(false, 'missing auto_on field cannot be treated as false'); }
+try { $bad->request(1); ok(false, 'missing auto_on must be rejected'); }
 catch (RuntimeException $e) {}
-ok(!$bad->relay, 'missing safety config remains blocked');
-$bad->config['auto_on']=false;
+ok($bad->relay, 'missing config keeps heating');
+$bad->config['auto_on'] = false;
 unset($bad->config['auto_off']);
-try { $bad->request(1); ok(false, 'missing auto_off field cannot be treated as false'); }
+try { $bad->request(1); ok(false, 'missing auto_off must be rejected'); }
 catch (RuntimeException $e) {}
-ok(!$bad->relay, 'missing auto_off field remains blocked');
-$bad->config['auto_off']=false;
-$bad->config['in_mode']='follow';
-try { $bad->request(1); ok(false, 'SW should be detached'); }
+ok($bad->relay, 'missing auto_off keeps heating');
+$bad->config['auto_off'] = false;
+$bad->config['in_mode'] = 'follow';
+try { $bad->request(1); ok(false, 'connected switch mode must be detached'); }
 catch (RuntimeException $e) {}
-ok(!$bad->relay, 'wrong SW mode cannot energize contact');
-$bad->config['in_mode']='detached';
-$bad->props['ModeSwitchWiringConfirmed']=false;
-try { $bad->request(1); ok(false, 'unconfirmed wiring should reject'); }
+ok($bad->relay, 'invalid input mode keeps heating');
+$bad->config['in_mode'] = 'detached';
+$bad->props['ModeSwitchWiringConfirmed'] = false;
+try { $bad->request(1); ok(false, 'not wired must reject'); }
 catch (RuntimeException $e) {}
-ok(!$bad->relay, 'missing wiring acknowledgement blocks cooling');
-$bad->props['ModeSwitchWiringConfirmed']=true;
-$bad->props['DewPointAutoPumpEnabled']=false;
-try { $bad->request(1); ok(false, 'missing pump guard should reject'); }
+ok($bad->relay, 'unapproved wiring keeps heating');
+$bad->props['ModeSwitchWiringConfirmed'] = true;
+$bad->props['DewPointAutoPumpEnabled'] = false;
+try { $bad->request(1); ok(false, 'pump dew point guard missing must reject'); }
 catch (RuntimeException $e) {}
-ok(!$bad->relay, 'pump safety guard required when auto-switching');
-$bad->props['DewPointAutoPumpEnabled']=true;
-$bad->props['ModeSwitchShellyIP']='192.168.103.67';
-try { $bad->request(1); ok(false, 'same as pump plug should reject'); }
+ok($bad->relay, 'pump guard missing keeps heating');
+$bad->props['DewPointAutoPumpEnabled'] = true;
+$bad->ignoreCommands = true;
+try { $bad->request(1); ok(false, 'relay refuses OFF, no cooling'); }
 catch (RuntimeException $e) {}
-ok(!$bad->relay, 'independent actuator IP required');
+ok($bad->mode === 0 && $bad->relay && $bad->attrs['ModeSwitchBlocked'],
+    'unconfirmed OFF cannot change Symcon mode or plant to cooling');
+$bad->ignoreCommands = false;
+$bad->request(1);
+ok(!$bad->relay && $bad->mode === 1, 'manual retry after fix authorizes cooling');
 
-$bad->props['ModeSwitchShellyIP']='192.168.103.88';
-$bad->ignoreCommands=true;
-try { $bad->request(1); ok(false, 'unverified ON should reject'); }
-catch (RuntimeException $e) {}
-ok($bad->mode===0 && $bad->attrs['ModeSwitchBlocked'],
-    'failed readback cannot claim automatic cooling');
-$bad->ignoreCommands=false;
-$bad->request(1);
-ok($bad->relay, 'successful user retry can arm cooling again');
-$bad->readiness=false;
+$bad->readiness = false;
 $bad->ModeSwitchTick();
-ok(!$bad->relay && $bad->attrs['ModeSwitchBlocked'],
-    'loss of cooling readiness stops renewals and verifies OFF');
-$bad->readiness=true;
-$before=count($bad->rpcCalls);
+ok($bad->relay && $bad->attrs['ModeSwitchBlocked'],
+    'cooling protection failure switches physical plant back to heating ON');
+$bad->readiness = true;
+$before = count($bad->commands());
 $bad->ModeSwitchTick();
-ok(!$bad->relay && count(array_filter(array_slice($bad->rpcCalls, $before),
-    fn($x)=>$x[0]==='Switch.Set' && $x[1]['on']==='true'))===0,
-    'blocked watchdog cannot silently restart cooling');
+ok($bad->relay && count(array_filter(array_slice($bad->commands(), $before),
+    fn(array $c) => $c[1]['on'] === 'false')) === 0,
+    'blocked cooling never automatically energizes cooling after guard recovers');
 $bad->request(1);
-ok($bad->relay && !$bad->attrs['ModeSwitchBlocked'],
-    'explicit renewed cooling request clears block');
-$bad->online=false;
+ok(!$bad->relay && !$bad->attrs['ModeSwitchBlocked'],
+    'only explicit Symcon cooling request releases blocked contact');
+$bad->online = false;
 $bad->ModeSwitchTick();
 ok($bad->attrs['ModeSwitchBlocked']
     && str_contains($bad->values['ModeSwitchStatus'], 'NICHT BESTAETIGT'),
-    'communication failure halts renewal and reports unknown output');
-$before=count($bad->rpcCalls);
-$bad->online=true;
+    'network fault diagnoses unknown physical state without claiming heating');
+$bad->online = true;
 $bad->ModeSwitchTick();
-ok(count(array_filter(array_slice($bad->rpcCalls, $before),
-    fn($x)=>$x[0]==='Switch.Set' && $x[1]['on']==='true'))===0,
-    'returning WLAN cannot silently restart blocked cooling');
-ok(!$bad->relay, 'after communications recover blocked relay is driven OFF');
+ok($bad->relay && $bad->attrs['ModeSwitchBlocked'],
+    'on restored network blocked cooling drives heating ON');
 $bad->request(0);
-ok($bad->mode===0 && !$bad->relay, 'explicit HEIZEN recovers to verified OFF');
-
-echo "Mode-switch Shelly 1 Gen3: ".$GLOBALS['tests']." assertions OK\n";
+ok($bad->relay && $bad->mode === 0, 'heating request restores stable heating');
+echo 'Mode-switch reversed polarity: ' . $GLOBALS['checks'] . " checks passed\n";
