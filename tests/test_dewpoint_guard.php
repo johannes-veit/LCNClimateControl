@@ -768,6 +768,7 @@ check(str_contains($interlock->values['DewPointGuardStatus'], 'KUEHLEN GESPERRT'
     'blocked cooling mode displays correct warning without pretending pump OFF');
 $interlock->remoteOnline = true;
 $interlock->attr['ModeSwitchBlocked'] = false;
+$interlock->attr['ModeSwitchLastVerifiedAt'] = time(); // explicit verified COOLING relay
 $interlock->DewPointGuardTick();
 check(count($interlock->rpcCalls) > 0,
     'after explicit mode authorization ordinary pump guard resumes');
