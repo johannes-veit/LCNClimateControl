@@ -235,7 +235,9 @@ in der bereits vorhandenen Raumtabelle ueberschreiben.
 
 - Maximalalter des FBH-Wasserwerts: 15 Minuten.
 - Maximalalter der Raumtemperaturen: 2 Stunden.
-- Maximalalter unveraenderter LCN-Feuchtewerte: 12 Stunden.
+- Maximalalter der LCN-Feuchtewerte im aktiven Pumpenschutz: 30 Minuten (bei 15-Minuten-Abfrage; VariableUpdated, nicht bloss eine Abfrage). Alte Konfigurationswerte bis 25 Stunden sind bei der Pumpenfreigabe auf 30 Minuten begrenzt. Explizit kuerzere positive Grenzen bleiben erhalten; der historische 900-s-Default migriert auf 1800 s.
+- Ein bestaetigtes Pumpen-EIN braucht einen nachgewiesenen lokalen 40-s-`toggle_after`-Timer des Shelly. Fehlende Timer-Rueckmeldung fuehrt zum AUS-Versuch. AUS-Kommandos verwenden nie `toggle_after`; ein bestehender Auto-EIN-Timer wird aktiv geloescht.
+- Der passive SMART-FBH-Lernmodus bleibt unveraendert, ohne eigene Pumpenbefehle.
 - Ungueltige oder aeltere Werte verhindern den Pumpenstart.
 - Der alte Standardwert von 900 Sekunden aus 0.5.6 wird
   automatisch als 12 h interpretiert, passend zum bekannten
