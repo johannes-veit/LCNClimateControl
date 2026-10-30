@@ -78,6 +78,13 @@ direkte 1:1-Ersetzung.
   erteilen. Friert der Betriebsarten-Prueftimer ein, bleibt
   keine unbegrenzt alte Kuehlfreigabe bestehen. Dies nutzt
   ein internes Attribut, **keine neue Symcon-Variable**.
+- **Wichtig fuer die EWT-Pumpe**: Falls der Smart Plug beim Einschalten
+  der Kuehlsteckdose oder durch die App bereits EIN meldet, aber
+  im Modul kein aktueller, bestaetigter Pumpenlauf vorliegt, wird
+  zuerst AUS geschaltet. Die **120 s** sichere Wartezeit beginnt
+  anschliessend neu. Auch ein Modulupdate setzt die vorherige
+  interne Pumpenfreigabe und den Wartezeit-Zwischenstand zurueck.
+  Der 40-s-Auto-AUS-Vertrag am Pumpen-Plug bleibt bestehen.
 - Im **laufenden** Kuehlbetrieb werden externe Freigaben statt
   der einmaligen Inbetriebnahme-Vorabpruefung kontrolliert,
   denn LCN-Reglersperren sind waehrend der Kuehlung normal.
