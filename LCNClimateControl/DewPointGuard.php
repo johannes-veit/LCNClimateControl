@@ -600,16 +600,25 @@ trait LCNClimateDewPointGuard
             // The 230-V socket feeding the pump plug is then unpowered;
             // do not issue ON/RPC commands or misreport it as a pump fault.
             // The independent 40-s pump lease expires without renewal.
-            if ($this->ReadPropertyInteger('ModeSwitchSource') === 1
-                && $this->ReadAttributeBoolean('ModeSwitchBlocked')) {
+            $modeSwitchFresh = true;
+            if ($this->ReadPropertyInteger('ModeSwitchSource') === 1) {
+                $verifiedAt = $this->ReadAttributeInteger('ModeSwitchLastVerifiedAt');
+                // 10-s physical-mode watchdog: tolerate short scheduling jitter
+                // but do not accept an indefinitely old cooling confirmation.
+                $modeSwitchFresh = !$this->ReadAttributeBoolean('ModeSwitchBlocked')
+                    && $verifiedAt > 0 && $verifiedAt <= time()
+                    && time() - $verifiedAt <= 25;
+            }
+            if (!$modeSwitchFresh) {
                 $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
                 $this->WriteAttributeInteger('DewPointGuardLastRenew', 0);
                 $this->DewPointEfficiencyReset();
                 $this->WriteAttributeString('DewPointGuardState', 'COOLING_INTERLOCK');
                 $this->WriteAttributeString('DewPointGuardNotifyState', 'COOLING_INTERLOCK');
                 $this->SetValueIfChanged('DewPointGuardStatus',
-                    'KUEHLEN GESPERRT – Betriebsarten-Shelly ohne bestaetigte Freigabe'
-                    . ' (EWT-Pumpen-Plug stromlos erwartet; Ausgang NICHT bestaetigt).');
+                    'KUEHLEN GESPERRT – Betriebsarten-Shelly: Kontaktfreigabe gesperrt'
+                    . ' oder letzte Bestaetigung aelter als 25 s'
+                    . ' (EWT-Pumpen-Plug moeglicherweise stromlos; keine neue Pumpenfreigabe).');
                 return;
             }
             $snapshot = $this->DewPointGuardSnapshot();
