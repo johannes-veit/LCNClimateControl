@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.24 (30.10.2026) – SMART-FBH-Hydraulikdiagnose und unabhängige Sensor-Stuetzpunkte
+- Fuenf Hydraulikquellen (Heizvorlauf, Ruecklauf T103, T101, T100, T104) koennen im vorhandenen Lernbericht nun live lokal geprueft werden. Angezeigt werden die tatsaechliche Sensor-ID sowie konkrete Ursachen (Objekt/Link fehlt, Typ ungueltig, keine Aktualisierung, zu alt, Wert ausser Bereich oder zyklische Link-Verkettung). Keine zusaetzlichen IPS-Variablen oder Hardware-Abfragen.
+- Bis zu sechs Symcon-Links hintereinander werden lesend aufgeloest; vorhandene direkte Variablen bleiben moeglich. Fehlerhafte Verweise bleiben gesperrt statt still auf eine unbelegte Ersatz-ID zu verweisen.
+- 60-Minuten-Hydraulikmittel darf denselben unveraenderten VariableUpdated-Zeitstempel nicht in mehreren 30-Min-Lernlaeufen als unabhaengigen Messpunkt zaehlen. Mittelwert erst bei mindestens zwei realen Sensor-Updates mit Zeitabstand. Quellenwechsel wirft alte Stützpunkte weg.
+- Diagnose unterscheidet aktuelle Abnahme von 11 Raumquellen vom freigegebenen Stand des LETZTEN Lernlaufs; neu bestandene Quell-Abnahmen gelten thermisch erst im folgenden 30-Min-Takt.
+- SMART-FBH-Lernmodelle bleiben erhalten; Heizungs-/LCN-/Kuehl-/Pumpensteuerung, Taupunktschutz und Sensorfrischegrenzen bleiben unveraendert. Reine Offline-Tests ersetzen keine Anlagenpruefung.
+
+
 ## 0.5.23 (30.10.2026) – Diagnosen an Inbetriebnahme und Freigabe angeglichen
 - Alle elf S1-Einzelzertifikate statt nur des historischen M11-Spezialtests zaehlen; M11 bleibt getrennt ausgewiesen.
 - 11 technisch zugeordnete Raeume werden unabhaengig von gespeicherten Blockadeeintraegen gezaehlt; Blockaden werden weiterhin sichtbar angezeigt und NICHT automatisch geloescht.
