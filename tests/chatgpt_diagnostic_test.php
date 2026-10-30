@@ -27,6 +27,8 @@ class DiagnosticProbe {
     private function GetPendingCoolingRequests():array{return $this->pendingCooling;}
     public array $errors=[];
     public bool $throwOnFallback = false;
+    public bool $manualApproval = false;
+    public array $verified = [];
     private function GetMode():int{return $this->mode;}
     private function GetRuntimeRooms():array{return [
         ['Name'=>'EG Büro','TargetVariable'=>100,'SendModule'=>37617,'TemperatureVariable'=>400],
@@ -37,7 +39,9 @@ class DiagnosticProbe {
     }
     private function DirectCoolingFallbacks():array{if($this->throwOnFallback){throw new RuntimeException('Demo-Diagnosefehler');}return ['200'=>['kind'=>'legacy','reason'=>'Sperrfeedback zu alt']];}
     private function M11ProbeSession():array{return [];}
-    private function CoolingCommissionVerified(array $room):bool{return false;}
+    private function CoolingCommissionVerified(array $room):bool{
+        return (bool) ($this->verified[(int)$room['TargetVariable']] ?? false);
+    }
     private function CoolingCommissionRelayRoomVerified(array $room):bool{return false;}
     private function CoolingCommissionReadinessErrors():array{return ['Hardwarepruefung ausstehend'];}
     private function DirectCoolingLockActionID(array $room,array $mapping):int {
@@ -47,6 +51,9 @@ class DiagnosticProbe {
     private function GetQueue():array{return [];}
     private function IsBusy():bool{return $this->busy;}
     private function ReadPropertyInteger(string $name):int{return 0;}
+    private function ReadPropertyBoolean(string $name):bool{
+        return $name==='ManualCoolingApproval' && $this->manualApproval;
+    }
     private function UsesDirectCooling():bool{return true;}
     private function DirectCoolingMapping(int $id):?array{
         return $id===100 ? [
@@ -84,6 +91,19 @@ $p=new DiagnosticProbe();
 $text=$p->BuildChatGPTDiagnosticReport();
 ensure(str_contains($text,'SENDEN AN CHATGPT') &&
     str_contains($text,'Symcon-Modulinstanz: #17597'), 'report header and module');
+ensure(str_contains($text,'Software-Kuehlfreigabe: keine externe Boolean, manuelle Freigabe aus'),
+    'external Boolean absent and manual approval disabled is clearly blocked');
+$p->manualApproval = true;
+$text = $p->BuildChatGPTDiagnosticReport();
+ensure(str_contains($text,'manuelle Freigabe konfiguriert'),
+    'manual software approval is accurately reported without implying physical mode');
+$p->manualApproval = false;
+$p->verified=[100=>true, 200=>true];
+$text = $p->BuildChatGPTDiagnosticReport();
+ensure(str_contains($text,'S1-Einzeltests bestanden: 2') &&
+    str_contains($text,'S1-Einzeltests ausstehend: 0') &&
+    !str_contains($text,'S1-Sperr-/Freigabetest noch ausstehend'),
+    'all individual S1 commissioning certificates count, not only historic M11');
 ensure(str_contains($text,'EG Büro') && str_contains($text,'OG Bad') &&
     str_contains($text,'Relais-Modul #36930') && str_contains($text,'Unit #47971'),
     'all rooms and relay details');
