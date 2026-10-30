@@ -1,4 +1,4 @@
-# LCNClimateControl 0.5.17 – Betriebsarten-Shelly mit inverser Schaltlogik
+# LCNClimateControl 0.5.19 – Betriebsarten-Shelly mit inverser Schaltlogik
 
 ## Reale Anlage – verbindliche Polaritaet
 
@@ -69,9 +69,15 @@ direkte 1:1-Ersetzung.
   Auch bei fehlendem WLAN darf kein zeitgesteuertes Relais-AUS
   programmiert werden.
 - Der 10-s-Kontrolltimer liest die reale Relaisstellung.
-  Im Heizbetrieb setzt er unerwartetes OFF wieder auf ON,
-  und ein alter `toggle_after`-Timer wird erkannt und
-  per dauerhaftem Set(ON) beseitigt.
+  Im Heizbetrieb setzt er unerwartetes OFF wieder auf ON.
+  Nicht nur der alte 35-s-`toggle_after`, sondern **jeder** laufende
+  Relaiszeitgeber (z. B. `auto_off`) muss im Heizbetrieb
+  geloescht oder als Fehler gemeldet werden.
+- Nur nach einer innerhalb von **25 s** bestaetigten Kuehlkontakt-Stellung
+  kann der separate Taupunktwaechter neue EWT-Pumpenfreigaben
+  erteilen. Friert der Betriebsarten-Prueftimer ein, bleibt
+  keine unbegrenzt alte Kuehlfreigabe bestehen. Dies nutzt
+  ein internes Attribut, **keine neue Symcon-Variable**.
 - Im **laufenden** Kuehlbetrieb werden externe Freigaben statt
   der einmaligen Inbetriebnahme-Vorabpruefung kontrolliert,
   denn LCN-Reglersperren sind waehrend der Kuehlung normal.
