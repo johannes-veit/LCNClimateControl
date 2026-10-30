@@ -512,6 +512,11 @@
           "caption": "Passives Lernprogramm aktivieren (keine LCN-Befehle)"
         },
         {
+          "type": "CheckBox",
+          "name": "ThermalLearnAllRooms",
+          "caption": "Alle 11 Raeume thermisch lernen (auch bei bisheriger EG-Bad-Referenz)"
+        },
+        {
           "type": "NumberSpinner",
           "name": "ThermalReferenceRoomTarget",
           "caption": "Thermischer Referenzraum (EG Bad: S1 #21099; 0 = alle Räume)",
@@ -519,7 +524,7 @@
         },
         {
           "type": "Label",
-          "caption": "Referenzmodus: Nur EG Bad sammelt Heizanstieg, passives Auskuehlen und thermischen Nachlauf. Die anderen 10 Raeume bleiben als Quellstatus sichtbar. Keine kuenstlichen Heizzyklen."
+          "caption": "Alle 11 Raeume erhalten eigene Heiz-/Auskuehl-Statistiken. Bisherige EG-Bad-Lernwerte bleiben erhalten. Nur wenn 'Alle 11 Raeume' AUS ist, gilt der Referenzraum darunter."
         },
         {
           "type": "NumberSpinner",
@@ -529,7 +534,46 @@
         },
         {
           "type": "Label",
-          "caption": "Lern- und Vorprueftimer laufen maximal alle 30 Minuten. Nur die ausdruecklich aktivierte Lernfunktion erfasst thermische Heiz-/Abkuehlwerte. Vorpruefung allein erhebt ausschliesslich begrenzte Quellstatus-Zaehler im selben Lernattribut."
+          "caption": "Hydraulische Lernkontexte: vorhandene Symcon-LINK-IDs, keine neuen Sensoren und kein aktives Abfragen. Heiz-Vorlauf=echter FBH-Vorlauf, nicht EWT T100. Mittel aus bis zu 3 frischen 30-Minuten-Stuetzpunkten je 60 Minuten. Fehlende Werte blockieren NICHT die Raum-Lernfunktion."
+        },
+        {
+          "type": "NumberSpinner",
+          "name": "ThermalHeatSupplyLink",
+          "caption": "FBH-Vorlauf Heizungs-Vorlauf: Link #47771 (wird 60 min gemittelt)",
+          "minimum": 0,
+          "maximum": 999999
+        },
+        {
+          "type": "NumberSpinner",
+          "name": "ThermalHeatReturnLink",
+          "caption": "FBH-Ruecklauf VOR Kuehl-WT: Link #22808 / T103",
+          "minimum": 0,
+          "maximum": 999999
+        },
+        {
+          "type": "NumberSpinner",
+          "name": "ThermalFbhAfterExchangerLink",
+          "caption": "FBH NACH Kuehl-WT: Link #50458 / T101 (nur Kontext)",
+          "minimum": 0,
+          "maximum": 999999
+        },
+        {
+          "type": "NumberSpinner",
+          "name": "ThermalEwtBeforeExchangerLink",
+          "caption": "EWT VOR Kuehl-WT: Link #28351 / T100 (nur Kontext)",
+          "minimum": 0,
+          "maximum": 999999
+        },
+        {
+          "type": "NumberSpinner",
+          "name": "ThermalEwtAfterExchangerLink",
+          "caption": "EWT NACH Kuehl-WT: Link #16537 / T104 (nur Kontext)",
+          "minimum": 0,
+          "maximum": 999999
+        },
+        {
+          "type": "Label",
+          "caption": "Lern-/Quellen-Timer: 30 Minuten. Hydraulik wird ohne neue Timer/Variablen nur gelesen. Keine LCN-Kommandos, keine Schaltentscheidung, kein Vermischen von Heiz-/Kuehl-Lernfenstern."
         },
         {
           "type": "Label",
