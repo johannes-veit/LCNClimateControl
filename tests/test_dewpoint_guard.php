@@ -163,8 +163,13 @@ $GLOBALS['ewt_data'][53361]['at'] = $clock - 90000;
 check($sim->snapshot()['ok'] === true,
     'humidity exactly 25 h old remains allowed');
 $GLOBALS['ewt_data'][53361]['at'] = $clock - 90001;
-check($sim->snapshot()['ok'] === false,
+$stale = $sim->snapshot();
+check($stale['ok'] === false,
     'humidity older than 25 h still blocks cooling pump');
+check(str_contains($stale['reason'], 'EG Bad')
+    && str_contains($stale['reason'], 'Luftfeuchte (#53361)')
+    && str_contains($stale['reason'], '25.0 h'),
+    'stale humidity status names room, original variable ID and 25-hour limit');
 $sim->p['DewPointMaxAgeSeconds'] = 90000; // new default
 $GLOBALS['ewt_data'][53361]['at'] = $clock - 86400;
 check($sim->snapshot()['ok'] === true,
@@ -175,8 +180,12 @@ check($sim->snapshot()['ok'] === false,
 $sim->p['DewPointMaxAgeSeconds'] = 43200;
 $GLOBALS['ewt_data'][53361]['at'] = time();
 $GLOBALS['ewt_data'][12812]['at'] = time() - 7201;
-check($sim->snapshot()['ok'] === false,
+$oldTemp = $sim->snapshot();
+check($oldTemp['ok'] === false,
     'room temperature remains limited to two hours');
+check(str_contains($oldTemp['reason'], 'Temperatur (#12812)')
+    && str_contains($oldTemp['reason'], '2.0 h'),
+    'stale temperature status names original variable and two-hour limit');
 $GLOBALS['ewt_data'][12812]['at'] = time();
 check($sim->snapshot()['ok'] === true,
     'fresh room temperature and humidity release sensor check');
@@ -242,6 +251,9 @@ check($sim->remoteOn, 'restart only after renewed stable interval');
 unset($GLOBALS['ewt_data'][53361]);
 $sim->DewPointGuardTick();
 check(!$sim->remoteOn, 'missing LCN humidity stops');
+check(str_contains($sim->values['DewPointGuardStatus'], 'Luftfeuchte (#53361)')
+    && str_contains($sim->values['DewPointGuardStatus'], 'Messvariable fehlt'),
+    'missing humidity reports the actual missing variable');
 $GLOBALS['ewt_data'][53361] = ['v'=>60.0,'at'=>time(),'t'=>VARIABLETYPE_FLOAT];
 $GLOBALS['ewt_data'][20510]['v'] = 19.0;
 $sim->DewPointGuardTick();
