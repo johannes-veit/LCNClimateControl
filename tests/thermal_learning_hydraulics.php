@@ -120,7 +120,7 @@ hcheck(str_contains($module, "RegisterPropertyInteger('ThermalHeatSupplyLink', 4
     'heating supply is actual FBH link, not EWT source');
 $learning = file_get_contents(dirname(__DIR__) . '/LCNClimateControl/ThermalLearning.php');
 hcheck(str_contains($learning, "ReadPropertyBoolean('ThermalLearnAllRooms')")
-    && str_contains($learning, "'supply60' => \\$supply60"),
+    && str_contains($learning, "'supply60' => " . '$supply60'),
     'all rooms receive hydraulic learning context');
 hcheck(!preg_match('/\\b(?:LCN_SendCommand|LCN_SetRelay|LCN_SwitchRelay|RequestAction|IPS_RequestAction)\\s*\\(/', $learning),
     'hydraulic reader must never send bus actions');
