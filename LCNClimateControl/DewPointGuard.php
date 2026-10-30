@@ -34,6 +34,10 @@ final class LCNClimateDewPointLogic
 
 trait LCNClimateDewPointGuard
 {
+    // Cooling protection, not the passive SMART-FBH learner: RH must be
+    // refreshed within two 15-minute polling windows. Old settings are capped.
+    private const DEWPOINT_RH_SAFETY_MAX_AGE = 1800;
+
     /**
      * Native GUS/LCN ORIGINAL-variable IDs already verified in the SymBox
      * backup and used by johannes-veit/HeliosSmart.
@@ -201,17 +205,15 @@ trait LCNClimateDewPointGuard
         $seenTemperatureIDs = [];
         $seenHumidityIDs = [];
         $ageSetting = (int) $this->ReadPropertyInteger('DewPointMaxAgeSeconds');
-        // LCN room humidity is now polled by a separate user-managed 5-min
-        // script. A humidity reading is usable for at most 6 hours (21600 s),
-        // never the previous 25-hour guard setting.
-        // Persisted historical defaults 900 (0.5.6), 43200 (0.5.17) and
-        // 90000 (0.5.18/0.5.20) transparently migrate to 21600 seconds,
-        // without resetting any other existing instance configuration.
-        // Explicitly configured shorter positive intervals are respected.
-        // Missing/stale readings still block the pump, irrespective of
-        // whether the external poller has issued a request.
-        $humidityMaxAge = ($ageSetting <= 900 || $ageSetting >= 21600)
-            ? 21600 : $ageSetting;
+        // The independent 15-minute RH poller must cause a REAL update of
+        // VariableUpdated. A successful read request is not sensor evidence.
+        // All historic defaults (900/43200/90000/21600) are capped to 30 min,
+        // without modifying any persisted settings or learning data.
+        // Preserve an explicitly shorter positive limit (<1800 s), except
+        // the historic 900-second module default (migrated to 1800 seconds).
+        $humidityMaxAge = ($ageSetting <= 0 || $ageSetting === 900)
+            ? self::DEWPOINT_RH_SAFETY_MAX_AGE
+            : min($ageSetting, self::DEWPOINT_RH_SAFETY_MAX_AGE);
         $rooms = $this->GetRooms();
         if (count($rooms) !== 11) {
             return ['ok' => false, 'reason' => '11 LCN-Raeume erforderlich (konfiguriert: '
@@ -526,13 +528,35 @@ trait LCNClimateDewPointGuard
         return $json;
     }
 
-    private function DewPointReadPumpState(): bool
+    private function DewPointReadPumpStatus(): array
     {
         $v = $this->DewPointPumpRpc('Switch.GetStatus', ['id' => 0]);
         if (!isset($v['output']) || !is_bool($v['output'])) {
             throw new RuntimeException('Shelly Ausgangsstatus fehlt');
         }
-        return $v['output'];
+        return $v;
+    }
+
+    private function DewPointReadPumpState(): bool
+    {
+        return $this->DewPointReadPumpStatus()['output'];
+    }
+
+    private function DewPointPumpHasTimer(array $status): bool
+    {
+        return (isset($status['timer_type']) && $status['timer_type'] !== '')
+            || (isset($status['timer_duration']) && is_numeric($status['timer_duration'])
+                && (float) $status['timer_duration'] > 0);
+    }
+
+    private function DewPointPumpHasSafeOffLease(array $status): bool
+    {
+        return $status['output'] === true
+            && ($status['timer_type'] ?? null) === 'toggle_after'
+            && isset($status['timer_duration'])
+            && is_numeric($status['timer_duration'])
+            && (float) $status['timer_duration'] > 0
+            && (float) $status['timer_duration'] <= 40;
     }
 
     private function DewPointCommandAndVerify(bool $desired): void
@@ -542,21 +566,38 @@ trait LCNClimateDewPointGuard
         $lastError = null;
         for ($attempt = 0; $attempt < 2; ++$attempt) {
             try {
-                $response = $this->DewPointPumpRpc('Switch.Set', [
-                    'id' => 0, 'on' => $desired ? 'true' : 'false',
-                    // A running pump is only leased for 40 s. The 10 s
-                    // watchdog renews it; loss of Symcon leaves auto-OFF.
-                    'toggle_after' => $desired ? 40 : 0
-                ]);
+                $params = ['id' => 0, 'on' => $desired ? 'true' : 'false'];
+                // Only ON gets a 40-s local fail-safe. OFF must be permanent:
+                // a toggle_after on OFF could turn the pump back ON.
+                if ($desired) {
+                    $params['toggle_after'] = 40;
+                }
+                $response = $this->DewPointPumpRpc('Switch.Set', $params);
                 if (!isset($response['was_on']) || !is_bool($response['was_on'])) {
                     throw new RuntimeException('Shelly bestaetigt Schaltbefehl nicht');
                 }
-                if ($this->DewPointReadPumpState() !== $desired) {
+                $status = $this->DewPointReadPumpStatus();
+                if ($status['output'] !== $desired) {
                     throw new RuntimeException('Shelly Rueckmeldung widerspricht Schaltbefehl');
+                }
+                if ($desired && !$this->DewPointPumpHasSafeOffLease($status)) {
+                    throw new RuntimeException('Shelly: 40-s-Auto-AUS-Timer nicht bestaetigt');
+                }
+                if (!$desired && $this->DewPointPumpHasTimer($status)) {
+                    throw new RuntimeException('Shelly AUS hat noch einen aktiven Schalt-Timer');
                 }
                 return;
             } catch (Throwable $e) {
                 $lastError = $e;
+            }
+        }
+        // If ON has been physically set but the time-limited fail-safe is
+        // missing or its readback is lost, immediately try a verified OFF.
+        if ($desired) {
+            try {
+                $this->DewPointCommandAndVerify(false);
+            } catch (Throwable $emergencyError) {
+                $this->SendDebug('DewPointEmergencyOff', $emergencyError->getMessage(), 0);
             }
         }
         throw new RuntimeException(
@@ -648,12 +689,21 @@ trait LCNClimateDewPointGuard
                 // Never allow a stale 120-second approval to re-energize the
                 // pump after a communication fault.
                 try {
-                    $wasOn = $this->DewPointReadPumpState();
+                    $pumpStatus = $this->DewPointReadPumpStatus();
+                    $wasOn = $pumpStatus['output'];
                 } catch (Throwable $e) {
                     $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
                     $this->DewPointEfficiencyReset();
                     $this->DewPointCommandAndVerify(false);
                     $wasOn = false;
+                    $pumpStatus = ['output' => false];
+                }
+
+                // An OFF output with a pending timer can switch itself ON.
+                // Cancel that timer before accepting a new safety window.
+                if (!$wasOn && $this->DewPointPumpHasTimer($pumpStatus)) {
+                    $this->DewPointCommandAndVerify(false);
+                    $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
                 }
 
                 $now = time();
@@ -664,7 +714,8 @@ trait LCNClimateDewPointGuard
                 // Without a recent, confirmed ON lease the 120-s stable
                 // restart period must not be bypassed.
                 $previouslyAuthorizedOn = $this->ReadAttributeString('DewPointGuardState') === 'ON'
-                    && $lastCheck > 0 && $lastCheck <= $now && $now - $lastCheck <= 35;
+                    && $lastCheck > 0 && $lastCheck <= $now && $now - $lastCheck <= 35
+                    && $this->DewPointPumpHasSafeOffLease($pumpStatus);
                 $unexpectedPumpOn = $wasOn && !$previouslyAuthorizedOn;
                 if ($unexpectedPumpOn) {
                     $this->DewPointCommandAndVerify(false);
