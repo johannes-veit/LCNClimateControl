@@ -190,6 +190,30 @@ $GLOBALS['ewt_data'][12812]['at'] = time();
 check($sim->snapshot()['ok'] === true,
     'fresh room temperature and humidity release sensor check');
 
+// The independent mode-contact timer must stay live. If its last
+// physical COOLING confirmation is stale, the EWT guard must not renew
+// its 40-s plug lease, even when the dew point and valves are safe.
+$sim->p['ModeSwitchSource'] = 1;
+$sim->attr['ModeSwitchBlocked'] = false;
+$sim->attr['ModeSwitchLastVerifiedAt'] = time() - 26;
+$sim->DewPointGuardTick();
+check($sim->attr['DewPointGuardState'] === 'COOLING_INTERLOCK',
+    '26-second old mode contact inhibits cooling pump even when sensors are safe');
+check(count($sim->rpcCalls) === 0 && !$sim->remoteOn,
+    'stale mode confirmation cannot trigger pump output commands');
+$sim->attr['ModeSwitchLastVerifiedAt'] = time() + 35;
+$sim->DewPointGuardTick();
+check($sim->attr['DewPointGuardState'] === 'COOLING_INTERLOCK',
+    'future-dated mode contact confirmation never authorizes cooling');
+$sim->attr['ModeSwitchLastVerifiedAt'] = time();
+$sim->DewPointGuardTick();
+check($sim->attr['DewPointGuardState'] === 'WAIT'
+    && $sim->attr['DewPointGuardSafeSince'] > 0,
+    'fresh mode contact permits normal 120-second dew-point restart wait');
+$sim->p['ModeSwitchSource'] = 0; // remaining legacy pump test scenarios
+$sim->attr['DewPointGuardSafeSince'] = 0;
+$sim->attr['DewPointGuardLastRenew'] = 0;
+
 // Initial output OFF: even with safe water, restart is only allowed
 // after 120 seconds of CONTINUOUS headroom.
 $sim->DewPointGuardTick();
