@@ -31,6 +31,9 @@ final class HStub {
     public function snapshot(array $old, int $t): array {
         return $this->ThermalUpdateHydraulics($old, $t);
     }
+    public function probe(int $id, int $t): array {
+        return $this->ThermalHydraulicProbe($id, $t);
+    }
 }
 $h = new HStub();
 $state = [];
@@ -72,6 +75,47 @@ $GLOBALS['hyd_meta'][9011] = ['v'=>29.0,'at'=>$now+5400-10,'type'=>2];
 $remapped = $h->snapshot($state, $now+5400);
 hcheck($remapped['supply']['source'] === 9011 && $remapped['supply']['count'] === 1
     && $remapped['supply']['mean60'] === null, 'link remap cannot combine source histories');
+
+// Independent 60-min observations require separate real sensor timestamps.
+// A periodic 30-min read of the SAME VariableUpdated must not forge a mean.
+$base = $now + 7200;
+$GLOBALS['links'][47771] = 9011;
+$GLOBALS['hyd_meta'][9011] = ['v'=>27.0, 'at'=>$base-30, 'type'=>2];
+$once = $h->snapshot([], $base);
+hcheck($once['supply']['count'] === 1
+    && $once['supply']['mean60'] === null, 'initial real hydraulic reading');
+$duplicate = $h->snapshot($once, $base+1800);
+hcheck($duplicate['supply']['count'] === 1
+    && $duplicate['supply']['mean60'] === null,
+    'unchanged VariableUpdated cannot create a second independent sample');
+$GLOBALS['hyd_meta'][9011]['at'] = $base+1790;
+$GLOBALS['hyd_meta'][9011]['v'] = 28.0;
+$second = $h->snapshot($duplicate, $base+1800);
+hcheck($second['supply']['count'] === 2
+    && $second['supply']['mean60'] !== null,
+    'fresh new VariableUpdated creates independent 60-min observation');
+
+// Auto-diagnostic of malformed, stale and chained Symcon links, no bus calls.
+$GLOBALS['links'][81234] = 47771;
+$nested = $h->probe(81234, $base+1800);
+hcheck($nested['ok'] === true && $nested['source'] === 9011,
+    'nested link resolves to the actual sensor variable');
+$GLOBALS['links'][81235] = 81236;
+$GLOBALS['links'][81236] = 81235;
+$loop = $h->probe(81235, $base+1800);
+hcheck($loop['ok'] === false
+    && str_contains($loop['reason'], 'Zyklische'),
+    'cyclic links produce a clear reason, no infinite loop');
+hcheck(str_contains($h->probe(87777, $base+1800)['reason'], 'fehlt'),
+    'missing hydraulic link reported precisely');
+hcheck(str_contains($h->probe(0, $base+1800)['reason'], 'konfiguriert'),
+    'unconfigured source reported precisely');
+$GLOBALS['hyd_meta'][9011]['at'] = $base-3000;
+$tooOld = $h->probe(47771, $base+1800);
+hcheck(!$tooOld['ok'] && $tooOld['source'] === 9011
+    && str_contains($tooOld['reason'], 'Messwert zu alt'),
+    'stale hydraulic sensor shows real source ID and exact cause');
+$GLOBALS['hyd_meta'][9011]['at'] = $base+1790;
 
 // Heating rates are correlated with fresh 60-min flow/return context,
 // but only when heating windows have genuine room and relay evidence.

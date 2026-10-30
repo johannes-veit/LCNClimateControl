@@ -59,7 +59,13 @@ final class LCNThermalLearningModel
                 }
             }
         }
-        if ($valid) {
+        // A second learner tick with the same VariableUpdated is NOT an
+        // independent sensor observation. Do not fabricate a 60-min mean
+        // from one old water-temperature reading sampled multiple times.
+        $sourceChanged = (int) ($previous['source'] ?? 0) !== $source;
+        $newObservation = $valid && ($sourceChanged
+            || $at > (int) ($previous['updated'] ?? 0));
+        if ($newObservation) {
             $points[] = [$now, round((float) $value, 3)];
         }
         $points = array_slice($points, -4);
@@ -568,39 +574,82 @@ final class LCNThermalLearningModel
 trait LCNClimateThermalLearning
 {
     /**
-     * Read a genuine source VARIABLE, not the link object shown in the GUI.
-     * No LCN polls, no linked-property changes, no archive dependency.
+     * Purely local Symcon read: explain whether a configured object points to
+     * an actual, recently updated hydraulic sensor variable. Both direct
+     * variables and bounded link chains are supported, without polling hardware.
      */
-    private function ThermalReadHydraulicSource(int $link, int $now): ?array
+    private function ThermalHydraulicProbe(int $configuredID, int $now): array
     {
+        $source = $configuredID;
+        $fail = static function (int $id, string $why): array {
+            return ['ok' => false, 'source' => max(0, $id), 'reason' => $why];
+        };
+        if ($source <= 0) {
+            return $fail(0, 'Keine Objekt-ID konfiguriert');
+        }
         try {
-            if ($link <= 0) { return null; }
-            $source = $link;
-            if (!IPS_VariableExists($source)) {
-                if (!function_exists('IPS_GetObject') || !function_exists('IPS_GetLink')
-                    || !function_exists('IPS_ObjectExists') || !IPS_ObjectExists($link)
-                    || (int) (IPS_GetObject($link)['ObjectType'] ?? -1) !== 6) {
-                    return null;
+            $visited = [];
+            $found = false;
+            for ($depth = 0; $depth < 6; ++$depth) {
+                if (IPS_VariableExists($source)) {
+                    $found = true;
+                    break;
                 }
-                $source = (int) (IPS_GetLink($link)['TargetID'] ?? 0);
+                if (!function_exists('IPS_ObjectExists')
+                    || !function_exists('IPS_GetObject')
+                    || !function_exists('IPS_GetLink')) {
+                    return $fail($source, 'Symcon-Linkfunktionen nicht verfuegbar');
+                }
+                if (!IPS_ObjectExists($source)) {
+                    return $fail($source, 'Konfiguriertes Objekt/Link fehlt');
+                }
+                if ((int) (IPS_GetObject($source)['ObjectType'] ?? -1) !== 6) {
+                    return $fail($source, 'Objekt ist weder Variable noch Link');
+                }
+                if (isset($visited[$source])) {
+                    return $fail($source, 'Zyklische Link-Verkettung');
+                }
+                $visited[$source] = true;
+                $source = (int) (IPS_GetLink($source)['TargetID'] ?? 0);
+                if ($source <= 0) {
+                    return $fail(0, 'Link hat kein gueltiges Ziel');
+                }
             }
-            if ($source <= 0 || !IPS_VariableExists($source)) { return null; }
+            if (!$found) {
+                return $fail($source, 'Link-Kette zu lang oder nicht aufloesbar');
+            }
             $meta = IPS_GetVariable($source);
+            if (!in_array((int) ($meta['VariableType'] ?? -1), [1, 2], true)) {
+                return $fail($source, 'Kein numerischer Temperatur-Variablentyp');
+            }
             $updated = (int) ($meta['VariableUpdated'] ?? 0);
-            $kind = (int) ($meta['VariableType'] ?? -1);
-            if (!in_array($kind, [1, 2], true) || $updated <= 0
-                || $updated > $now || $now - $updated > 2700) {
-                return null;
+            if ($updated <= 0 || $updated > $now) {
+                return $fail($source, 'Kein gueltiger Messzeitstempel');
+            }
+            $age = $now - $updated;
+            if ($age > 2700) {
+                return $fail($source, 'Messwert zu alt: ' . $age . ' s (max. 2700 s)');
             }
             $value = GetValue($source);
             if (!is_numeric($value) || !is_finite((float) $value)
                 || (float) $value < -5 || (float) $value > 65) {
-                return null;
+                return $fail($source, 'Temperaturwert ungueltig/ausser Messbereich');
             }
-            return ['source' => $source, 'updated' => $updated, 'value' => (float) $value];
-        } catch (Throwable) {
-            return null;
+            return ['ok' => true, 'source' => $source, 'updated' => $updated,
+                'value' => (float) $value, 'reason' => 'OK (' . $age . ' s alt)'];
+        } catch (Throwable $error) {
+            return $fail($source, 'Sensor-/Link-Lesefehler: ' . $error->getMessage());
         }
+    }
+
+    private function ThermalReadHydraulicSource(int $link, int $now): ?array
+    {
+        $result = $this->ThermalHydraulicProbe($link, $now);
+        return ($result['ok'] ?? false)
+            ? ['source' => (int) $result['source'],
+                'updated' => (int) $result['updated'],
+                'value' => (float) $result['value']]
+            : null;
     }
 
     private function ThermalUpdateHydraulics(array $previous, int $now): array
@@ -1055,7 +1104,21 @@ trait LCNClimateThermalLearning
             ? date('d.m.Y H:i:s', $lastTick) . ' (' . $tickAge . ' s alt)'
             : 'NOCH KEIN LERNLAUF');
         $lines[] = 'Lernlauf zuletzt erfasste Räume: ' . (int) ($state['last_processed'] ?? 0)
-            . ' | nach Quellen-Abnahme thermisch bereit: ' . (int) ($state['last_eligible'] ?? 0);
+            . ' | im letzten Lernlauf thermisch bereit: ' . (int) ($state['last_eligible'] ?? 0);
+        $auditReadyNow = 0;
+        foreach ((array) ($state['rooms'] ?? []) as $roomState) {
+            if (LCNThermalLearningModel::auditLabel(
+                (array) ($roomState['source_audit'] ?? []), $now) === 'QUELLEN_REGELMAESSIG') {
+                ++$auditReadyNow;
+            }
+        }
+        $lines[] = 'Quellen-Abnahme jetzt: ' . $auditReadyNow
+            . '/' . count($this->GetRooms()) . ' Raeume.';
+        if ($auditReadyNow > (int) ($state['last_eligible'] ?? 0)) {
+            $lines[] = 'HINWEIS: Quellen-Abnahme wird am Ende des 30-min-Lernlaufs'
+                . ' aktualisiert; neue Freigaben gelten erst im naechsten Lernlauf.'
+                . ' Dies ist noch kein bestaetigter Auf-/Abheizzyklus.';
+        }
         $excluded = (array) ($state['last_exclusions'] ?? []);
         $counts = array_count_values(array_values(array_filter($excluded, 'is_string')));
         $details = [];
@@ -1124,15 +1187,21 @@ trait LCNClimateThermalLearning
             $age = ($data['updated'] ?? 0) > 0 ? $now - (int) $data['updated'] : null;
             $fresh = $age !== null && $age >= 0 && $age <= 2700;
             $ageText = $age === null ? 'keine aktuelle Quelle' : $age . ' s alt';
-            $lines[] = $caption . ' | Link #' . $this->ReadPropertyInteger($property)
+            $configuredID = (int) $this->ReadPropertyInteger($property);
+            $probe = $this->ThermalHydraulicProbe($configuredID, $now);
+            $lines[] = $caption . ' | Link/Objekt #' . $configuredID
                 . ' -> Quelle #' . (int) ($data['source'] ?? 0)
                 . ' | Ist ' . ($fresh && is_numeric($raw)
                     ? number_format((float) $raw, 2, ',', '.') . ' °C' : '--')
                 . ' (' . $ageText . ') | 60-min-Mittel '
                 . ($fresh && is_numeric($avg)
                     ? number_format((float) $avg, 2, ',', '.') . ' °C' : 'noch nicht verfuegbar')
-                . ' (' . (int) ($data['count'] ?? 0) . ' Stützpunkte)';
+                . ' (' . (int) ($data['count'] ?? 0) . ' Stützpunkte)'
+                . ' | LIVE: Quelle #' . (int) ($probe['source'] ?? 0)
+                . ' – ' . (string) ($probe['reason'] ?? 'unbekannt');
         }
+        $lines[] = 'Hydraulik-Freigabe: zwei getrennte ECHTE Sensoraktualisierungen'
+            . ' (mindestens 20 min Abstand); nur Lernkontext, niemals Pumpensteuerung.';
         $supply = $hydraulic['supply']['mean60'] ?? null;
         $return = $hydraulic['return']['mean60'] ?? null;
         if (is_numeric($supply) && is_numeric($return)
