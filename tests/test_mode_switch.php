@@ -129,6 +129,20 @@ ok(str_contains($m->values['ModeSwitchStatus'], 'nicht bestaetigt'),
 $m->cancelTimerOnSet = true;
 $m->timer = null;
 
+// A Shelly may also keep an auto_off timer from an older device setting.
+$m->timer = 'auto_off';
+$m->ModeSwitchTick();
+ok($m->timer === null && $m->relay,
+    'any active auto_off timer in HEIZEN is cleared before it can open I/O');
+$m->timer = 'auto_off';
+$m->cancelTimerOnSet = false;
+try { $m->request(0); ok(false, 'uncancellable auto_off must be rejected'); }
+catch (RuntimeException $e) {}
+ok(str_contains($m->values['ModeSwitchStatus'], 'nicht bestaetigt'),
+    'uncancellable automatic timer is diagnosed instead of claiming HEIZEN');
+$m->cancelTimerOnSet = true;
+$m->timer = null;
+
 $target = new ReflectionMethod(ModeSwitchMock::class, 'ModeSwitchTargetIP');
 ok($target->invoke($m) === '192.168.103.71',
     'combined T100-T104 and mode contact device is 192.168.103.71');
