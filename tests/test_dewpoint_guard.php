@@ -234,6 +234,8 @@ check(str_contains($sim->values['DewPointGuardStatus'], 'EWT-WT nicht synchron')
 $GLOBALS['ewt_data'][23904]['at'] = time() - 901;
 $sim->DewPointGuardTick();
 check(str_contains($sim->values['DewPointGuardStatus'], 'T104 --'), 'old sensor omitted');
+check(str_contains($sim->values['DewPointGuardStatus'], 'T104 -- (15 min alt)'),
+    'stale optional EWT sensor shows its age instead of an unexplained dash');
 $GLOBALS['ewt_data'][23904]['at'] = time();
 
 check(count(array_filter($sim->rpcCalls, fn($x) => $x[0] === 'Switch.Set')) === 0,
@@ -292,6 +294,10 @@ $GLOBALS['ewt_data'][20510]['v'] = 19.0;
 $GLOBALS['ewt_data'][20510]['at'] = time() - 901;
 $sim->DewPointGuardTick();
 check(!$sim->remoteOn, 'water value older than 15 min blocks start');
+check(str_contains($sim->values['DewPointGuardStatus'], 'FBH-Fühler 101')
+    && str_contains($sim->values['DewPointGuardStatus'], 'Kuehlwasser')
+    && str_contains($sim->values['DewPointGuardStatus'], '0.2 h'),
+    'stale T101 status exposes precise 15-minute limit');
 $GLOBALS['ewt_data'][20510]['at'] = time();
 $GLOBALS['ewt_data'][53361]['at'] = time() - 3600;
 check($sim->snapshot()['ok'] === true, 'unchanged LCN humidity valid at one hour');
