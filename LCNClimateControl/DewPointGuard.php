@@ -192,7 +192,8 @@ trait LCNClimateDewPointGuard
         $waterID = (int) $this->ReadPropertyInteger('DewPointWaterVariable');
         $water = $this->DewPointFreshValue($waterID, 0, 55, 900);
         if ($water === null) {
-            return ['ok' => false, 'reason' => 'FBH-Fühler 101 (#' . $waterID . ') fehlt oder ist veraltet'];
+            return ['ok' => false, 'reason' => 'FBH-Fühler 101: '
+                . $this->DewPointInvalidSensorReason($waterID, 'Kuehlwasser', 900)];
         }
         $maximum = null;
         $criticalRoom = '';
@@ -287,7 +288,18 @@ trait LCNClimateDewPointGuard
                 $valid[$number] = ['v' => $v, 'at' => $stamp];
                 $parts[] = sprintf('T%d %.2f °C', $number, $v);
             } catch (Throwable) {
-                $parts[] = 'T' . $number . ' --';
+                $age = '';
+                if ($id > 0 && IPS_VariableExists($id)) {
+                    try {
+                        $stamp = (int) (IPS_GetVariable($id)['VariableUpdated'] ?? 0);
+                        if ($stamp > 0 && $stamp <= $now && $now - $stamp > 900) {
+                            $age = ' (' . round(($now - $stamp) / 60) . ' min alt)';
+                        }
+                    } catch (Throwable) {
+                        // Diagnostic remains non-blocking.
+                    }
+                }
+                $parts[] = 'T' . $number . ' --' . $age;
             }
         }
         $deltas = [];
