@@ -222,6 +222,12 @@ class LCNClimateControl extends IPSModuleStrict
         // Re-read edited limits immediately; no old 15-minute pause or
         // temperature observation survives a module configuration change.
         $this->DewPointEfficiencyReset();
+        // Module restart/update invalidates a former EWT pump lease.
+        // Do not trust a physically ON plug without a fresh controller
+        // authorization: otherwise it could bypass the 120-s safety wait.
+        $this->WriteAttributeString('DewPointGuardState', 'UNKNOWN');
+        $this->WriteAttributeInteger('DewPointGuardLastRenew', 0);
+        $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
         $this->SetTimerInterval('DewPointGuardTimer',
             $this->ReadPropertyBoolean('DewPointAutoPumpEnabled') ? 10000 : 0);
         // Existing installations stay on the manual wall switch.
