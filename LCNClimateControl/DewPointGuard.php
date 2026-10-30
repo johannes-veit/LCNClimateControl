@@ -655,6 +655,19 @@ trait LCNClimateDewPointGuard
 
                 $now = time();
                 $lastCheck = $this->ReadAttributeInteger('DewPointGuardLastRenew');
+                // A physical ON is not proof that *this module* authorized
+                // the pump. The plug may have restored ON after its socket
+                // received power, or someone may have switched it in the app.
+                // Without a recent, confirmed ON lease the 120-s stable
+                // restart period must not be bypassed.
+                $previouslyAuthorizedOn = $this->ReadAttributeString('DewPointGuardState') === 'ON'
+                    && $lastCheck > 0 && $lastCheck <= $now && $now - $lastCheck <= 35;
+                $unexpectedPumpOn = $wasOn && !$previouslyAuthorizedOn;
+                if ($unexpectedPumpOn) {
+                    $this->DewPointCommandAndVerify(false);
+                    $wasOn = false;
+                    $this->WriteAttributeInteger('DewPointGuardSafeSince', 0);
+                }
                 if ($lastCheck <= 0 || $now < $lastCheck || $now - $lastCheck > 35) {
                     // After Symcon restart, a long scheduling gap or lost
                     // communication, the 120-s stable period starts afresh.
@@ -734,6 +747,9 @@ trait LCNClimateDewPointGuard
                     $detail .= ' – ' . $openCircuits . ' Kuehlventil(e) offen';
                 }
                 $waitingText = $waiting ? (' – Wiederanlauf in ' . $secondsLeft . ' s') : '';
+                if ($unexpectedPumpOn) {
+                    $waitingText .= ' – ungeplanter Pumpenstart abgeschaltet';
+                }
                 $this->SetValueIfChanged('DewPointGuardStatus',
                     $label . ' – bestaetigt' . $waitingText . ' – ' . $detail
                         . $this->DewPointThermalDiagnostic()
