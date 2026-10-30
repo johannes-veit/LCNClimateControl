@@ -207,6 +207,15 @@ check($sim->attr['DewPointGuardState'] === 'COOLING_INTERLOCK',
     'future-dated mode contact confirmation never authorizes cooling');
 $sim->attr['ModeSwitchLastVerifiedAt'] = time();
 $sim->DewPointGuardTick();
+if (($sim->attr['DewPointGuardState'] ?? '') !== 'WAIT'
+    || ($sim->attr['DewPointGuardSafeSince'] ?? 0) <= 0) {
+    fwrite(STDERR, 'Fresh mode debug: state=' . ($sim->attr['DewPointGuardState'] ?? 'missing')
+        . ', safeSince=' . ($sim->attr['DewPointGuardSafeSince'] ?? 'missing')
+        . ', blocked=' . (int) ($sim->attr['ModeSwitchBlocked'] ?? 0)
+        . ', age=' . (time() - $sim->attr['ModeSwitchLastVerifiedAt'])
+        . ', pump=' . ($sim->remoteOn ? 'ON' : 'OFF')
+        . ', text=' . ($sim->values['DewPointGuardStatus'] ?? '-') . "\n");
+}
 check($sim->attr['DewPointGuardState'] === 'WAIT'
     && $sim->attr['DewPointGuardSafeSince'] > 0,
     'fresh mode contact permits normal 120-second dew-point restart wait');
