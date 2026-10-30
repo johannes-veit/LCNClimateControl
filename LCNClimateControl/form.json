@@ -274,9 +274,9 @@
         {
           "type": "NumberSpinner",
           "name": "DewPointMaxAgeSeconds",
-          "caption": "Maximales LCN-Feuchtealter in Sekunden (43200 = 12 h)",
+          "caption": "Maximales Alter der LCN-Luftfeuchte in Sekunden (90000 = 25 h; alte Werte 900/43200 werden automatisch als 25 h behandelt)",
           "minimum": 900,
-          "maximum": 43200
+          "maximum": 90000
         },
         {
           "type": "SelectInstance",
