@@ -201,14 +201,17 @@ trait LCNClimateDewPointGuard
         $seenTemperatureIDs = [];
         $seenHumidityIDs = [];
         $ageSetting = (int) $this->ReadPropertyInteger('DewPointMaxAgeSeconds');
-        // LCN GUS humidity readings can be sent only on change. Use a 25-h
-        // maximum (90,000 s), instead of the former 12-h limit (43,200 s).
-        // Existing installations persist their old defaults (900 s in 0.5.6,
-        // 43,200 s in 0.5.17): automatically migrate BOTH to 25 hours without
-        // making users change the instance configuration. Respect any other
-        // explicitly configured, shorter limit; never allow more than 25 h.
-        $humidityMaxAge = $ageSetting <= 900 || $ageSetting === 43200
-            ? 90000 : min(90000, $ageSetting);
+        // LCN room humidity is now polled by a separate user-managed 5-min
+        // script. A humidity reading is usable for at most 6 hours (21600 s),
+        // never the previous 25-hour guard setting.
+        // Persisted historical defaults 900 (0.5.6), 43200 (0.5.17) and
+        // 90000 (0.5.18/0.5.20) transparently migrate to 21600 seconds,
+        // without resetting any other existing instance configuration.
+        // Explicitly configured shorter positive intervals are respected.
+        // Missing/stale readings still block the pump, irrespective of
+        // whether the external poller has issued a request.
+        $humidityMaxAge = ($ageSetting <= 900 || $ageSetting >= 21600)
+            ? 21600 : $ageSetting;
         $rooms = $this->GetRooms();
         if (count($rooms) !== 11) {
             return ['ok' => false, 'reason' => '11 LCN-Raeume erforderlich (konfiguriert: '
