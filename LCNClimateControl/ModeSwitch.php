@@ -162,6 +162,7 @@ trait LCNClimateModeSwitch
             return;
         }
         $this->WriteAttributeBoolean('ModeSwitchBlocked', true);
+        $this->WriteAttributeInteger('ModeSwitchLastVerifiedAt', 0);
 
         if ($mode === self::MODE_HEATING) {
             try {
@@ -177,6 +178,7 @@ trait LCNClimateModeSwitch
         try {
             $this->ModeSwitchVerifyConfig();
             $this->ModeSwitchSetAndVerify(false);
+            $this->WriteAttributeInteger('ModeSwitchLastVerifiedAt', time());
             $this->WriteAttributeBoolean('ModeSwitchBlocked', false);
             $this->ModeSwitchReport('KUEHLEN – Shelly AUS (Kontakt offen), bestaetigt');
         } catch (Throwable $e) {
@@ -219,9 +221,14 @@ trait LCNClimateModeSwitch
                     if ($this->ModeSwitchReadOutput() !== false) {
                         throw new RuntimeException('Shelly-Kontakt nicht AUS: Kuehlstellung nicht bestaetigt');
                     }
+                    // This monotonic-freshness gate is consumed by the
+                    // separate 10-s EWT pump watchdog. A frozen or stopped
+                    // ModeSwitchTimer must never leave cooling permitted.
+                    $this->WriteAttributeInteger('ModeSwitchLastVerifiedAt', time());
                     $this->ModeSwitchReport('KUEHLEN – Shelly AUS (Kontakt offen), bestaetigt');
                 } catch (Throwable $e) {
                     $this->WriteAttributeBoolean('ModeSwitchBlocked', true);
+                    $this->WriteAttributeInteger('ModeSwitchLastVerifiedAt', 0);
                     $heat = $this->ModeSwitchTryHeat();
                     $this->ModeSwitchReport('FEHLER: Kuehlung gesperrt (' . $e->getMessage()
                         . '); HEIZEN ' . ($heat ? 'bestaetigt' : 'NICHT BESTAETIGT'));
@@ -232,6 +239,7 @@ trait LCNClimateModeSwitch
 
             // HEIZEN or blocked KUEHLEN: enforce the real physical heating
             // contact, and cancel any old v0.5.16 toggle_after watchdog.
+            $this->WriteAttributeInteger('ModeSwitchLastVerifiedAt', 0);
             try {
                 $state = $this->ModeSwitchReadStatus();
                 if ($state['output'] !== true || $this->ModeSwitchHasPendingTimer($state)) {
