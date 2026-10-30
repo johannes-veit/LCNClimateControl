@@ -490,6 +490,8 @@ $GLOBALS['ewt_data'][14561] = ['v'=>20.0, 'at'=>time(), 't'=>VARIABLETYPE_FLOAT]
 $GLOBALS['ewt_data'][23904] = ['v'=>15.0, 'at'=>time(), 't'=>VARIABLETYPE_FLOAT];
 $opt = new EwtSimulation();
 $opt->remoteOn = true;
+$opt->attr['DewPointGuardState'] = 'ON';
+$opt->attr['DewPointGuardLastRenew'] = time();
 $opt->DewPointGuardTick();
 check($opt->remoteOn, 'default OFF keeps original controller even if T102 is cold');
 check(!str_contains($opt->values['DewPointGuardStatus'], 'Zusatzregelung EIN'),
@@ -644,6 +646,8 @@ $deltaOk->p['DewPointEwtDeltaMaxK'] = 2.0;
 $GLOBALS['ewt_data'][12630]['v'] = 18.0;
 $GLOBALS['ewt_data'][23904]['v'] = 19.0;
 $deltaOk->remoteOn = true;
+$deltaOk->attr['DewPointGuardState'] = 'ON';
+$deltaOk->attr['DewPointGuardLastRenew'] = time();
 $deltaOk->attr['DewPointGuardLastRenew'] = time();
 $deltaOk->attr['DewPointEfficiencyRunSince'] = time()-1000;
 $deltaOk->DewPointGuardTick();
@@ -666,6 +670,8 @@ $deltaHigh->p['DewPointEfficiencyEnabled'] = true;
 $deltaHigh->p['DewPointEwtDeltaMinK'] = 0.2;
 $deltaHigh->p['DewPointEwtDeltaMaxK'] = 0.8;
 $deltaHigh->remoteOn = true;
+$deltaHigh->attr['DewPointGuardState'] = 'ON';
+$deltaHigh->attr['DewPointGuardLastRenew'] = time();
 $deltaHigh->attr['DewPointGuardLastRenew'] = time();
 $deltaHigh->attr['DewPointEfficiencyRunSince'] = time()-1000;
 $deltaHigh->attr['DewPointEfficiencyWeakSince'] = time()-301;
@@ -679,6 +685,8 @@ $invalid->p['DewPointEfficiencyEnabled'] = true;
 $invalid->p['DewPointEwtVLMinC'] = 25.0;
 $invalid->p['DewPointEwtVLMaxC'] = 15.0;
 $invalid->remoteOn = true;
+$invalid->attr['DewPointGuardState'] = 'ON';
+$invalid->attr['DewPointGuardLastRenew'] = time();
 $invalid->DewPointGuardTick();
 check($invalid->remoteOn && str_contains($invalid->values['DewPointGuardStatus'], 'ungueltige'),
     'invalid source band reports configuration error, original controller continues');
@@ -730,6 +738,8 @@ check(str_contains($readError->values['DewPointGuardStatus'], 'NICHT BESTAETIGT'
 $tsupply = new EwtSimulation();
 $tsupply->p['DewPointEfficiencyEnabled'] = true;
 $tsupply->remoteOn = true;
+$tsupply->attr['DewPointGuardState'] = 'ON';
+$tsupply->attr['DewPointGuardLastRenew'] = time();
 $tsupply->attr['DewPointEfficiencyPauseUntil'] = time()+600;
 $GLOBALS['ewt_data'][21409]['v'] = 12.0;
 $tsupply->DewPointGuardTick();
