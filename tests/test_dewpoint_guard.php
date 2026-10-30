@@ -260,7 +260,9 @@ $GLOBALS['ewt_data'][20510]['at'] = time();
 $GLOBALS['ewt_data'][53361]['at'] = time() - 3600;
 check($sim->snapshot()['ok'] === true, 'unchanged LCN humidity valid at one hour');
 $GLOBALS['ewt_data'][53361]['at'] = time() - 43201;
-check($sim->snapshot()['ok'] === false, 'humidity older than 12 hours is stale');
+check($sim->snapshot()['ok'] === true, 'humidity older than former 12-hour limit remains valid');
+$GLOBALS['ewt_data'][53361]['at'] = time() - 90001;
+check($sim->snapshot()['ok'] === false, 'humidity older than new 25-hour limit is stale');
 $GLOBALS['ewt_data'][53361]['at'] = time();
 
 // Simulate a long Symcon timer pause: previous stability must not
