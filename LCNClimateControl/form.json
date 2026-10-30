@@ -274,9 +274,9 @@
         {
           "type": "NumberSpinner",
           "name": "DewPointMaxAgeSeconds",
-          "caption": "Maximales Alter der LCN-Luftfeuchte in Sekunden (21600 = 6 h; fruehere Standardwerte 900/43200/90000 werden automatisch als 6 h behandelt)",
+          "caption": "Maximales Alter der LCN-Luftfeuchte fuer die EWT-Pumpe in Sekunden (1800 = 30 min bei 15-min-Abfrage; aeltere groessere Grenzen werden sicher begrenzt)",
           "minimum": 900,
-          "maximum": 21600
+          "maximum": 1800
         },
         {
           "type": "SelectInstance",
