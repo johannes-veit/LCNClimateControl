@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.26 (31.10.2026) – Absicherung nativer LCN-Konfigurationsabfragen
+- Vollstaendige statische Durchsicht aller zentralen Steuerungsbausteine: Heizen/Kuehlen, S1/Relais, Taupunktwaechter, Betriebsarten-Shelly, SMART-FBH und HTML-Visualisierung.
+- Verbliebene IPS_GetConfiguration(false)-Fehlerpfade behoben: automatische LCN-Modul- und Relais-Unit-Zuordnung, native Einzelrelais-Schaltpruefung und passive R1/S1-Schnittstellen-Diagnose.
+- Bei fehlendem JSON werden nur exakt typgepruefte native Symcon-Properties derselben Instanz verwendet. Falsche GUID, unpassender Parent, falscher Kanal oder unlesbare Properties sperren weiterhin jeden Relaisbefehl.
+- Relaiskanal vor Erzeugung der 8-Bit-Schaltmaske auf 1 bis 8 begrenzt.
+- Neue Offline-Regressionen fuer Symcon-Konfigurationsausfall, falsche Kanalnummer, unpassende LCN-GUID und fehlende Property. CI wurde um die direkte native Relais-Simulation und Discovery-Regression ergaenzt.
+- Keine neuen Instanzen oder Sensorvariablen. Kein Eingriff in Taupunktgrenzen, Shelly-Fail-Safes, Heizsollwerte, historische SMART-FBH-Lerndaten oder die bestehenden Inbetriebnahme-Interlocks.
+
+
 ## 0.5.25 (31.10.2026) – S1Target-Konfigurationspruefung robust gegen IPS_GetConfiguration=false
 - Bestehende native S1TargetEnabled-Pruefung verwendet zuerst den von IP-Symcon vorgesehenen direkten Property-Leseaufruf IPS_GetProperty. Nur bei fehlender/unlesbarer Property wird ein typgepruefter JSON-Rueckfall versucht.
 - Ein IPS_GetConfiguration-Rueckgabewert false oder ungueltiges JSON wird niemals an json_decode uebergeben. Die Visu zeigt dadurch keine PHP-TypeError-Meldung mehr.
