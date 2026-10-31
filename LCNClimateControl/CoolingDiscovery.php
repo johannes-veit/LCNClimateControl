@@ -70,9 +70,9 @@ trait LCNClimateCoolingDiscovery
                 $properties[$field] = $value;
             }
             return $properties;
-        } catch (Throwable $error) {
-            $this->SendDebug('CoolingConfigRead',
-                'Instanz #' . $id . ': ' . $error->getMessage(), 0);
+        } catch (Throwable) {
+            // Strict fail-closed: a transient configuration failure must
+            // never resolve a relay from a guessed or partial mapping.
             return null;
         }
     }
