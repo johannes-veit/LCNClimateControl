@@ -14,8 +14,26 @@ trait LCNClimateNativeInterfaceAudit
         }
         try {
             $instance = IPS_GetInstance($id);
-            $cfg = json_decode(IPS_GetConfiguration($id), true);
+            $raw = IPS_GetConfiguration($id);
+            $cfg = is_string($raw) && $raw !== ''
+                ? json_decode($raw, true) : null;
             $cfg = is_array($cfg) ? $cfg : [];
+            if ($cfg === [] && function_exists('IPS_GetProperty')) {
+                // Display only existing native fields. The audit never
+                // changes properties or guesses missing values.
+                foreach (['Target', 'Segment', 'R1TargetEnabled',
+                    'R2TargetEnabled', 'S1TargetEnabled', 'S2TargetEnabled',
+                    'Interval', 'Unit', 'Channel'] as $name) {
+                    try {
+                        $value = IPS_GetProperty($id, $name);
+                        if (is_scalar($value)) {
+                            $cfg[$name] = $value;
+                        }
+                    } catch (Throwable) {
+                        // Optional property does not exist on this instance.
+                    }
+                }
+            }
             $fields = [
                 'Target', 'Segment', 'R1TargetEnabled', 'R2TargetEnabled',
                 'S1TargetEnabled', 'S2TargetEnabled', 'Interval',
