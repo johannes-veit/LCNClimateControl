@@ -24,7 +24,21 @@ $GLOBALS['variables']=[
 ];
 function IPS_InstanceExists(int $id): bool{return isset($GLOBALS['instances'][$id]);}
 function IPS_GetInstance(int $id): array{return $GLOBALS['instances'][$id];}
-function IPS_GetConfiguration(int $id): string{return json_encode($GLOBALS['configs'][$id]);}
+$GLOBALS['failedConfigReads'] = [];
+$GLOBALS['failedPropertyReads'] = [];
+function IPS_GetConfiguration(int $id): string|false {
+    if (isset($GLOBALS['failedConfigReads'][$id])) { return false; }
+    return json_encode($GLOBALS['configs'][$id]);
+}
+function IPS_GetProperty(int $id, string $name): mixed {
+    if (isset($GLOBALS['failedPropertyReads'][$id])) {
+        throw new RuntimeException('simulated native property outage');
+    }
+    if (!array_key_exists($name, $GLOBALS['configs'][$id] ?? [])) {
+        throw new RuntimeException('no native property ' . $name);
+    }
+    return $GLOBALS['configs'][$id][$name];
+}
 function IPS_GetInstanceListByModuleID(string $guid): array{
     $out=[];foreach($GLOBALS['instances'] as $id=>$data){
         if($data['ModuleInfo']['ModuleID']===$guid)$out[]=$id;
@@ -154,6 +168,19 @@ $GLOBALS['variables'][10001]['Name']='Zieltemperatur S1';
 $GLOBALS['variables'][10001]['Ident']='S1TargetLock';
 check(str_contains($p->reason(),'TRUE=gesperrt'),'native feedback polarity in diagnostic');
 check($p->go()!==null, 'read-only diagnostic leaves good discovery working');
+// Symcon GetConfiguration() can return false for native LCN instances.
+// Match only genuine integer properties on the original native IDs.
+$GLOBALS['failedConfigReads'] = [11=>true,92=>true,700=>true];
+check($p->go()!==null, 'native property fallback recovers exact relay mapping');
+$GLOBALS['configs'][700]['Channel']=2;
+check($p->go()===null, 'wrong native relay channel must still fail closed');
+$GLOBALS['configs'][700]['Channel']=1;
+$GLOBALS['failedPropertyReads'][700]=true;
+check($p->go()===null,
+    'unreadable JSON and property must not invent a relay mapping');
+unset($GLOBALS['failedPropertyReads'][700]);
+check($p->go()!==null, 'healthy native property mapping restores discovery');
+$GLOBALS['failedConfigReads'] = [];
 // One-click setup: no switch commands, strictly idempotent and gated.
 unset($GLOBALS['instances'][700],$GLOBALS['configs'][700]);
 $p->mode=1;
