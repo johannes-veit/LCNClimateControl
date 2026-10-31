@@ -251,6 +251,11 @@ trait LCNDirectCooling
         $relayModule = (int) $m['RelayModule'];
         $channel = (int) $m['RelayChannel'];
         $electric = $open ? (bool) $m['OpenRelayOn'] : !(bool) $m['OpenRelayOn'];
+        // A stale/corrupt mapping must not index outside the 8-bit LCN
+        // relay mask or address an unknown channel.
+        if ($channel < 1 || $channel > 8 || $relayModule <= 0) {
+            return false;
+        }
         $mask = str_repeat('-', 8);
         $mask[$channel - 1] = $electric ? '1' : '0';
         $unit = (int) ($m['RelayUnit'] ?? 0);
@@ -267,11 +272,29 @@ trait LCNDirectCooling
             }
             try {
                 $data = IPS_GetInstance($unit);
-                $cfg = json_decode(IPS_GetConfiguration($unit), true);
+                // Retain strict native Unit GUID/parent/channel checks even
+                // when Symcon intermittently returns false for configuration.
                 if ((int) ($data['ConnectionID'] ?? 0) !== $relayModule
                     || (int) ($data['InstanceStatus'] ?? 0) !== 102
-                    || !is_array($cfg)
-                    || (int) ($cfg['Unit'] ?? -1) !== 2
+                    || strtoupper((string) ($data['ModuleInfo']['ModuleID'] ?? ''))
+                        !== '{2D871359-14D8-493F-9B01-26432E3A710F}') {
+                    return false;
+                }
+                $raw = IPS_GetConfiguration($unit);
+                $cfg = is_string($raw) && $raw !== ''
+                    ? json_decode($raw, true) : null;
+                if (!is_array($cfg)) {
+                    if (!function_exists('IPS_GetProperty')) {
+                        return false;
+                    }
+                    $unitProperty = IPS_GetProperty($unit, 'Unit');
+                    $channelProperty = IPS_GetProperty($unit, 'Channel');
+                    if (!is_int($unitProperty) || !is_int($channelProperty)) {
+                        return false;
+                    }
+                    $cfg = ['Unit' => $unitProperty, 'Channel' => $channelProperty];
+                }
+                if ((int) ($cfg['Unit'] ?? -1) !== 2
                     || (int) ($cfg['Channel'] ?? -1) !== $channel) {
                     return false;
                 }
