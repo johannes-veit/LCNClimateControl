@@ -1749,9 +1749,39 @@ class LCNClimateControl extends IPSModuleStrict
                     $connectionID, $sendModule
                 ));
             }
-            $cfg = json_decode(IPS_GetConfiguration($targetParent), true);
-            if (!is_array($cfg) || !array_key_exists('S1TargetEnabled', $cfg) || !(bool) $cfg['S1TargetEnabled']) {
-                return $fail('LCN-Value-Instanz #' . $targetParent . ': S1TargetEnabled fehlt oder ist deaktiviert.');
+            // On some live Symcon 9/LCN configurations IPS_GetConfiguration()
+            // temporarily returns false. Read the documented native property
+            // directly first. A confirmed false always remains a hard block.
+            // Only a missing/unreadable property can fall back to JSON.
+            $s1Enabled = null;
+            if (function_exists('IPS_GetProperty')) {
+                try {
+                    $property = IPS_GetProperty($targetParent, 'S1TargetEnabled');
+                    if (is_bool($property)) {
+                        $s1Enabled = $property;
+                    }
+                } catch (Throwable $propertyError) {
+                    $this->SendDebug('S1ConfigProperty', 'LCN-Value #' . $targetParent
+                        . ': ' . $propertyError->getMessage(), 0);
+                }
+            }
+            if ($s1Enabled === null) {
+                $rawConfiguration = IPS_GetConfiguration($targetParent);
+                if (is_string($rawConfiguration) && $rawConfiguration !== '') {
+                    $cfg = json_decode($rawConfiguration, true);
+                    if (is_array($cfg) && array_key_exists('S1TargetEnabled', $cfg)
+                        && is_bool($cfg['S1TargetEnabled'])) {
+                        $s1Enabled = $cfg['S1TargetEnabled'];
+                    }
+                }
+            }
+            if ($s1Enabled === null) {
+                return $fail('LCN-Value-Instanz #' . $targetParent
+                    . ': S1TargetEnabled nicht auslesbar (Property/JSON); keine Freigabe.');
+            }
+            if ($s1Enabled === false) {
+                return $fail('LCN-Value-Instanz #' . $targetParent
+                    . ': S1TargetEnabled ist deaktiviert.');
             }
         } catch (Throwable $e) {
             return $fail('S1Target-/LCN-Value-Konfiguration nicht prüfbar: ' . $e->getMessage());
