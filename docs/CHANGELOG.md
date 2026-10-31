@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.25 (31.10.2026) – S1Target-Konfigurationspruefung robust gegen IPS_GetConfiguration=false
+- Bestehende native S1TargetEnabled-Pruefung verwendet zuerst den von IP-Symcon vorgesehenen direkten Property-Leseaufruf IPS_GetProperty. Nur bei fehlender/unlesbarer Property wird ein typgepruefter JSON-Rueckfall versucht.
+- Ein IPS_GetConfiguration-Rueckgabewert false oder ungueltiges JSON wird niemals an json_decode uebergeben. Die Visu zeigt dadurch keine PHP-TypeError-Meldung mehr.
+- Ein tatsaechlich deaktiviertes S1TargetEnabled=false wird nie akzeptiert; bei doppelt unlesbaren Quellen weiterhin strikte Sperre mit konkretem Hinweis. Keine Annahmen aus alten Pruefergebnissen, kein automatischer LCN-Befehl.
+- Symcon-Mocktests fuer false, gewolltes FALSE, JSON-Fallback und fehlende Rueckmeldung erweitert. Alle bestehenden Heiz-, Kuehl-, Relais-, EWT- und SMART-FBH-Funktionen bleiben unveraendert.
+
+
 ## 0.5.24 (30.10.2026) – SMART-FBH-Hydraulikdiagnose und unabhängige Sensor-Stuetzpunkte
 - Fuenf Hydraulikquellen (Heizvorlauf, Ruecklauf T103, T101, T100, T104) koennen im vorhandenen Lernbericht nun live lokal geprueft werden. Angezeigt werden die tatsaechliche Sensor-ID sowie konkrete Ursachen (Objekt/Link fehlt, Typ ungueltig, keine Aktualisierung, zu alt, Wert ausser Bereich oder zyklische Link-Verkettung). Keine zusaetzlichen IPS-Variablen oder Hardware-Abfragen.
 - Bis zu sechs Symcon-Links hintereinander werden lesend aufgeloest; vorhandene direkte Variablen bleiben moeglich. Fehlerhafte Verweise bleiben gesperrt statt still auf eine unbelegte Ersatz-ID zu verweisen.

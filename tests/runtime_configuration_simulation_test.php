@@ -23,12 +23,23 @@ $instances = [501=>['ModuleInfo'=>['ModuleID'=>'{0E31FED6-E465-4621-95D4-AAF2683
  601=>['ModuleInfo'=>['ModuleID'=>'{0102BDC9-3B85-4A11-968D-7D314DA07C06}', 'ModuleType'=>3], 'ConnectionID'=>501, 'InstanceStatus'=>102]];
 $variables = [701=>['VariableType'=>VARIABLETYPE_FLOAT],801=>['VariableType'=>VARIABLETYPE_FLOAT]];
 $parents=[701=>601];$configs=[601=>'{"S1TargetEnabled":true}'];$sendCount=0;
+$propertyValues=[601=>true];$getPropertyThrows=false;
 function IPS_InstanceExists(int $id): bool {global $instances;return isset($instances[$id]);}
 function IPS_GetInstance(int $id): array {global $instances;return $instances[$id];}
 function IPS_VariableExists(int $id): bool {global $variables;return isset($variables[$id]);}
 function IPS_GetVariable(int $id): array {global $variables;return $variables[$id];}
 function IPS_GetParent(int $id): int {global $parents;return $parents[$id]??0;}
-function IPS_GetConfiguration(int $id): string {global $configs;return $configs[$id]??'{}';}
+function IPS_GetConfiguration(int $id): string|false {global $configs;return $configs[$id]??'{}';}
+function IPS_GetProperty(int $id, string $key): mixed {
+    global $propertyValues,$getPropertyThrows;
+    if ($getPropertyThrows) {
+        throw new RuntimeException('simulierte IPS_GetProperty-Stoerung');
+    }
+    if ($key !== 'S1TargetEnabled' || !array_key_exists($id, $propertyValues)) {
+        throw new RuntimeException('Property fehlt');
+    }
+    return $propertyValues[$id];
+}
 function IPS_SemaphoreEnter(string $name, int $wait): bool {return true;}
 function IPS_SemaphoreLeave(string $name): void {}
 function IPS_GetKernelRunlevel(): int {return KR_READY;}
@@ -47,8 +58,25 @@ check(!$validate->invoke($mod,$bad,true),'fehlendes S1Target nicht erkannt');$sc
 $instances[601]['ConnectionID']=999;
 check(!$validate->invoke($mod,$room,true),'falsche ConnectionID nicht erkannt');$scenarios++;
 $instances[601]['ConnectionID']=501;
-$configs[601]='{"S1TargetEnabled":false}';
+$propertyValues[601]=false;
 check(!$validate->invoke($mod,$room,true),'deaktiviertes S1Target nicht erkannt');$scenarios++;
+$propertyValues[601]=true;
+$configs[601]=false;
+check($validate->invoke($mod,$room,true),
+    'false von IPS_GetConfiguration muss durch bestaetigtes S1TargetEnabled=true ueberbrueckt werden');$scenarios++;
+$propertyValues[601]=false;
+check(!$validate->invoke($mod,$room,true),
+    'bestaetigtes Property false darf nie durch JSON ueberstimmt werden');$scenarios++;
+$propertyValues[601]=true;
+$getPropertyThrows=true;
+$configs[601]='{"S1TargetEnabled":true}';
+check($validate->invoke($mod,$room,true), 'gueltiger JSON-Fallback muss funktionieren');$scenarios++;
+$configs[601]=false;
+check(!$validate->invoke($mod,$room,true),
+    'wenn Property und JSON fehlschlagen muss fail-closed gelten');$scenarios++;
+check(str_contains(implode(' ',json_decode($mod->GetBuffer('ConfigurationErrors'),true)),
+    'nicht auslesbar'), 'unlesbare native Property muss im Frontend erkennbar sein');
+$getPropertyThrows=false;
 $configs[601]='{"S1TargetEnabled":true}';
 $instances[501]['ModuleInfo']['ModuleType']=3;
 check(!$validate->invoke($mod,$room,true),'falscher Splittertyp nicht erkannt');$scenarios++;
