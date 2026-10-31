@@ -33,13 +33,46 @@ trait LCNClimateCoolingDiscovery
 
     private function AutoCoolingInstanceConfig(int $id): ?array
     {
+        // Native LCN instances may transiently return false instead of a
+        // JSON string. Never pass that value to json_decode. Fall back to
+        // their exact numeric Symcon properties, never to guessed names
+        // or a different relay/LCN module.
         try {
             if ($id <= 0 || !IPS_InstanceExists($id)) {
                 return null;
             }
-            $decoded = json_decode(IPS_GetConfiguration($id), true);
-            return is_array($decoded) ? $decoded : null;
-        } catch (Throwable) {
+            $raw = IPS_GetConfiguration($id);
+            if (is_string($raw) && $raw !== '') {
+                $decoded = json_decode($raw, true);
+                if (is_array($decoded)) {
+                    return $decoded;
+                }
+            }
+            if (!function_exists('IPS_GetProperty')) {
+                return null;
+            }
+            $info = IPS_GetInstance($id);
+            $guid = strtoupper((string) ($info['ModuleInfo']['ModuleID'] ?? ''));
+            $fields = $guid === strtoupper(self::AUTO_LCN_MODULE_GUID)
+                ? ['Target', 'Segment']
+                : ($guid === strtoupper(self::AUTO_LCN_UNIT_GUID)
+                    ? ['Unit', 'Channel'] : []);
+            if ($fields === []) {
+                return null;
+            }
+            $properties = [];
+            foreach ($fields as $field) {
+                $value = IPS_GetProperty($id, $field);
+                // Require the real native integer representation.
+                if (!is_int($value)) {
+                    return null;
+                }
+                $properties[$field] = $value;
+            }
+            return $properties;
+        } catch (Throwable $error) {
+            $this->SendDebug('CoolingConfigRead',
+                'Instanz #' . $id . ': ' . $error->getMessage(), 0);
             return null;
         }
     }
